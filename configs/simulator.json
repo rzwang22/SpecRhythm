@@ -1,0 +1,12 @@
+{
+  "max_active_requests": 64,
+  "roof_candidate_budget": 192,
+  "max_request_budget": 8,
+  "verify_base_ms": 18.0,
+  "verify_per_request_ms": 0.12,
+  "verify_per_candidate_ms": 0.035,
+  "draft_per_candidate_ms": 0.025,
+  "fixed_speculative_budget": 4,
+  "max_cycles": 1000000,
+  "seed": 1664
+}

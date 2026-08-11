@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "specrhythm"
+version = "0.1.0"
+description = "A dependency-free control-plane simulator for SLO-aware speculative decoding"
+readme = "README.md"
+requires-python = ">=3.9"
+authors = [{ name = "SpecRhythm contributors" }]
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8,<9",
+  "ruff>=0.12,<1",
+]
+
+[project.scripts]
+specrhythm = "specrhythm.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.ruff]
+extend-exclude = ["tmp"]
+line-length = 99
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["B", "E", "F", "I"]

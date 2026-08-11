@@ -1,0 +1,85 @@
+"""Canonical workload records and JSONL serialization."""
+
+from __future__ import annotations
+
+import json
+import math
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+from typing import Any, Iterable, Optional, Union
+
+
+@dataclass(frozen=True)
+class WorkloadRequest:
+    """One request entering the decode scheduler.
+
+    arrival_time_ms is relative time. slo_tpot_ms applies to decode time only.
+    Acceptance probability is a Phase-A calibration input, not a property that can be inferred
+    from token lengths.
+    """
+
+    request_id: str
+    arrival_time_ms: float
+    input_tokens: int
+    output_tokens: int
+    slo_tpot_ms: float
+    task: str = "unknown"
+    model: str = "default"
+    client_id: str = "client-0"
+    conversation_id: Optional[str] = None
+    turn_index: Optional[int] = None
+    acceptance_probability: float = 0.7
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not self.request_id:
+            raise ValueError("request_id must not be empty")
+        if not math.isfinite(self.arrival_time_ms) or self.arrival_time_ms < 0:
+            raise ValueError("arrival_time_ms must be finite and non-negative")
+        if self.input_tokens < 1 or self.output_tokens < 1:
+            raise ValueError("input_tokens and output_tokens must be positive")
+        if not math.isfinite(self.slo_tpot_ms) or self.slo_tpot_ms <= 0:
+            raise ValueError("slo_tpot_ms must be finite and positive")
+        if not 0 <= self.acceptance_probability <= 1:
+            raise ValueError("acceptance_probability must be in [0, 1]")
+        if self.turn_index is not None and self.turn_index < 0:
+            raise ValueError("turn_index must be non-negative")
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> WorkloadRequest:
+        return cls(**value)
+
+
+@dataclass
+class Workload:
+    requests: list[WorkloadRequest]
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        ids = [request.request_id for request in self.requests]
+        if len(ids) != len(set(ids)):
+            raise ValueError("request_id values must be unique")
+        self.requests.sort(key=lambda request: (request.arrival_time_ms, request.request_id))
+
+    def save_jsonl(self, path: Union[str, Path]) -> None:
+        output = Path(path)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        with output.open("w", encoding="utf-8") as handle:
+            for request in self.requests:
+                handle.write(json.dumps(request.to_dict(), sort_keys=True) + "\n")
+
+    @classmethod
+    def load_jsonl(cls, path: Union[str, Path]) -> Workload:
+        source = Path(path)
+        with source.open(encoding="utf-8") as handle:
+            requests = [
+                WorkloadRequest.from_dict(json.loads(line)) for line in handle if line.strip()
+            ]
+        return cls(requests=requests, metadata={"source": str(source)})
+
+    @classmethod
+    def from_requests(cls, requests: Iterable[WorkloadRequest]) -> Workload:
+        return cls(list(requests))
