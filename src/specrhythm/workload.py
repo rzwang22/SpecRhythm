@@ -31,6 +31,17 @@ class TaskProfile:
         return cls(**value)
 
 
+@dataclass(frozen=True)
+class ArrivalReplay:
+    """A one-to-one, chronologically selected arrival-trace window."""
+
+    source_timestamps_ms: tuple[float, ...]
+    arrival_times_ms: tuple[float, ...]
+    window_start_ms: float
+    window_duration_ms: Optional[float]
+    time_scale: float
+
+
 def load_json(path: Union[str, Path]) -> dict[str, Any]:
     with Path(path).open(encoding="utf-8") as handle:
         value = json.load(handle)
@@ -78,34 +89,106 @@ def _piecewise_gamma_arrivals(config: dict[str, Any], rng: random.Random) -> lis
     return arrivals
 
 
-def load_arrival_times(path: Union[str, Path], time_scale: float = 1.0) -> list[float]:
-    """Read relative timestamps from canonical/Mooncake JSONL or a CSV trace."""
-
-    if time_scale <= 0:
-        raise ValueError("time_scale must be positive")
+def _read_arrival_timestamps(path: Union[str, Path]) -> list[float]:
     source = Path(path)
     timestamps: list[float] = []
     if source.suffix.lower() == ".csv":
         with source.open(encoding="utf-8", newline="") as handle:
-            for row in csv.DictReader(handle):
+            for line_number, row in enumerate(csv.DictReader(handle), start=2):
                 raw = row.get("arrival_time_ms", row.get("timestamp", row.get("Timestamp")))
                 if raw is None:
-                    raise ValueError("CSV requires arrival_time_ms, timestamp, or Timestamp")
-                timestamps.append(float(raw))
+                    raise ValueError(
+                        f"{source}:{line_number}: CSV requires arrival_time_ms, "
+                        "timestamp, or Timestamp"
+                    )
+                try:
+                    timestamp = float(raw)
+                except (TypeError, ValueError) as error:
+                    raise ValueError(
+                        f"{source}:{line_number}: timestamp must be numeric"
+                    ) from error
+                timestamps.append(timestamp)
     else:
         with source.open(encoding="utf-8") as handle:
-            for line in handle:
+            for line_number, line in enumerate(handle, start=1):
                 if not line.strip():
                     continue
-                row = json.loads(line)
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError as error:
+                    raise ValueError(f"{source}:{line_number}: invalid JSON") from error
+                if not isinstance(row, dict):
+                    raise ValueError(f"{source}:{line_number}: JSONL row must be an object")
                 raw = row.get("arrival_time_ms", row.get("timestamp"))
                 if raw is None:
-                    raise ValueError("JSONL requires arrival_time_ms or timestamp")
-                timestamps.append(float(raw))
-    if not timestamps:
-        return []
-    origin = min(timestamps)
-    return sorted((timestamp - origin) / time_scale for timestamp in timestamps)
+                    raise ValueError(
+                        f"{source}:{line_number}: JSONL requires arrival_time_ms or timestamp"
+                    )
+                try:
+                    timestamp = float(raw)
+                except (TypeError, ValueError) as error:
+                    raise ValueError(
+                        f"{source}:{line_number}: timestamp must be numeric"
+                    ) from error
+                timestamps.append(timestamp)
+    if any(not math.isfinite(timestamp) or timestamp < 0 for timestamp in timestamps):
+        raise ValueError("arrival timestamps must be finite and non-negative")
+    return timestamps
+
+
+def select_arrival_replay(
+    path: Union[str, Path],
+    *,
+    window_start_ms: float = 0.0,
+    window_duration_ms: Optional[float] = None,
+    time_scale: float = 1.0,
+) -> ArrivalReplay:
+    """Select a stable, end-exclusive trace window and rebase it to zero.
+
+    The selected source timestamps are sorted chronologically. Equal timestamps keep
+    their source-file order because Python's sort is stable. Scaling divides only the
+    gaps from the first selected timestamp, so ``time_scale=2`` doubles offered load.
+    """
+
+    if not math.isfinite(window_start_ms) or window_start_ms < 0:
+        raise ValueError("window_start_ms must be finite and non-negative")
+    if not math.isfinite(time_scale) or time_scale <= 0:
+        raise ValueError("time_scale must be finite and positive")
+    if window_duration_ms is not None and (
+        not math.isfinite(window_duration_ms) or window_duration_ms <= 0
+    ):
+        raise ValueError("window_duration_ms must be finite and positive")
+
+    timestamps = sorted(_read_arrival_timestamps(path))
+    window_end_ms = (
+        window_start_ms + window_duration_ms if window_duration_ms is not None else None
+    )
+    selected = tuple(
+        timestamp
+        for timestamp in timestamps
+        if timestamp >= window_start_ms
+        and (window_end_ms is None or timestamp < window_end_ms)
+    )
+    if not selected:
+        raise ValueError("the selected arrival window contains no timestamps")
+    origin = selected[0]
+    scaled = tuple((timestamp - origin) / time_scale for timestamp in selected)
+    return ArrivalReplay(
+        source_timestamps_ms=selected,
+        arrival_times_ms=scaled,
+        window_start_ms=float(window_start_ms),
+        window_duration_ms=(
+            float(window_duration_ms) if window_duration_ms is not None else None
+        ),
+        time_scale=float(time_scale),
+    )
+
+
+def load_arrival_times(path: Union[str, Path], time_scale: float = 1.0) -> list[float]:
+    """Backward-compatible helper for selecting the full arrival trace."""
+
+    replay = select_arrival_replay(path, time_scale=time_scale)
+    return list(replay.arrival_times_ms)
 
 
 def _sample_lengths(
@@ -139,6 +222,111 @@ def _sample_slo(config: dict[str, Any], rng: random.Random, profile: TaskProfile
         chosen = _weighted_choice(rng, classes, [float(item["weight"]) for item in classes])
         return float(chosen["tpot_ms"])
     raise ValueError("slo_mode must be 'task' or 'independent'")
+
+
+def _assign_profiles(
+    config: dict[str, Any],
+    rng: random.Random,
+    profiles: Sequence[TaskProfile],
+    request_count: int,
+) -> list[TaskProfile]:
+    mode = config.get("task_assignment", "random")
+    if mode == "random":
+        weights = [profile.weight for profile in profiles]
+        return [_weighted_choice(rng, profiles, weights) for _ in range(request_count)]
+    if mode != "stratified":
+        raise ValueError("task_assignment must be 'random' or 'stratified'")
+
+    weight_sum = sum(profile.weight for profile in profiles)
+    exact_counts = [request_count * profile.weight / weight_sum for profile in profiles]
+    counts = [math.floor(value) for value in exact_counts]
+    remainder = request_count - sum(counts)
+    ranked = sorted(
+        range(len(profiles)),
+        key=lambda index: (-(exact_counts[index] - counts[index]), index),
+    )
+    for index in ranked[:remainder]:
+        counts[index] += 1
+    assignments = [
+        profile
+        for profile, count in zip(profiles, counts)
+        for _ in range(count)
+    ]
+    rng.shuffle(assignments)
+    return assignments
+
+
+def generate_replay_workload(config: dict[str, Any], replay: ArrivalReplay) -> Workload:
+    """Generate exactly one proxy request for every selected arrival timestamp."""
+
+    conversation = config.get("conversation", {})
+    if float(conversation.get("start_probability", 0.0)) != 0.0:
+        raise ValueError("strict arrival replay requires conversation.start_probability=0")
+
+    seed = int(config.get("seed", 0))
+    rng = random.Random(seed)
+    profiles = [TaskProfile.from_dict(value) for value in config.get("task_profiles", [])]
+    if not profiles:
+        raise ValueError("task_profiles must contain at least one profile")
+    if any(profile.weight < 0 for profile in profiles) or sum(p.weight for p in profiles) <= 0:
+        raise ValueError("task profile weights must have a positive sum")
+
+    client_count = int(config.get("client_count", 1))
+    skew = float(config.get("client_zipf_skew", 0.0))
+    if client_count < 1 or skew < 0:
+        raise ValueError("client_count must be positive and client_zipf_skew non-negative")
+    clients = [f"client-{index:04d}" for index in range(client_count)]
+    client_weights = [1.0 / ((index + 1) ** skew) for index in range(client_count)]
+    max_input = int(config.get("max_input_tokens", 131072))
+    max_output = int(config.get("max_output_tokens", 4096))
+    profiles_by_arrival = _assign_profiles(config, rng, profiles, len(replay.arrival_times_ms))
+
+    payload = config.get("payload", {})
+    acceptance = config.get("acceptance", {})
+    requests: list[WorkloadRequest] = []
+    for index, (arrival_ms, source_timestamp_ms, profile) in enumerate(
+        zip(replay.arrival_times_ms, replay.source_timestamps_ms, profiles_by_arrival)
+    ):
+        input_tokens, output_tokens = _sample_lengths(
+            rng, profile, max_input, max_output
+        )
+        requests.append(
+            WorkloadRequest(
+                request_id=f"request-{index:07d}",
+                arrival_time_ms=arrival_ms,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                slo_tpot_ms=_sample_slo(config, rng, profile),
+                task=profile.name,
+                client_id=_weighted_choice(rng, clients, client_weights),
+                conversation_id=None,
+                turn_index=None,
+                acceptance_probability=profile.acceptance_probability,
+                metadata={
+                    "source": "mooncake-arrival-replay",
+                    "source_timestamp_ms": source_timestamp_ms,
+                    "payload_status": payload.get("status", "unspecified"),
+                    "acceptance_status": acceptance.get("status", "unspecified"),
+                    "seed": seed,
+                },
+            )
+        )
+
+    if len(requests) != len(replay.source_timestamps_ms):
+        raise AssertionError("strict replay must preserve the selected arrival count")
+    return Workload(
+        requests,
+        metadata={
+            "generator": "specrhythm",
+            "seed": seed,
+            "arrival_source": "mooncake-strict-replay",
+            "workload_family": config.get("workload_family", "trace-replay"),
+            "data_status": config.get("data_status", "unspecified"),
+            "time_scale": replay.time_scale,
+            "window_start_ms": replay.window_start_ms,
+            "window_duration_ms": replay.window_duration_ms,
+        },
+    )
 
 
 def generate_workload(

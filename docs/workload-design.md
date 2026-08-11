@@ -102,15 +102,37 @@ Build and freeze the following families rather than one monolithic trace:
 | R0 | controlled Poisson | task-conditioned public data | sanity baseline |
 | R1 | piecewise Gamma | same payloads | long-timescale burst/rate shift |
 | R2 | Gamma + 1 ms NB | same payloads | microburst and batch pressure |
-| R3 | Mooncake replay | HumanEval/Alpaca/CNN-DM | main SpecRhythm reproduction |
+| R3 proxy | Mooncake replay | sampled proxy lengths | workload/shaping/logic validation |
+| Final R3 | Mooncake replay | HumanEval/Alpaca/CNN-DM | main SpecRhythm reproduction |
 | R4 | Mooncake replay | Mooncake lengths/hashes | long-context/prefix sensitivity |
 | R5 | client/session synthesis | task-conditional payloads | ServeGen-style causal realism |
 
-For R3, use timestamps only and sample task/prompt according to the 6:2:2 mixture. For R4, preserve
-Mooncake's joint timestamp, length, and prefix fields. Mixing those two interpretations silently
-would invalidate conclusions.
+For the committed R3 proxy configuration, use Mooncake timestamps only and sample illustrative
+token lengths according to the 6:2:2 mixture. It has the task SLOs 40/50/150 ms, but it is not the
+final R3 because no HumanEval, Alpaca, or CNN/DailyMail records have been materialized or tokenized.
+Its acceptance probabilities are explicitly illustrative and must be replaced by measurements for
+the exact draft/target model pair on the remote GPU. For final R3, replace the proxy payload layer
+with those public datasets while retaining the selected arrival window. For R4, preserve
+Mooncake's joint timestamp, input/output length, and prefix-hash fields. Mixing these
+interpretations would invalidate conclusions.
 
-## 5. Scenario matrix
+## 5. Strict R3 proxy replay
+
+`specrhythm generate --arrival-trace ...` uses strict replay. It reads the timestamp field, orders
+timestamps chronologically, selects the end-exclusive interval
+`[window-start-ms, window-start-ms + window-duration-ms)`, rebases the first selected timestamp to
+zero, and divides inter-arrival gaps by `time-scale`. It never synthesizes continuation turns and
+the output record count must equal the selected timestamp count. The dedicated
+`configs/workloads/r3-mooncake-622-proxy.json` sets conversation start probability to zero and uses
+deterministic stratified assignment so a 30-request workload has exactly 18/6/6 tasks.
+
+The validator reads the output file in its original order. It checks syntax, identifiers, arrival
+ordering and replay correspondence, positive token/SLO values, acceptance bounds, task and SLO
+mixtures, request count, rate, time range, and IAT CV. A validation failure returns a non-zero exit
+code. The manifest binds source trace, configuration, and output with SHA256 digests and records the
+trace commit, replay window, scale, command, software versions, and generation time.
+
+## 6. Scenario matrix
 
 Cross each dataset family with:
 
@@ -124,7 +146,7 @@ Cross each dataset family with:
 The independently permuted SLO control is important: it tests whether the strategy benefits from
 SLO urgency itself rather than merely exploiting task-correlated acceptance.
 
-## 6. Splits and validation
+## 7. Splits and validation
 
 Split chronological source traces into calibration, validation, and held-out test windows. Do not
 randomly split individual rows, because adjacent requests share rate regimes, clients, and often
@@ -145,7 +167,36 @@ Validate generated workloads at multiple timescales:
 The generator passes only if it matches the intended characteristics at both macro and micro scales.
 A similar mean request rate is not sufficient.
 
-## 7. Recommended build order
+## 8. Server build example
+
+Run code from the GitHub checkout and keep all generated data in the external data tree:
+
+~~~bash
+cd /home/rzwang/SpecRhythm
+git fetch origin
+git switch codex/workload-v0.1
+git pull --ff-only origin codex/workload-v0.1
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e '.[dev]'
+mkdir -p /home/rzwang/data/SpecRhythm-data/processed/workload-v0.1/r3-proxy
+mkdir -p /home/rzwang/data/SpecRhythm-data/manifests/workload-v0.1
+MOONCAKE_TRACE=/home/rzwang/data/SpecRhythm-data/raw/Mooncake/FAST25-release/traces/conversation_trace.jsonl
+MOONCAKE_COMMIT_SHA="$(git -C /home/rzwang/data/SpecRhythm-data/raw/Mooncake rev-parse HEAD)"
+MOONCAKE_SOURCE_URL="https://github.com/kvcache-ai/Mooncake/blob/${MOONCAKE_COMMIT_SHA}/FAST25-release/traces/conversation_trace.jsonl"
+R3_OUTPUT=/home/rzwang/data/SpecRhythm-data/processed/workload-v0.1/r3-proxy/r3-mooncake-622-window-0-600000-scale-1.jsonl
+R3_MANIFEST=/home/rzwang/data/SpecRhythm-data/manifests/workload-v0.1/r3-mooncake-622-window-0-600000-scale-1.manifest.json
+R3_VALIDATION=/home/rzwang/data/SpecRhythm-data/manifests/workload-v0.1/r3-mooncake-622-window-0-600000-scale-1.validation.json
+specrhythm generate --config configs/workloads/r3-mooncake-622-proxy.json --arrival-trace "$MOONCAKE_TRACE" --window-start-ms 0 --window-duration-ms 600000 --time-scale 1 --source-url "$MOONCAKE_SOURCE_URL" --source-commit-sha "$MOONCAKE_COMMIT_SHA" --output "$R3_OUTPUT" --manifest "$R3_MANIFEST"
+specrhythm validate --workload "$R3_OUTPUT" --config configs/workloads/r3-mooncake-622-proxy.json --arrival-trace "$MOONCAKE_TRACE" --window-start-ms 0 --window-duration-ms 600000 --time-scale 1 --output "$R3_VALIDATION"
+specrhythm summarize --workload "$R3_OUTPUT"
+~~~
+
+The `Mooncake` directory must be the same Git checkout from which the trace was copied; otherwise,
+provide the actual source commit explicitly. The manifest always hashes the local trace bytes, so
+the trace identity remains independently auditable.
+
+## 9. Recommended build order
 
 1. Normalize Mooncake records and create immutable source manifests.
 2. Produce R3 and R4 with several fixed trace windows and rate scales.
