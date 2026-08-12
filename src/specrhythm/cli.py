@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 from typing import Any, Optional, Sequence
 
-from specrhythm.policies import ARPolicy, FixedBudgetPolicy, MineDraftPolicy, SpecRhythmPolicy
+from specrhythm.policies import ARPolicy, DualBatchPolicy, SerialSDPolicy, SpecRhythmPolicy
 from specrhythm.provenance import build_manifest, pin_source_url
 from specrhythm.schema import Workload
 from specrhythm.simulator import SimulatorConfig, simulate
@@ -37,10 +37,10 @@ def _write_json(value: Any, path: Optional[str]) -> None:
 def _policy(name: str, config: SimulatorConfig) -> Any:
     if name == "ar":
         return ARPolicy()
-    if name == "fixed":
-        return FixedBudgetPolicy(config.fixed_speculative_budget)
-    if name == "minedraft":
-        return MineDraftPolicy(config.max_request_budget)
+    if name == "serial-sd":
+        return SerialSDPolicy(config.serial_speculative_budget)
+    if name == "dual-batch":
+        return DualBatchPolicy(config.dual_batch_speculative_budget)
     if name == "shaping":
         return SpecRhythmPolicy(enable_eager=False)
     if name == "specrhythm":
@@ -88,7 +88,7 @@ def build_parser() -> argparse.ArgumentParser:
     simulation.add_argument("--config", required=True)
     simulation.add_argument(
         "--policy",
-        choices=["ar", "fixed", "minedraft", "shaping", "specrhythm"],
+        choices=["ar", "serial-sd", "dual-batch", "shaping", "specrhythm"],
         required=True,
     )
     simulation.add_argument("--output")
@@ -212,7 +212,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         _write_json(result.summary.to_dict(), args.output)
         return 0
     if args.command == "compare":
-        names = ("ar", "fixed", "minedraft", "shaping", "specrhythm")
+        names = ("ar", "serial-sd", "dual-batch", "shaping", "specrhythm")
         summaries = [
             simulate(workload, _policy(name, config), config).summary.to_dict() for name in names
         ]

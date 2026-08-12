@@ -14,9 +14,11 @@ class SpecRhythmPolicy:
     """
 
     name = "specrhythm"
+    execution_mode = "dual"
 
     def __init__(self, enable_eager: bool = True) -> None:
         self.enable_eager = enable_eager
+        self.eager_enabled = enable_eager
         self.name = "specrhythm" if enable_eager else "shaping"
 
     @staticmethod
@@ -30,13 +32,13 @@ class SpecRhythmPolicy:
         return SpecRhythmPolicy._urgency(request) * probability
 
     def plan(self, snapshot: PolicySnapshot) -> StepPlan:
-        budgets = {request.request_id: 0 for request in snapshot.requests}
+        budgets = {request.request_id: 0 for request in snapshot.normal_requests}
         remaining = max(0, snapshot.roof_candidate_budget)
-        by_id = {request.request_id: request for request in snapshot.requests}
+        by_id = {request.request_id: request for request in snapshot.normal_requests}
 
         # Pass 1: requests projected to fall behind compete by gap times acceptance benefit.
         urgent = sorted(
-            (request for request in snapshot.requests if request.progress_gap > 0),
+            (request for request in snapshot.normal_requests if request.progress_gap > 0),
             key=lambda request: (
                 request.progress_gap * request.acceptance_benefit,
                 -request.normalized_slack,
@@ -72,7 +74,7 @@ class SpecRhythmPolicy:
         while remaining > 0:
             eligible = [
                 request
-                for request in snapshot.requests
+                for request in snapshot.normal_requests
                 if budgets[request.request_id] < request.max_budget
             ]
             if not eligible:
@@ -90,13 +92,12 @@ class SpecRhythmPolicy:
             budgets[request.request_id] += 1
             remaining -= 1
 
-        # Eager continuation is admitted only for urgent, useful requests that fit the hidden
-        # drafting window. The current proposal must later pass guarded commit.
-        eager: list[str] = []
-        # Normal draft work consumes the overlap window before eager continuations.
+        # Eager continuation uses only the hidden drafting window left after normal work.
+        eager_budgets: dict[str, int] = {}
         draft_remaining = max(0, snapshot.residual_draft_tokens - sum(budgets.values()))
+        eager_remaining = max(0, snapshot.roof_candidate_budget - sum(budgets.values()))
         eager_order = sorted(
-            urgent,
+            (request for request in snapshot.eager_requests if request.progress_gap > 0),
             key=lambda request: (
                 request.progress_gap * request.acceptance_benefit,
                 -request.normalized_slack,
@@ -106,11 +107,19 @@ class SpecRhythmPolicy:
         )
         if self.enable_eager:
             for request in eager_order:
-                provisional = budgets[request.request_id]
-                if provisional > 0 and provisional <= draft_remaining:
-                    eager.append(request.request_id)
+                provisional = min(request.proposal_budget, request.max_budget)
+                if (
+                    provisional > 0
+                    and provisional <= draft_remaining
+                    and provisional <= eager_remaining
+                ):
+                    eager_budgets[request.request_id] = provisional
                     draft_remaining -= provisional
+                    eager_remaining -= provisional
 
         assert sum(budgets.values()) <= snapshot.roof_candidate_budget
         assert all(0 <= value <= by_id[key].max_budget for key, value in budgets.items())
-        return StepPlan(budgets=budgets, eager_request_ids=tuple(eager))
+        assert sum(budgets.values()) + sum(eager_budgets.values()) <= (
+            snapshot.roof_candidate_budget
+        )
+        return StepPlan(normal_budgets=budgets, eager_budgets=eager_budgets)

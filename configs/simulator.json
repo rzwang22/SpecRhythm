@@ -6,7 +6,8 @@
   "verify_per_request_ms": 0.12,
   "verify_per_candidate_ms": 0.035,
   "draft_per_candidate_ms": 0.025,
-  "fixed_speculative_budget": 4,
+  "serial_speculative_budget": 4,
+  "dual_batch_speculative_budget": 8,
   "max_cycles": 1000000,
   "seed": 1664
 }

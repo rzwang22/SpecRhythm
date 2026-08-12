@@ -1,4 +1,4 @@
-"""Deterministic discrete-event simulator for Phase-A policy evaluation."""
+"""Deterministic proposal-lifecycle simulator for Phase-A semantic validation."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import statistics
 from dataclasses import asdict, dataclass, field
 from typing import Any, Optional
 
-from specrhythm.policies.base import PolicySnapshot, RequestView, SchedulingPolicy
+from specrhythm.policies.base import PolicySnapshot, RequestView, SchedulingPolicy, StepPlan
 from specrhythm.schema import Workload, WorkloadRequest
 
 
@@ -21,7 +21,8 @@ class SimulatorConfig:
     verify_per_request_ms: float = 0.08
     verify_per_candidate_ms: float = 0.025
     draft_per_candidate_ms: float = 0.018
-    fixed_speculative_budget: int = 4
+    serial_speculative_budget: int = 4
+    dual_batch_speculative_budget: int = 8
     max_cycles: int = 1_000_000
     seed: int = 0
 
@@ -30,20 +31,85 @@ class SimulatorConfig:
         return cls(**value)
 
     def __post_init__(self) -> None:
+        integer_values = (
+            self.max_active_requests,
+            self.roof_candidate_budget,
+            self.max_request_budget,
+            self.serial_speculative_budget,
+            self.dual_batch_speculative_budget,
+            self.max_cycles,
+            self.seed,
+        )
+        if any(not isinstance(value, int) or isinstance(value, bool) for value in integer_values):
+            raise ValueError("simulator count, budget, cycle, and seed values must be integers")
         if self.max_active_requests < 1 or self.roof_candidate_budget < 0:
             raise ValueError(
                 "active request capacity must be positive and roof budget non-negative"
             )
-        if self.max_request_budget < 0 or self.max_cycles < 1:
-            raise ValueError("request budget must be non-negative and max_cycles positive")
+        if (
+            self.max_request_budget < 0
+            or self.serial_speculative_budget < 0
+            or self.dual_batch_speculative_budget < 0
+            or self.max_cycles < 1
+        ):
+            raise ValueError("request budgets must be non-negative and max_cycles positive")
         latency_values = (
             self.verify_base_ms,
             self.verify_per_request_ms,
             self.verify_per_candidate_ms,
             self.draft_per_candidate_ms,
         )
-        if any(value < 0 or not math.isfinite(value) for value in latency_values):
+        if any(
+            not isinstance(value, (int, float))
+            or isinstance(value, bool)
+            or value < 0
+            or not math.isfinite(value)
+            for value in latency_values
+        ):
             raise ValueError("latency parameters must be finite and non-negative")
+
+
+@dataclass(frozen=True)
+class Proposal:
+    request_id: str
+    parent_prefix_len: int
+    prefix_epoch: int
+    budget: int
+    drafted_tokens: int
+    source: str
+    drafted_at_cycle: int
+
+    def __post_init__(self) -> None:
+        if not self.request_id:
+            raise ValueError("proposal request_id must not be empty")
+        integer_values = (
+            self.parent_prefix_len,
+            self.prefix_epoch,
+            self.budget,
+            self.drafted_tokens,
+            self.drafted_at_cycle,
+        )
+        if any(
+            not isinstance(value, int) or isinstance(value, bool) or value < 0
+            for value in integer_values
+        ):
+            raise ValueError("proposal prefix, epoch, budget, tokens, and cycle must be integers")
+        if self.drafted_tokens > self.budget:
+            raise ValueError("proposal drafted_tokens must not exceed budget")
+        if self.source not in {"normal", "eager"}:
+            raise ValueError("proposal source must be 'normal' or 'eager'")
+
+    @property
+    def key(self) -> tuple[Any, ...]:
+        return (
+            self.request_id,
+            self.parent_prefix_len,
+            self.prefix_epoch,
+            self.budget,
+            self.drafted_tokens,
+            self.source,
+            self.drafted_at_cycle,
+        )
 
 
 @dataclass
@@ -51,12 +117,27 @@ class RuntimeRequest:
     request: WorkloadRequest
     slot: int
     admitted_at_ms: float
-    delivered_tokens: int = 0
+    normal_proposal: Optional[Proposal] = None
+    eager_proposal: Optional[Proposal] = None
+    committed_prefix_len: int = 0
+    prefix_epoch: int = 0
+    finished: bool = False
     elapsed_decode_ms: float = 0.0
-    verify_attempts: int = 0
-    accepted_draft_tokens: int = 0
-    proposed_draft_tokens: int = 0
-    recent_acceptance_ratio: float = 0.7
+    acceptance_estimate: float = 0.7
+
+    def __post_init__(self) -> None:
+        if self.slot not in {0, 1}:
+            raise ValueError("runtime slot must be 0 or 1")
+
+
+@dataclass(frozen=True)
+class RuntimeRequestState:
+    request_id: str
+    normal_proposal: Optional[Proposal]
+    eager_proposal: Optional[Proposal]
+    committed_prefix_len: int
+    prefix_epoch: int
+    finished: bool
 
 
 @dataclass(frozen=True)
@@ -73,6 +154,7 @@ class RequestResult:
 @dataclass(frozen=True)
 class SimulationSummary:
     policy: str
+    execution_mode: str
     requests: int
     completed_requests: int
     measurement_ms: float
@@ -82,44 +164,209 @@ class SimulationSummary:
     p50_tpot_ms: Optional[float]
     p90_tpot_ms: Optional[float]
     p99_tpot_ms: Optional[float]
-    proposed_draft_tokens: int
-    accepted_draft_tokens: int
+    normal_drafted_tokens: int
+    eager_drafted_tokens: int
+    verified_tokens: int
+    accepted_tokens: int
+    promoted_tokens: int
+    invalidated_tokens: int
+    discarded_at_eos_tokens: int
+    draft_compute_ms: float
+    verify_compute_ms: float
     eager_promotions: int
     eager_invalidations: int
     class_metrics: dict[str, dict[str, float]] = field(default_factory=dict)
 
+    @property
+    def proposed_draft_tokens(self) -> int:
+        return self.normal_drafted_tokens + self.eager_drafted_tokens
+
+    @property
+    def accepted_draft_tokens(self) -> int:
+        return self.accepted_tokens
+
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        value = asdict(self)
+        value["proposed_draft_tokens"] = self.proposed_draft_tokens
+        value["accepted_draft_tokens"] = self.accepted_draft_tokens
+        return value
 
 
 @dataclass(frozen=True)
 class SimulationResult:
     summary: SimulationSummary
     requests: tuple[RequestResult, ...]
+    final_states: tuple[RuntimeRequestState, ...]
 
 
-def _stable_uniform(seed: int, request_id: str, attempt: int, depth: int) -> float:
-    payload = f"{seed}:{request_id}:{attempt}:{depth}".encode()
-    integer = int.from_bytes(hashlib.sha256(payload).digest()[:8], "big")
-    return integer / float(2**64)
+class AcceptanceOracle:
+    """Prefix-indexed max-K acceptance traces shared by every policy and budget."""
 
+    def __init__(
+        self,
+        seed: int,
+        max_k: int,
+        traces: Optional[dict[tuple[str, int], tuple[bool, ...]]] = None,
+    ) -> None:
+        if not isinstance(seed, int) or isinstance(seed, bool):
+            raise ValueError("oracle seed must be an integer")
+        if not isinstance(max_k, int) or isinstance(max_k, bool) or max_k < 0:
+            raise ValueError("oracle max_k must be a non-negative integer")
+        self.seed = seed
+        self.max_k = max_k
+        self._cache: dict[tuple[str, int], tuple[bool, ...]] = {}
+        for key, trace in (traces or {}).items():
+            if len(trace) != max_k or any(not isinstance(value, bool) for value in trace):
+                raise ValueError("injected acceptance traces must contain max_k booleans")
+            self._cache[key] = trace
 
-def _sample_progress(runtime: RuntimeRequest, budget: int, seed: int) -> tuple[int, int, bool]:
-    accepted = 0
-    probability = runtime.request.acceptance_probability
-    for depth in range(1, budget + 1):
+    def trace(
+        self, request_id: str, committed_target_prefix_len: int, probability: float
+    ) -> tuple[bool, ...]:
+        if not 0 <= probability <= 1 or not math.isfinite(probability):
+            raise ValueError("acceptance probability must be finite and in [0, 1]")
+        key = (request_id, committed_target_prefix_len)
+        if key not in self._cache:
+            values = []
+            for depth in range(1, self.max_k + 1):
+                payload = (
+                    f"{self.seed}:{request_id}:{committed_target_prefix_len}:{depth}"
+                ).encode()
+                integer = int.from_bytes(hashlib.sha256(payload).digest()[:8], "big")
+                values.append(integer / float(2**64) < probability)
+            self._cache[key] = tuple(values)
+        return self._cache[key]
+
+    def accepted_prefix(
+        self,
+        request_id: str,
+        committed_target_prefix_len: int,
+        budget: int,
+        probability: float,
+    ) -> int:
         if (
-            _stable_uniform(seed, runtime.request.request_id, runtime.verify_attempts, depth)
-            < probability
+            not isinstance(budget, int)
+            or isinstance(budget, bool)
+            or not 0 <= budget <= self.max_k
         ):
+            raise ValueError("oracle budget must be an integer in [0, max_k]")
+        accepted = 0
+        for matches in self.trace(request_id, committed_target_prefix_len, probability)[:budget]:
+            if not matches:
+                break
             accepted += 1
+        return accepted
+
+
+@dataclass(frozen=True)
+class _VerificationOutcome:
+    parent: Proposal
+    valid_parent: bool
+    accepted_tokens: int
+    fully_accepted: bool
+
+
+@dataclass
+class _LifecycleLedger:
+    normal_drafted_tokens: int = 0
+    eager_drafted_tokens: int = 0
+    verified_tokens: int = 0
+    accepted_tokens: int = 0
+    promoted_tokens: int = 0
+    invalidated_tokens: int = 0
+    discarded_at_eos_tokens: int = 0
+    draft_compute_ms: float = 0.0
+    verify_compute_ms: float = 0.0
+    eager_promotions: int = 0
+    eager_invalidations: int = 0
+    drafted: set[tuple[Any, ...]] = field(default_factory=set)
+    terminal: set[tuple[Any, ...]] = field(default_factory=set)
+    promoted: set[tuple[Any, ...]] = field(default_factory=set)
+
+    def record_drafted(self, proposal: Proposal, draft_per_candidate_ms: float) -> None:
+        if proposal.key in self.drafted:
+            raise AssertionError("proposal was drafted more than once")
+        self.drafted.add(proposal.key)
+        if proposal.source == "normal":
+            self.normal_drafted_tokens += proposal.drafted_tokens
         else:
-            break
-    # Verification always yields a target token: either a correction or the token after a fully
-    # accepted draft. This also makes budget zero equivalent to autoregressive progress.
-    progress = accepted + 1
-    fully_accepted = budget > 0 and accepted == budget
-    return progress, accepted, fully_accepted
+            self.eager_drafted_tokens += proposal.drafted_tokens
+        self.draft_compute_ms += proposal.drafted_tokens * draft_per_candidate_ms
+
+    def record_verified(self, proposal: Proposal, accepted_tokens: int) -> None:
+        self._record_terminal(proposal)
+        if not 0 <= accepted_tokens <= proposal.drafted_tokens:
+            raise AssertionError("accepted tokens must be a subset of verified tokens")
+        self.verified_tokens += proposal.drafted_tokens
+        self.accepted_tokens += accepted_tokens
+
+    def record_invalidated(self, proposal: Proposal, *, at_eos: bool = False) -> None:
+        self._record_terminal(proposal)
+        if at_eos:
+            self.discarded_at_eos_tokens += proposal.drafted_tokens
+        else:
+            self.invalidated_tokens += proposal.drafted_tokens
+
+    def record_promotion(self, proposal: Proposal) -> None:
+        if proposal.source != "eager" or proposal.key not in self.drafted:
+            raise AssertionError("only a drafted eager proposal can be promoted")
+        if proposal.key in self.promoted or proposal.key in self.terminal:
+            raise AssertionError("proposal was promoted twice or after terminal disposition")
+        self.promoted.add(proposal.key)
+        self.promoted_tokens += proposal.drafted_tokens
+        self.eager_promotions += 1
+
+    def _record_terminal(self, proposal: Proposal) -> None:
+        if proposal.key not in self.drafted:
+            raise AssertionError("proposal reached a terminal state before being drafted")
+        if proposal.key in self.terminal:
+            raise AssertionError("proposal was verified, invalidated, or discarded twice")
+        self.terminal.add(proposal.key)
+
+    def assert_conservation(self) -> None:
+        if self.drafted != self.terminal:
+            raise AssertionError("every drafted proposal must have exactly one terminal state")
+        drafted_tokens = self.normal_drafted_tokens + self.eager_drafted_tokens
+        terminal_tokens = (
+            self.verified_tokens + self.invalidated_tokens + self.discarded_at_eos_tokens
+        )
+        if drafted_tokens != terminal_tokens:
+            raise AssertionError("drafted proposal tokens are not conserved")
+        if self.accepted_tokens > self.verified_tokens:
+            raise AssertionError("accepted tokens exceed verified tokens")
+        if self.promoted_tokens > self.eager_drafted_tokens:
+            raise AssertionError("promoted tokens exceed eager drafted tokens")
+
+
+def eager_is_promotable(
+    runtime: RuntimeRequest,
+    parent: Proposal,
+    eager: Proposal,
+    *,
+    parent_fully_accepted: bool,
+) -> bool:
+    """Check every guarded-commit dependency for one eager proposal."""
+
+    return (
+        parent_fully_accepted
+        and not runtime.finished
+        and eager.source == "eager"
+        and eager.request_id == parent.request_id == runtime.request.request_id
+        and eager.parent_prefix_len
+        == parent.parent_prefix_len + parent.drafted_tokens + 1
+        and eager.parent_prefix_len == runtime.committed_prefix_len
+        and eager.prefix_epoch == runtime.prefix_epoch
+        and eager.prefix_epoch == parent.prefix_epoch + 1
+    )
+
+
+def _proposal_matches_runtime(runtime: RuntimeRequest, proposal: Proposal) -> bool:
+    return (
+        proposal.request_id == runtime.request.request_id
+        and proposal.parent_prefix_len == runtime.committed_prefix_len
+        and proposal.prefix_epoch == runtime.prefix_epoch
+        and not runtime.finished
+    )
 
 
 def _percentile(values: list[float], fraction: float) -> Optional[float]:
@@ -131,12 +378,10 @@ def _percentile(values: list[float], fraction: float) -> Optional[float]:
 
 def _build_summary(
     policy_name: str,
+    execution_mode: str,
     results: list[RequestResult],
     measurement_ms: float,
-    proposed: int,
-    accepted: int,
-    eager_promotions: int,
-    eager_invalidations: int,
+    ledger: _LifecycleLedger,
 ) -> SimulationSummary:
     duration_s = measurement_ms / 1000.0
     total_tokens = sum(result.output_tokens for result in results)
@@ -153,41 +398,357 @@ def _build_summary(
         }
     return SimulationSummary(
         policy=policy_name,
+        execution_mode=execution_mode,
         requests=len(results),
         completed_requests=len(results),
         measurement_ms=measurement_ms,
         throughput_tokens_per_s=total_tokens / duration_s if duration_s else 0.0,
         goodput_tokens_per_s=good_tokens / duration_s if duration_s else 0.0,
-        slo_attainment=sum(result.attained for result in results) / len(results)
-        if results
-        else 0.0,
+        slo_attainment=(
+            sum(result.attained for result in results) / len(results) if results else 0.0
+        ),
         p50_tpot_ms=_percentile(tpots, 0.50),
         p90_tpot_ms=_percentile(tpots, 0.90),
         p99_tpot_ms=_percentile(tpots, 0.99),
-        proposed_draft_tokens=proposed,
-        accepted_draft_tokens=accepted,
-        eager_promotions=eager_promotions,
-        eager_invalidations=eager_invalidations,
+        normal_drafted_tokens=ledger.normal_drafted_tokens,
+        eager_drafted_tokens=ledger.eager_drafted_tokens,
+        verified_tokens=ledger.verified_tokens,
+        accepted_tokens=ledger.accepted_tokens,
+        promoted_tokens=ledger.promoted_tokens,
+        invalidated_tokens=ledger.invalidated_tokens,
+        discarded_at_eos_tokens=ledger.discarded_at_eos_tokens,
+        draft_compute_ms=ledger.draft_compute_ms,
+        verify_compute_ms=ledger.verify_compute_ms,
+        eager_promotions=ledger.eager_promotions,
+        eager_invalidations=ledger.eager_invalidations,
         class_metrics=class_metrics,
     )
 
 
+def _request_view(
+    runtime: RuntimeRequest,
+    config: SimulatorConfig,
+    waiting_time_ms: float,
+    *,
+    parent: Optional[Proposal] = None,
+) -> Optional[RequestView]:
+    if runtime.finished:
+        return None
+    parent_prefix = runtime.committed_prefix_len
+    proposal_budget = 0
+    if parent is not None:
+        if not _proposal_matches_runtime(runtime, parent) or parent.drafted_tokens <= 0:
+            return None
+        full_progress = min(
+            parent.drafted_tokens + 1,
+            runtime.request.output_tokens - parent.parent_prefix_len,
+        )
+        parent_prefix = parent.parent_prefix_len + full_progress
+        proposal_budget = parent.drafted_tokens
+    remaining = runtime.request.output_tokens - parent_prefix
+    if remaining <= 0:
+        return None
+    return RequestView(
+        request_id=runtime.request.request_id,
+        committed_prefix_len=runtime.committed_prefix_len,
+        elapsed_decode_ms=runtime.elapsed_decode_ms,
+        slo_tpot_ms=runtime.request.slo_tpot_ms,
+        acceptance_estimate=runtime.acceptance_estimate,
+        waiting_time_ms=waiting_time_ms,
+        max_budget=min(config.max_request_budget, remaining),
+        proposal_budget=min(proposal_budget, remaining),
+    )
+
+
+def _plan(
+    policy: SchedulingPolicy,
+    normal_runtimes: list[RuntimeRequest],
+    eager_parents: list[tuple[RuntimeRequest, Proposal]],
+    verify_ms: float,
+    config: SimulatorConfig,
+) -> StepPlan:
+    waiting_time_ms = (
+        verify_ms
+        if getattr(policy, "execution_mode", "dual") == "serial"
+        else 2 * verify_ms
+    )
+    normal_views = tuple(
+        view
+        for runtime in normal_runtimes
+        for view in [_request_view(runtime, config, waiting_time_ms)]
+        if view is not None
+    )
+    eager_views = tuple(
+        view
+        for runtime, parent in eager_parents
+        for view in [_request_view(runtime, config, waiting_time_ms, parent=parent)]
+        if view is not None
+    )
+    residual_draft_tokens = (
+        math.floor(verify_ms / config.draft_per_candidate_ms)
+        if config.draft_per_candidate_ms > 0
+        else config.roof_candidate_budget
+    )
+    snapshot = PolicySnapshot(
+        normal_requests=normal_views,
+        eager_requests=eager_views,
+        roof_candidate_budget=config.roof_candidate_budget,
+        residual_draft_tokens=residual_draft_tokens,
+    )
+    plan = policy.plan(snapshot)
+    normal_ids = {view.request_id for view in normal_views}
+    eager_ids = {view.request_id for view in eager_views}
+    if set(plan.normal_budgets) - normal_ids:
+        raise ValueError(f"policy {policy.name} allocated a non-draftable normal request")
+    if set(plan.eager_budgets) - eager_ids:
+        raise ValueError(f"policy {policy.name} allocated a non-draftable eager request")
+    if plan.eager_budgets and not getattr(policy, "eager_enabled", False):
+        raise ValueError(f"policy {policy.name} allocated eager work while eager is disabled")
+    if plan.total_candidates + plan.total_eager_candidates > config.roof_candidate_budget:
+        raise ValueError(f"policy {policy.name} exceeded the roof candidate budget")
+    by_id = {view.request_id: view for view in normal_views}
+    eager_by_id = {view.request_id: view for view in eager_views}
+    for request_id, budget in plan.normal_budgets.items():
+        if (
+            not isinstance(budget, int)
+            or isinstance(budget, bool)
+            or budget < 0
+            or budget > by_id[request_id].max_budget
+        ):
+            raise ValueError(f"policy {policy.name} returned an invalid normal budget")
+    for request_id, budget in plan.eager_budgets.items():
+        if (
+            not isinstance(budget, int)
+            or isinstance(budget, bool)
+            or budget <= 0
+            or budget > eager_by_id[request_id].max_budget
+        ):
+            raise ValueError(f"policy {policy.name} returned an invalid eager budget")
+    return plan
+
+
+def _draft_normal(
+    runtime: RuntimeRequest,
+    budget: int,
+    cycle: int,
+    config: SimulatorConfig,
+    ledger: _LifecycleLedger,
+) -> Proposal:
+    if runtime.finished or runtime.normal_proposal is not None:
+        raise AssertionError("cannot draft a normal proposal for a finished or occupied request")
+    remaining = runtime.request.output_tokens - runtime.committed_prefix_len
+    drafted_tokens = min(budget, remaining)
+    proposal = Proposal(
+        request_id=runtime.request.request_id,
+        parent_prefix_len=runtime.committed_prefix_len,
+        prefix_epoch=runtime.prefix_epoch,
+        budget=budget,
+        drafted_tokens=drafted_tokens,
+        source="normal",
+        drafted_at_cycle=cycle,
+    )
+    runtime.normal_proposal = proposal
+    ledger.record_drafted(proposal, config.draft_per_candidate_ms)
+    return proposal
+
+
+def _draft_eager(
+    runtime: RuntimeRequest,
+    parent: Proposal,
+    budget: int,
+    cycle: int,
+    config: SimulatorConfig,
+    ledger: _LifecycleLedger,
+) -> Optional[Proposal]:
+    if runtime.finished or runtime.eager_proposal is not None:
+        raise AssertionError("cannot draft eager work for a finished or occupied request")
+    if not _proposal_matches_runtime(runtime, parent) or parent.drafted_tokens <= 0:
+        return None
+    full_progress = min(
+        parent.drafted_tokens + 1,
+        runtime.request.output_tokens - parent.parent_prefix_len,
+    )
+    anticipated_prefix = parent.parent_prefix_len + full_progress
+    remaining = runtime.request.output_tokens - anticipated_prefix
+    if remaining <= 0:
+        return None
+    proposal = Proposal(
+        request_id=runtime.request.request_id,
+        parent_prefix_len=anticipated_prefix,
+        prefix_epoch=parent.prefix_epoch + 1,
+        budget=budget,
+        drafted_tokens=min(budget, remaining),
+        source="eager",
+        drafted_at_cycle=cycle,
+    )
+    if proposal.drafted_tokens <= 0:
+        return None
+    runtime.eager_proposal = proposal
+    ledger.record_drafted(proposal, config.draft_per_candidate_ms)
+    return proposal
+
+
+def _proposal_draft_ms(proposals: list[Proposal], config: SimulatorConfig) -> float:
+    return sum(proposal.drafted_tokens for proposal in proposals) * (
+        config.draft_per_candidate_ms
+    )
+
+
+def _verify_proposal(
+    runtime: RuntimeRequest,
+    oracle: AcceptanceOracle,
+    ledger: _LifecycleLedger,
+) -> _VerificationOutcome:
+    proposal = runtime.normal_proposal
+    if proposal is None:
+        raise AssertionError("verification requires a stored proposal")
+    runtime.normal_proposal = None
+    if not _proposal_matches_runtime(runtime, proposal):
+        ledger.record_invalidated(proposal)
+        return _VerificationOutcome(proposal, False, 0, False)
+
+    accepted = oracle.accepted_prefix(
+        proposal.request_id,
+        proposal.parent_prefix_len,
+        proposal.drafted_tokens,
+        runtime.request.acceptance_probability,
+    )
+    remaining = runtime.request.output_tokens - runtime.committed_prefix_len
+    accepted = min(accepted, remaining)
+    progress = min(accepted + 1, remaining)
+    fully_accepted = proposal.drafted_tokens > 0 and accepted == proposal.drafted_tokens
+    ledger.record_verified(proposal, accepted)
+    runtime.committed_prefix_len += progress
+    runtime.prefix_epoch += 1
+    runtime.finished = runtime.committed_prefix_len >= runtime.request.output_tokens
+    if proposal.drafted_tokens > 0:
+        observed = accepted / proposal.drafted_tokens
+        runtime.acceptance_estimate = 0.8 * runtime.acceptance_estimate + 0.2 * observed
+    return _VerificationOutcome(proposal, True, accepted, fully_accepted)
+
+
+def _verify_ar(runtime: RuntimeRequest) -> None:
+    if runtime.finished:
+        raise AssertionError("finished AR request cannot be verified")
+    runtime.committed_prefix_len += 1
+    runtime.prefix_epoch += 1
+    runtime.finished = runtime.committed_prefix_len >= runtime.request.output_tokens
+
+
+def _resolve_eager(
+    runtime: RuntimeRequest,
+    outcome: _VerificationOutcome,
+    ledger: _LifecycleLedger,
+) -> None:
+    eager = runtime.eager_proposal
+    if eager is None:
+        return
+    runtime.eager_proposal = None
+    if eager_is_promotable(
+        runtime,
+        outcome.parent,
+        eager,
+        parent_fully_accepted=outcome.valid_parent and outcome.fully_accepted,
+    ):
+        if runtime.normal_proposal is not None:
+            raise AssertionError("promotion would overwrite a stored normal proposal")
+        runtime.normal_proposal = eager
+        runtime.slot = 1 - runtime.slot
+        ledger.record_promotion(eager)
+        return
+    ledger.eager_invalidations += 1
+    ledger.record_invalidated(eager, at_eos=runtime.finished)
+
+
+def _discard_finished_proposals(runtime: RuntimeRequest, ledger: _LifecycleLedger) -> None:
+    if not runtime.finished:
+        return
+    for field_name in ("normal_proposal", "eager_proposal"):
+        proposal = getattr(runtime, field_name)
+        if proposal is not None:
+            ledger.record_invalidated(proposal, at_eos=True)
+            setattr(runtime, field_name, None)
+
+
+def _complete_request(runtime: RuntimeRequest) -> RequestResult:
+    if not runtime.finished:
+        raise AssertionError("cannot complete an unfinished request")
+    tpot = runtime.elapsed_decode_ms / runtime.request.output_tokens
+    return RequestResult(
+        request_id=runtime.request.request_id,
+        task=runtime.request.task,
+        output_tokens=runtime.request.output_tokens,
+        slo_tpot_ms=runtime.request.slo_tpot_ms,
+        decode_latency_ms=runtime.elapsed_decode_ms,
+        tpot_ms=tpot,
+        attained=tpot <= runtime.request.slo_tpot_ms,
+    )
+
+
+def _verify_ms(runtimes: list[RuntimeRequest], config: SimulatorConfig) -> float:
+    if not runtimes:
+        return 0.0
+    candidates = sum(
+        runtime.normal_proposal.drafted_tokens
+        for runtime in runtimes
+        if runtime.normal_proposal is not None
+    )
+    return (
+        config.verify_base_ms
+        + config.verify_per_request_ms * len(runtimes)
+        + config.verify_per_candidate_ms * candidates
+    )
+
+
+def _snapshot(runtime: RuntimeRequest) -> RuntimeRequestState:
+    return RuntimeRequestState(
+        request_id=runtime.request.request_id,
+        normal_proposal=runtime.normal_proposal,
+        eager_proposal=runtime.eager_proposal,
+        committed_prefix_len=runtime.committed_prefix_len,
+        prefix_epoch=runtime.prefix_epoch,
+        finished=runtime.finished,
+    )
+
+
+def cycle_latency_ms(execution_mode: str, draft_ms: float, verify_ms: float) -> float:
+    """Return exposed cycle time for the named execution semantics."""
+
+    if draft_ms < 0 or verify_ms < 0:
+        raise ValueError("draft and verify latency must be non-negative")
+    if execution_mode == "serial":
+        return draft_ms + verify_ms
+    if execution_mode == "dual":
+        return max(draft_ms, verify_ms)
+    if execution_mode == "ar":
+        return verify_ms
+    raise ValueError("execution_mode must be 'ar', 'serial', or 'dual'")
+
+
 def simulate(
-    workload: Workload, policy: SchedulingPolicy, config: SimulatorConfig
+    workload: Workload,
+    policy: SchedulingPolicy,
+    config: SimulatorConfig,
+    *,
+    acceptance_oracle: Optional[AcceptanceOracle] = None,
 ) -> SimulationResult:
-    """Run one policy with dual logical slots and guarded eager promotion."""
+    """Run an explicit AR, serial-SD, or dual-batch proposal state machine."""
+
+    execution_mode = getattr(policy, "execution_mode", None)
+    if execution_mode not in {"ar", "serial", "dual"}:
+        raise ValueError("policy execution_mode must be 'ar', 'serial', or 'dual'")
+    oracle = acceptance_oracle or AcceptanceOracle(config.seed, config.max_request_budget)
+    if oracle.max_k < config.max_request_budget:
+        raise ValueError("acceptance oracle max_k is smaller than max_request_budget")
 
     pending = list(workload.requests)
     pending_index = 0
     active: dict[str, RuntimeRequest] = {}
-    ready_eager: set[str] = set()
+    all_runtimes: dict[str, RuntimeRequest] = {}
     completed: list[RequestResult] = []
+    ledger = _LifecycleLedger()
     now_ms = 0.0
     cycle = 0
-    proposed_total = 0
-    accepted_total = 0
-    eager_promotions = 0
-    eager_invalidations = 0
     first_admission_ms: Optional[float] = None
 
     def admit_ready() -> None:
@@ -198,15 +759,24 @@ def simulate(
                 break
             slot_sizes = [sum(item.slot == slot for item in active.values()) for slot in (0, 1)]
             slot = 0 if slot_sizes[0] <= slot_sizes[1] else 1
-            active[request.request_id] = RuntimeRequest(
+            runtime = RuntimeRequest(
                 request=request,
                 slot=slot,
                 admitted_at_ms=now_ms,
-                recent_acceptance_ratio=request.acceptance_probability,
+                acceptance_estimate=request.acceptance_probability,
             )
+            active[request.request_id] = runtime
+            all_runtimes[request.request_id] = runtime
             if first_admission_ms is None:
                 first_admission_ms = now_ms
             pending_index += 1
+
+    def finish_ready() -> None:
+        finished_ids = [key for key, runtime in active.items() if runtime.finished]
+        for request_id in finished_ids:
+            runtime = active.pop(request_id)
+            _discard_finished_proposals(runtime, ledger)
+            completed.append(_complete_request(runtime))
 
     while pending_index < len(pending) or active:
         if cycle >= config.max_cycles:
@@ -217,114 +787,131 @@ def simulate(
         if not active:
             continue
 
-        verify_slot = cycle % 2
-        eligible_ids = {
-            request_id for request_id, runtime in active.items() if runtime.slot == verify_slot
-        }
-        eligible_ids.update(request_id for request_id in ready_eager if request_id in active)
-        ready_eager.clear()
-        eligible = [active[key] for key in sorted(eligible_ids)]
-        if not eligible:
-            cycle += 1
-            continue
-
-        base_verify_ms = config.verify_base_ms + config.verify_per_request_ms * len(eligible)
-        normal_wait_ms = 2.0 * base_verify_ms
-        views = tuple(
-            RequestView(
-                request_id=runtime.request.request_id,
-                delivered_tokens=runtime.delivered_tokens,
-                elapsed_decode_ms=runtime.elapsed_decode_ms,
-                slo_tpot_ms=runtime.request.slo_tpot_ms,
-                acceptance_ratio=runtime.recent_acceptance_ratio,
-                draft_confidence=runtime.request.acceptance_probability,
-                waiting_time_ms=normal_wait_ms,
-                max_budget=config.max_request_budget,
+        if execution_mode == "serial":
+            verify_runtimes = [
+                runtime
+                for runtime in sorted(active.values(), key=lambda item: item.request.request_id)
+                if runtime.normal_proposal is not None and not runtime.finished
+            ]
+            verify_ms = _verify_ms(verify_runtimes, config)
+            verified_candidates = sum(
+                runtime.normal_proposal.drafted_tokens
+                for runtime in verify_runtimes
+                if runtime.normal_proposal is not None
             )
-            for runtime in eligible
-        )
-        residual_draft_tokens = (
-            math.floor(base_verify_ms / config.draft_per_candidate_ms)
-            if config.draft_per_candidate_ms > 0
-            else config.roof_candidate_budget
-        )
-        snapshot = PolicySnapshot(
-            requests=views,
-            roof_candidate_budget=config.roof_candidate_budget,
-            residual_draft_tokens=residual_draft_tokens,
-        )
-        plan = policy.plan(snapshot)
-        if plan.total_candidates > config.roof_candidate_budget:
-            raise ValueError(f"policy {policy.name} exceeded the roof candidate budget")
-        if set(plan.budgets) - eligible_ids:
-            raise ValueError(f"policy {policy.name} allocated a non-eligible request")
+            if verified_candidates > config.roof_candidate_budget:
+                raise AssertionError("stored verify batch exceeded the roof candidate budget")
+            ledger.verify_compute_ms += verify_ms
+            for runtime in active.values():
+                runtime.elapsed_decode_ms += verify_ms
+            for runtime in verify_runtimes:
+                _verify_proposal(runtime, oracle, ledger)
+            finish_ready()
 
-        total_candidates = plan.total_candidates
-        verify_ms = base_verify_ms + config.verify_per_candidate_ms * total_candidates
-        eager_draft_tokens = sum(plan.budgets.get(key, 0) for key in plan.eager_request_ids)
-        draft_ms = config.draft_per_candidate_ms * (total_candidates + eager_draft_tokens)
-        cycle_ms = verify_ms + max(0.0, draft_ms - verify_ms)
-        now_ms += cycle_ms
-        for runtime in active.values():
-            runtime.elapsed_decode_ms += cycle_ms
-
-        finished_ids: list[str] = []
-        eager_set = set(plan.eager_request_ids)
-        for runtime in eligible:
-            request_id = runtime.request.request_id
-            budget = int(plan.budgets.get(request_id, 0))
-            if budget < 0 or budget > config.max_request_budget:
-                raise ValueError(f"policy {policy.name} returned invalid per-request budget")
-            progress, accepted, fully_accepted = _sample_progress(runtime, budget, config.seed)
-            remaining = runtime.request.output_tokens - runtime.delivered_tokens
-            runtime.delivered_tokens += min(progress, remaining)
-            runtime.verify_attempts += 1
-            runtime.proposed_draft_tokens += budget
-            runtime.accepted_draft_tokens += accepted
-            proposed_total += budget
-            accepted_total += accepted
-            if budget > 0:
-                observed = accepted / budget
-                runtime.recent_acceptance_ratio = (
-                    0.8 * runtime.recent_acceptance_ratio + 0.2 * observed
-                )
-
-            if request_id in eager_set:
-                if fully_accepted:
-                    ready_eager.add(request_id)
-                    eager_promotions += 1
-                else:
-                    eager_invalidations += 1
-
-            if runtime.delivered_tokens >= runtime.request.output_tokens:
-                tpot = runtime.elapsed_decode_ms / runtime.request.output_tokens
-                completed.append(
-                    RequestResult(
-                        request_id=request_id,
-                        task=runtime.request.task,
-                        output_tokens=runtime.request.output_tokens,
-                        slo_tpot_ms=runtime.request.slo_tpot_ms,
-                        decode_latency_ms=runtime.elapsed_decode_ms,
-                        tpot_ms=tpot,
-                        attained=tpot <= runtime.request.slo_tpot_ms,
+            normal_runtimes = [
+                runtime
+                for runtime in sorted(active.values(), key=lambda item: item.request.request_id)
+                if runtime.normal_proposal is None and not runtime.finished
+            ]
+            plan = _plan(policy, normal_runtimes, [], verify_ms, config)
+            drafted: list[Proposal] = []
+            for runtime in normal_runtimes:
+                budget = plan.normal_budgets.get(runtime.request.request_id, 0)
+                drafted.append(_draft_normal(runtime, budget, cycle, config, ledger))
+            draft_ms = _proposal_draft_ms(drafted, config)
+            for runtime in active.values():
+                runtime.elapsed_decode_ms += draft_ms
+            now_ms += cycle_latency_ms("serial", draft_ms, verify_ms)
+        else:
+            verify_slot = cycle % 2
+            if execution_mode == "ar":
+                verify_runtimes = [
+                    runtime
+                    for runtime in sorted(
+                        active.values(), key=lambda item: item.request.request_id
                     )
-                )
-                finished_ids.append(request_id)
+                    if runtime.slot == verify_slot and not runtime.finished
+                ]
+                normal_runtimes: list[RuntimeRequest] = []
+                eager_parents: list[tuple[RuntimeRequest, Proposal]] = []
+            else:
+                verify_runtimes = [
+                    runtime
+                    for runtime in sorted(
+                        active.values(), key=lambda item: item.request.request_id
+                    )
+                    if runtime.slot == verify_slot
+                    and runtime.normal_proposal is not None
+                    and not runtime.finished
+                ]
+                normal_runtimes = [
+                    runtime
+                    for runtime in sorted(
+                        active.values(), key=lambda item: item.request.request_id
+                    )
+                    if runtime.slot != verify_slot
+                    and runtime.normal_proposal is None
+                    and not runtime.finished
+                ]
+                eager_parents = [
+                    (runtime, runtime.normal_proposal)
+                    for runtime in verify_runtimes
+                    if runtime.normal_proposal is not None
+                ]
 
-        for request_id in finished_ids:
-            active.pop(request_id)
-            ready_eager.discard(request_id)
+            verify_ms = _verify_ms(verify_runtimes, config)
+            ledger.verify_compute_ms += verify_ms
+            if execution_mode == "dual":
+                plan = _plan(policy, normal_runtimes, eager_parents, verify_ms, config)
+                drafted = []
+                for runtime in normal_runtimes:
+                    budget = plan.normal_budgets.get(runtime.request.request_id, 0)
+                    drafted.append(_draft_normal(runtime, budget, cycle, config, ledger))
+                parent_by_id = {
+                    runtime.request.request_id: parent for runtime, parent in eager_parents
+                }
+                for runtime, parent in eager_parents:
+                    budget = plan.eager_budgets.get(runtime.request.request_id)
+                    if budget is not None:
+                        proposal = _draft_eager(runtime, parent, budget, cycle, config, ledger)
+                        if proposal is not None:
+                            drafted.append(proposal)
+                draft_ms = _proposal_draft_ms(drafted, config)
+            else:
+                parent_by_id = {}
+                draft_ms = 0.0
+
+            cycle_ms = cycle_latency_ms(execution_mode, draft_ms, verify_ms)
+            for runtime in active.values():
+                runtime.elapsed_decode_ms += cycle_ms
+            if execution_mode == "ar":
+                for runtime in verify_runtimes:
+                    _verify_ar(runtime)
+            else:
+                for runtime in verify_runtimes:
+                    outcome = _verify_proposal(runtime, oracle, ledger)
+                    if runtime.request.request_id in parent_by_id:
+                        _resolve_eager(runtime, outcome, ledger)
+            now_ms += cycle_ms
+            finish_ready()
+
         cycle += 1
         admit_ready()
 
+    ledger.assert_conservation()
     measurement_ms = max(0.0, now_ms - (first_admission_ms or 0.0))
-    summary = _build_summary(
-        policy.name,
-        completed,
-        measurement_ms,
-        proposed_total,
-        accepted_total,
-        eager_promotions,
-        eager_invalidations,
+    completed.sort(key=lambda item: item.request_id)
+    final_states = tuple(_snapshot(all_runtimes[key]) for key in sorted(all_runtimes))
+    if any(
+        not state.finished
+        or state.normal_proposal is not None
+        or state.eager_proposal is not None
+        for state in final_states
+    ):
+        raise AssertionError("completed simulation retained unfinished or dangling proposal state")
+    summary = _build_summary(policy.name, execution_mode, completed, measurement_ms, ledger)
+    return SimulationResult(
+        summary=summary,
+        requests=tuple(completed),
+        final_states=final_states,
     )
-    return SimulationResult(summary=summary, requests=tuple(completed))

@@ -11,8 +11,8 @@ The repository currently provides:
 - piecewise-Gamma synthetic arrivals and strict, windowed Mooncake timestamp replay;
 - task-conditioned, correlated input/output token lengths;
 - JSON validation reports and checksum-based provenance manifests;
-- AR, fixed-budget, MineDraft-like uniform, shaping-only, and full SpecRhythm policies;
-- a deterministic dual-batch discrete-event simulator;
+- explicitly named AR, serial-SD, dual-batch, shaping-only, and SpecRhythm modes;
+- a deterministic proposal-lifecycle simulator with guarded eager promotion;
 - goodput, SLO-attainment, throughput, and TPOT metrics;
 - tests for budget, prefix, determinism, and accounting invariants.
 
@@ -92,5 +92,6 @@ tests/                   Unit and integration tests
 ~~~
 
 The simulator is useful for rejecting bad policies and checking invariants. It is not evidence
-of a speedup until its latency and acceptance inputs are calibrated on the intended model pair,
-GPU topology, and engine. See [docs/phase-a.md](docs/phase-a.md) for the evidence standard.
+of a speedup or a GPU performance predictor. The current latency surfaces and acceptance inputs
+remain illustrative; engine integration and performance claims require a later measured model.
+See [docs/phase-a.md](docs/phase-a.md) for the evidence standard.

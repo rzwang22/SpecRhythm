@@ -1,8 +1,8 @@
 # Phase A: strategy proof protocol
 
-Phase A asks whether the control policy is internally sound and produces a measurable benefit
-under calibrated conditions. It does **not** claim that a pure-Python simulator predicts vLLM or
-SGLang performance.
+Phase A asks whether the control policy is internally sound under constructed and, later,
+calibrated conditions. Simulator-semantics v0.2 establishes proposal causality and accounting. It
+does **not** claim that a pure-Python simulator predicts vLLM, SGLang, or GPU performance.
 
 ## Falsifiable hypotheses
 
@@ -22,22 +22,53 @@ integration should stop until the policy or workload assumptions are corrected.
 - The sum of verified candidates never exceeds the profiled roofline budget.
 - A request never receives more than its per-request cap.
 - Candidate depth d + 1 is allocated only after depth d, preserving prefix dependencies.
-- Eager continuations become ready only after the entire dependency prefix is accepted.
+- Every drafted proposal reaches exactly one terminal state: verified, invalidated, or discarded
+  because the request reached EOS.
+- Eager continuations are promoted only if the exact stored parent proposal is fully accepted, its
+  prefix epoch matches, and the request has not reached EOS.
 - Active but unserved requests accumulate decode time and therefore become more urgent.
-- AR and all speculative policies use the same arrivals, lengths, SLOs, and deterministic
-  per-request acceptance stream.
+- AR and all speculative policies use the same arrivals, lengths, and SLOs. Speculative policies
+  query a shared max-K acceptance trace indexed by `(request_id, committed_target_prefix_len)` and
+  truncate that trace to their chosen budget.
 
 ## Required comparisons
 
 | Label | Execution | Allocation | Eager |
 | --- | --- | --- | --- |
-| AR | dual-slot control | zero candidates | no |
-| Fixed SD | dual-slot control | fixed per request | no |
-| MineDraft-like | dual batch | round-robin to the same roof budget, SLO-unaware | no |
+| AR | target decode only | zero candidates | no |
+| Serial SD | `draft_ms + verify_ms` | fixed per request | no |
+| Dual-Batch | `max(draft_ms, verify_ms)` | round-robin, SLO-unaware | no |
 | + shaping | dual batch | two-pass SLO-aware | no |
 | SpecRhythm | dual batch | two-pass SLO-aware | guarded |
 
-The CLI exposes every row, including the shaping-only ablation.
+The CLI names these rows `ar`, `serial-sd`, `dual-batch`, `shaping`, and `specrhythm`.
+
+## Proposal state machine
+
+Each admitted request owns `normal_proposal`, `eager_proposal`, `committed_prefix_len`,
+`prefix_epoch`, and `finished` state. A proposal records its request, parent prefix, epoch, budget,
+drafted token count, normal/eager source, and draft cycle.
+
+In a dual cycle, the simulator first identifies the stored normal proposals to verify. During that
+same logical interval it drafts normal proposals for the other slot and may draft eager
+continuations whose parent is being verified. Verification then advances only the committed target
+prefix. A fully accepted parent may promote its matching eager proposal into the next verify slot;
+partial acceptance, an epoch/prefix mismatch, or EOS invalidates or discards it. Promotion does not
+count as verification and cannot duplicate draft compute.
+
+The summary separately reports normal/eager drafted candidates, verified candidates, accepted
+candidates, promoted eager candidates, invalidated candidates, EOS-discarded candidates, and
+logical draft/verify compute time. The conservation invariant is:
+
+~~~text
+normal_drafted + eager_drafted
+  = verified + invalidated + discarded_at_eos
+accepted <= verified
+promoted <= eager_drafted
+~~~
+
+Promoted tokens later enter exactly one terminal state, normally verification. These values are
+semantic accounting fields, not measured GPU counters.
 
 ## Proof gates
 
@@ -59,7 +90,8 @@ Run small scenarios where the expected decision is obvious:
 
 ### A3 — calibrated workload sweep
 
-Replace illustrative values in configs/simulator.json with measurements from the exact target
+Only after the v0.2 state machine passes review should a future phase replace illustrative values
+in configs/simulator.json with measurements from the exact target
 model, draft model, GPU count, tensor parallelism, context buckets, and serving engine. Sweep:
 
 - active batch size: 8, 16, 32, 64;
@@ -70,7 +102,7 @@ model, draft model, GPU count, tensor parallelism, context buckets, and serving 
 
 Report paired runs with at least five seeds or trace windows. Include mean, bootstrap 95% confidence
 interval, and per-SLO-class attainment. A useful Phase-A success criterion is a repeatable goodput
-gain over MineDraft-like allocation without reducing the tight-class attainment, accompanied by a
+gain over the SLO-unaware dual-batch allocation without reducing tight-class attainment, with a
 bounded eager invalidation ratio. The threshold should be chosen before observing final results.
 
 ## GPU calibration contract
