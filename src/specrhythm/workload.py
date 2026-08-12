@@ -237,16 +237,7 @@ def _assign_profiles(
     if mode != "stratified":
         raise ValueError("task_assignment must be 'random' or 'stratified'")
 
-    weight_sum = sum(profile.weight for profile in profiles)
-    exact_counts = [request_count * profile.weight / weight_sum for profile in profiles]
-    counts = [math.floor(value) for value in exact_counts]
-    remainder = request_count - sum(counts)
-    ranked = sorted(
-        range(len(profiles)),
-        key=lambda index: (-(exact_counts[index] - counts[index]), index),
-    )
-    for index in ranked[:remainder]:
-        counts[index] += 1
+    counts = apportion_counts([profile.weight for profile in profiles], request_count)
     assignments = [
         profile
         for profile, count in zip(profiles, counts)
@@ -254,6 +245,30 @@ def _assign_profiles(
     ]
     rng.shuffle(assignments)
     return assignments
+
+
+def apportion_counts(weights: Sequence[float], total: int) -> list[int]:
+    """Allocate an integer total with deterministic largest-remainder apportionment."""
+
+    if not isinstance(total, int) or isinstance(total, bool) or total < 0:
+        raise ValueError("total must be a non-negative integer")
+    if (
+        not weights
+        or any(not math.isfinite(weight) or weight < 0 for weight in weights)
+        or sum(weights) <= 0
+    ):
+        raise ValueError("weights must be finite and non-negative with a positive sum")
+    weight_sum = sum(weights)
+    exact_counts = [total * weight / weight_sum for weight in weights]
+    counts = [math.floor(value) for value in exact_counts]
+    remainder = total - sum(counts)
+    ranked = sorted(
+        range(len(weights)),
+        key=lambda index: (-(exact_counts[index] - counts[index]), index),
+    )
+    for index in ranked[:remainder]:
+        counts[index] += 1
+    return counts
 
 
 def generate_replay_workload(config: dict[str, Any], replay: ArrivalReplay) -> Workload:
@@ -465,7 +480,7 @@ def summarize_workload(workload: Workload) -> dict[str, Any]:
     arrivals = [request.arrival_time_ms for request in workload.requests]
     inputs = [request.input_tokens for request in workload.requests]
     outputs = [request.output_tokens for request in workload.requests]
-    duration_s = max(arrivals) / 1000.0
+    duration_s = (max(arrivals) - min(arrivals)) / 1000.0
 
     def percentile(values: list[float], fraction: float) -> float:
         ordered = sorted(values)
@@ -478,7 +493,11 @@ def summarize_workload(workload: Workload) -> dict[str, Any]:
     return {
         "requests": len(workload.requests),
         "duration_s": duration_s,
-        "mean_rate_per_s": len(workload.requests) / duration_s if duration_s else None,
+        "mean_rate_per_s": (
+            (len(workload.requests) - 1) / duration_s
+            if len(workload.requests) > 1 and duration_s
+            else None
+        ),
         "iat_cv": iat_cv,
         "input_tokens": {"p50": percentile(inputs, 0.5), "p90": percentile(inputs, 0.9)},
         "output_tokens": {"p50": percentile(outputs, 0.5), "p90": percentile(outputs, 0.9)},

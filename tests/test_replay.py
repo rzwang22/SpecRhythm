@@ -3,7 +3,7 @@ from collections import Counter
 from pathlib import Path
 
 from specrhythm.cli import main
-from specrhythm.provenance import sha256_file
+from specrhythm.provenance import pin_source_url, sha256_file
 from specrhythm.validation import validate_workload
 from specrhythm.workload import (
     generate_replay_workload,
@@ -14,6 +14,7 @@ from specrhythm.workload import (
 ROOT = Path(__file__).parents[1]
 FIXTURE = ROOT / "tests" / "fixtures" / "mooncake-arrivals.jsonl"
 CONFIG = ROOT / "configs" / "workloads" / "r3-mooncake-622-proxy.json"
+SOURCE_COMMIT = "0123456789abcdef0123456789abcdef01234567"
 
 
 def _generate(tmp_path: Path, name: str = "workload.jsonl") -> Path:
@@ -120,7 +121,7 @@ def test_manifest_checksums_are_correct(tmp_path):
             "--manifest",
             str(manifest_path),
             "--source-commit-sha",
-            "0123456789abcdef",
+            SOURCE_COMMIT,
         ]
     )
     assert result == 0
@@ -130,3 +131,52 @@ def test_manifest_checksums_are_correct(tmp_path):
     assert manifest["output_workload_sha256"] == sha256_file(output)
     assert manifest["request_count"] == 30
     assert not Path(manifest["source_trace_path"]).is_absolute()
+    assert manifest["source_url"] == (
+        f"https://github.com/kvcache-ai/Mooncake/blob/{SOURCE_COMMIT}/"
+        "FAST25-release/traces/conversation_trace.jsonl"
+    )
+
+
+def test_manifest_rejects_conflicting_source_commit():
+    source_url = (
+        "https://github.com/kvcache-ai/Mooncake/blob/aaaaaaaa/"
+        "FAST25-release/traces/conversation_trace.jsonl"
+    )
+    try:
+        pin_source_url(source_url, "b" * 40)
+    except ValueError as error:
+        assert "does not match" in str(error)
+    else:
+        raise AssertionError("conflicting source commit must be rejected")
+
+
+def test_generate_rejects_unpinned_source_before_writing_output(tmp_path):
+    output = tmp_path / "workload.jsonl"
+    manifest_path = tmp_path / "manifest.json"
+    try:
+        main(
+            [
+                "generate",
+                "--config",
+                str(CONFIG),
+                "--arrival-trace",
+                str(FIXTURE),
+                "--output",
+                str(output),
+                "--manifest",
+                str(manifest_path),
+                "--source-url",
+                (
+                    "https://github.com/kvcache-ai/Mooncake/blob/"
+                    f"{'a' * 40}/FAST25-release/traces/conversation_trace.jsonl"
+                ),
+                "--source-commit-sha",
+                "b" * 40,
+            ]
+        )
+    except SystemExit as error:
+        assert "does not match" in str(error)
+    else:
+        raise AssertionError("conflicting provenance must be rejected")
+    assert not output.exists()
+    assert not manifest_path.exists()

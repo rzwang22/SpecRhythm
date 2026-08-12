@@ -32,18 +32,44 @@ class WorkloadRequest:
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        if not self.request_id:
-            raise ValueError("request_id must not be empty")
-        if not math.isfinite(self.arrival_time_ms) or self.arrival_time_ms < 0:
+        if not isinstance(self.request_id, str) or not self.request_id.strip():
+            raise ValueError("request_id must be a non-empty string")
+        if (
+            not isinstance(self.arrival_time_ms, (int, float))
+            or isinstance(self.arrival_time_ms, bool)
+            or not math.isfinite(self.arrival_time_ms)
+            or self.arrival_time_ms < 0
+        ):
             raise ValueError("arrival_time_ms must be finite and non-negative")
-        if self.input_tokens < 1 or self.output_tokens < 1:
-            raise ValueError("input_tokens and output_tokens must be positive")
-        if not math.isfinite(self.slo_tpot_ms) or self.slo_tpot_ms <= 0:
+        if (
+            not isinstance(self.input_tokens, int)
+            or isinstance(self.input_tokens, bool)
+            or self.input_tokens < 1
+            or not isinstance(self.output_tokens, int)
+            or isinstance(self.output_tokens, bool)
+            or self.output_tokens < 1
+        ):
+            raise ValueError("input_tokens and output_tokens must be positive integers")
+        if (
+            not isinstance(self.slo_tpot_ms, (int, float))
+            or isinstance(self.slo_tpot_ms, bool)
+            or not math.isfinite(self.slo_tpot_ms)
+            or self.slo_tpot_ms <= 0
+        ):
             raise ValueError("slo_tpot_ms must be finite and positive")
-        if not 0 <= self.acceptance_probability <= 1:
-            raise ValueError("acceptance_probability must be in [0, 1]")
-        if self.turn_index is not None and self.turn_index < 0:
-            raise ValueError("turn_index must be non-negative")
+        if (
+            not isinstance(self.acceptance_probability, (int, float))
+            or isinstance(self.acceptance_probability, bool)
+            or not math.isfinite(self.acceptance_probability)
+            or not 0 <= self.acceptance_probability <= 1
+        ):
+            raise ValueError("acceptance_probability must be finite and in [0, 1]")
+        if self.turn_index is not None and (
+            not isinstance(self.turn_index, int)
+            or isinstance(self.turn_index, bool)
+            or self.turn_index < 0
+        ):
+            raise ValueError("turn_index must be a non-negative integer")
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

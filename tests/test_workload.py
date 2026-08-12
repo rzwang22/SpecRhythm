@@ -40,6 +40,13 @@ def test_trace_composition_uses_supplied_timestamps():
     assert [request.arrival_time_ms for request in workload.requests] == [20, 50, 100]
 
 
+def test_summary_rate_uses_observed_inter_arrivals():
+    workload = generate_workload(_config(), [100, 600, 1100])
+    summary = summarize_workload(workload)
+    assert summary["duration_s"] == 1.0
+    assert summary["mean_rate_per_s"] == 2.0
+
+
 def test_mooncake_import_preserves_lengths_and_hashes(tmp_path):
     source = tmp_path / "mooncake.jsonl"
     records = [

@@ -9,7 +9,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Optional, Union
 
-from specrhythm.workload import select_arrival_replay
+from specrhythm.workload import apportion_counts, select_arrival_replay
 
 
 def _is_number(value: Any) -> bool:
@@ -41,11 +41,13 @@ def validate_workload(
             error["line"] = line
         errors.append(error)
 
+    workload_readable = False
     try:
         handle = source.open(encoding="utf-8")
     except OSError as error:
         add_error("workload_unreadable", str(error))
     else:
+        workload_readable = True
         with handle:
             for line_number, line in enumerate(handle, start=1):
                 if not line.strip():
@@ -65,6 +67,36 @@ def validate_workload(
     tasks: Counter[str] = Counter()
     slos: Counter[str] = Counter()
     r3_family = str((config or {}).get("workload_family", "")).startswith("r3-")
+    expected_profiles: dict[str, tuple[float, float]] = {}
+    if r3_family:
+        try:
+            for profile in (config or {})["task_profiles"]:
+                name = str(profile["name"])
+                if not name.strip():
+                    raise ValueError("task profile names must not be empty")
+                if name in expected_profiles:
+                    raise ValueError(f"duplicate task profile: {name}")
+                expected_profiles[name] = (
+                    float(profile["weight"]),
+                    float(profile["slo_tpot_ms"]),
+                )
+            if not expected_profiles:
+                raise ValueError("task_profiles must not be empty")
+            if any(
+                not math.isfinite(weight) or weight < 0
+                for weight, _ in expected_profiles.values()
+            ) or sum(weight for weight, _ in expected_profiles.values()) <= 0:
+                raise ValueError("task weights must be finite with a positive sum")
+            if any(
+                not math.isfinite(slo) or slo <= 0
+                for _, slo in expected_profiles.values()
+            ):
+                raise ValueError("task SLO values must be finite and positive")
+        except (KeyError, TypeError, ValueError) as error:
+            add_error("invalid_r3_config", f"cannot derive R3 mixture: {error}")
+
+    if workload_readable and not rows:
+        add_error("empty_workload", "workload must contain at least one JSON object")
 
     for line_number, row in rows:
         request_id = row.get("request_id")
@@ -114,8 +146,25 @@ def validate_workload(
                 line_number,
             )
 
-        task = row.get("task")
-        tasks[str(task) if task is not None else "unknown"] += 1
+        task_value = row.get("task")
+        task = str(task_value) if task_value is not None else "unknown"
+        tasks[task] += 1
+
+        if r3_family and expected_profiles:
+            if task not in expected_profiles:
+                add_error(
+                    "unexpected_r3_task",
+                    f"task {task!r} is not present in the R3 configuration",
+                    line_number,
+                )
+            elif _is_number(slo) and math.isfinite(float(slo)):
+                expected_slo = expected_profiles[task][1]
+                if not math.isclose(float(slo), expected_slo, rel_tol=0.0, abs_tol=1e-9):
+                    add_error(
+                        "r3_task_slo_mismatch",
+                        f"task {task!r} requires slo_tpot_ms={expected_slo}",
+                        line_number,
+                    )
 
         if r3_family and (
             row.get("conversation_id") is not None or row.get("turn_index") is not None
@@ -125,6 +174,37 @@ def validate_workload(
                 "R3 replay must not contain generated conversation turns",
                 line_number,
             )
+
+    if r3_family and expected_profiles and rows:
+        names = list(expected_profiles)
+        weights = [expected_profiles[name][0] for name in names]
+        try:
+            counts = apportion_counts(weights, len(rows))
+        except ValueError as error:
+            add_error("invalid_r3_config", f"cannot apportion R3 mixture: {error}")
+        else:
+            expected_task_counts = dict(zip(names, counts))
+            actual_task_counts = {name: tasks.get(name, 0) for name in names}
+            unexpected_tasks = set(tasks) - set(names)
+            if actual_task_counts != expected_task_counts or unexpected_tasks:
+                add_error(
+                    "r3_task_mixture_mismatch",
+                    (
+                        f"task counts are {dict(sorted(tasks.items()))}, expected "
+                        f"{dict(sorted(expected_task_counts.items()))}"
+                    ),
+                )
+            expected_slo_counts: Counter[str] = Counter()
+            for name, count in expected_task_counts.items():
+                expected_slo_counts[_slo_label(expected_profiles[name][1])] += count
+            if slos != expected_slo_counts:
+                add_error(
+                    "r3_slo_mixture_mismatch",
+                    (
+                        f"SLO counts are {dict(sorted(slos.items()))}, expected "
+                        f"{dict(sorted(expected_slo_counts.items()))}"
+                    ),
+                )
 
     for (left_line, left), (right_line, right) in zip(arrivals, arrivals[1:]):
         if right < left:
@@ -175,6 +255,22 @@ def validate_workload(
     if len(inter_arrivals) > 1 and statistics.mean(inter_arrivals) > 0:
         iat_cv = statistics.pstdev(inter_arrivals) / statistics.mean(inter_arrivals)
     request_count = len(rows)
+    observed_arrival_count = len(arrival_values)
+    observed_iat_rate = (
+        (observed_arrival_count - 1) / duration_s
+        if observed_arrival_count > 1 and duration_s is not None and duration_s > 0
+        else None
+    )
+    window_offered_rate = None
+    if (
+        window_duration_ms is not None
+        and math.isfinite(window_duration_ms)
+        and window_duration_ms > 0
+        and math.isfinite(time_scale)
+        and time_scale > 0
+    ):
+        scaled_window_s = window_duration_ms / time_scale / 1000.0
+        window_offered_rate = request_count / scaled_window_s
     summary = {
         "request_count": request_count,
         "time_range_ms": (
@@ -183,9 +279,8 @@ def validate_workload(
             else None
         ),
         "duration_s": duration_s,
-        "mean_arrival_rate_per_s": (
-            request_count / duration_s if duration_s is not None and duration_s > 0 else None
-        ),
+        "observed_iat_rate_per_s": observed_iat_rate,
+        "window_offered_rate_per_s": window_offered_rate,
         "iat_cv": iat_cv,
         "task_counts": dict(sorted(tasks.items())),
         "task_proportions": {

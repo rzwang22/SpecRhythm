@@ -132,6 +132,12 @@ mixtures, request count, rate, time range, and IAT CV. A validation failure retu
 code. The manifest binds source trace, configuration, and output with SHA256 digests and records the
 trace commit, replay window, scale, command, software versions, and generation time.
 
+The validation report distinguishes two rate definitions. `observed_iat_rate_per_s` is
+`(request_count - 1) / (last_arrival - first_arrival)`. When a window duration is supplied,
+`window_offered_rate_per_s` divides request count by the time-scaled selected-window duration. A
+manifest accepts only a full 40- or 64-character commit SHA and rewrites GitHub `main`/branch URLs
+to the immutable commit URL; a URL already pinned to a conflicting SHA is rejected.
+
 ## 6. Scenario matrix
 
 Cross each dataset family with:
@@ -172,7 +178,7 @@ A similar mean request rate is not sufficient.
 Run code from the GitHub checkout and keep all generated data in the external data tree:
 
 ~~~bash
-cd /home/rzwang/SpecRhythm
+cd /home/rzwang/data/SpecRhythm
 git fetch origin
 git switch codex/workload-v0.1
 git pull --ff-only origin codex/workload-v0.1

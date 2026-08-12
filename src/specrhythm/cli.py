@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Optional, Sequence
 
 from specrhythm.policies import ARPolicy, FixedBudgetPolicy, MineDraftPolicy, SpecRhythmPolicy
-from specrhythm.provenance import build_manifest
+from specrhythm.provenance import build_manifest, pin_source_url
 from specrhythm.schema import Workload
 from specrhythm.simulator import SimulatorConfig, simulate
 from specrhythm.validation import validate_workload
@@ -129,6 +129,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 raise SystemExit(
                     "--manifest requires source URL and commit SHA via CLI or config"
                 )
+            try:
+                source_url = pin_source_url(str(source_url), str(source_commit_sha))
+            except ValueError as error:
+                raise SystemExit(f"invalid provenance: {error}") from error
         if args.arrival_trace:
             replay = select_arrival_replay(
                 args.arrival_trace,
@@ -146,19 +150,22 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         workload.save_jsonl(args.output)
         if args.manifest:
             command_argv = list(argv) if argv is not None else sys.argv[1:]
-            manifest = build_manifest(
-                config=config,
-                config_path=args.config,
-                source_trace_path=args.arrival_trace,
-                output_workload_path=args.output,
-                source_url=str(source_url),
-                source_commit_sha=str(source_commit_sha),
-                time_scale=args.time_scale,
-                window_start_ms=args.window_start_ms,
-                window_duration_ms=args.window_duration_ms,
-                generation_command=shlex.join(["specrhythm", *command_argv]),
-                request_count=len(workload.requests),
-            )
+            try:
+                manifest = build_manifest(
+                    config=config,
+                    config_path=args.config,
+                    source_trace_path=args.arrival_trace,
+                    output_workload_path=args.output,
+                    source_url=str(source_url),
+                    source_commit_sha=str(source_commit_sha),
+                    time_scale=args.time_scale,
+                    window_start_ms=args.window_start_ms,
+                    window_duration_ms=args.window_duration_ms,
+                    generation_command=shlex.join(["specrhythm", *command_argv]),
+                    request_count=len(workload.requests),
+                )
+            except ValueError as error:
+                raise SystemExit(f"invalid provenance: {error}") from error
             _write_json(manifest, args.manifest)
         _write_json(summarize_workload(workload), None)
         return 0
