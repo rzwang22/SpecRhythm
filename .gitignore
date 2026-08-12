@@ -15,6 +15,7 @@ tmp/
 # Downloaded or generated datasets and experiment outputs.
 data/raw/
 data/processed/
+data/manifests/
 results/*
 !data/README.md
 !results/README.md

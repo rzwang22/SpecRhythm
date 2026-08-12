@@ -1,0 +1,65 @@
+{
+  "schema_version": "specrhythm.workload-config.v1",
+  "workload_family": "r3-mooncake-622-proxy",
+  "data_status": "proxy",
+  "seed": 1664,
+  "source": {
+    "url": "https://github.com/kvcache-ai/Mooncake/blob/main/FAST25-release/traces/conversation_trace.jsonl"
+  },
+  "payload": {
+    "status": "proxy-sampled-lengths",
+    "measured": false,
+    "description": "Illustrative log-normal token lengths; not HumanEval, Alpaca, or CNN/DailyMail records."
+  },
+  "acceptance": {
+    "status": "illustrative-not-gpu-measured",
+    "measured": false,
+    "description": "Placeholder probabilities for workload and policy-logic tests only."
+  },
+  "task_assignment": "stratified",
+  "slo_mode": "task",
+  "max_input_tokens": 32768,
+  "max_output_tokens": 4096,
+  "client_count": 1,
+  "client_zipf_skew": 0.0,
+  "conversation": {
+    "start_probability": 0.0,
+    "continuation_probability": 0.0,
+    "max_turns": 1
+  },
+  "task_profiles": [
+    {
+      "name": "code",
+      "weight": 0.6,
+      "slo_tpot_ms": 40.0,
+      "input_median": 768.0,
+      "input_sigma": 0.75,
+      "output_median": 256.0,
+      "output_sigma": 0.65,
+      "length_correlation": 0.35,
+      "acceptance_probability": 0.68
+    },
+    {
+      "name": "chat",
+      "weight": 0.2,
+      "slo_tpot_ms": 50.0,
+      "input_median": 512.0,
+      "input_sigma": 0.9,
+      "output_median": 192.0,
+      "output_sigma": 0.7,
+      "length_correlation": 0.3,
+      "acceptance_probability": 0.74
+    },
+    {
+      "name": "summarization",
+      "weight": 0.2,
+      "slo_tpot_ms": 150.0,
+      "input_median": 2048.0,
+      "input_sigma": 0.65,
+      "output_median": 160.0,
+      "output_sigma": 0.55,
+      "length_correlation": 0.4,
+      "acceptance_probability": 0.8
+    }
+  ]
+}

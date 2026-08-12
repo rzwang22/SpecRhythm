@@ -8,8 +8,9 @@ profiles will replace the illustrative latency and acceptance parameters in Phas
 The repository currently provides:
 
 - a canonical JSONL workload schema;
-- piecewise-Gamma synthetic arrivals and Mooncake timestamp composition;
+- piecewise-Gamma synthetic arrivals and strict, windowed Mooncake timestamp replay;
 - task-conditioned, correlated input/output token lengths;
+- JSON validation reports and checksum-based provenance manifests;
 - AR, fixed-budget, MineDraft-like uniform, shaping-only, and full SpecRhythm policies;
 - a deterministic dual-batch discrete-event simulator;
 - goodput, SLO-attainment, throughput, and TPOT metrics;
@@ -37,16 +38,34 @@ pytest
 ruff check .
 ~~~
 
-To use a Mooncake trace only for its arrival process while sampling task payloads from the
-configured mixture:
+To build the R3 proxy from a chronological Mooncake window while sampling illustrative payload
+lengths from the 6:2:2 code/chat/summarization mixture:
 
 ~~~bash
 specrhythm generate \
-  --config configs/synthetic.json \
+  --config configs/workloads/r3-mooncake-622-proxy.json \
   --arrival-trace data/raw/conversation_trace.jsonl \
+  --window-start-ms 0 \
+  --window-duration-ms 600000 \
   --time-scale 2.0 \
-  --output data/processed/mooncake-composed.jsonl
+  --source-commit-sha MOONCAKE_COMMIT_SHA \
+  --output data/processed/r3-proxy.jsonl \
+  --manifest data/manifests/r3-proxy.manifest.json
+
+specrhythm validate \
+  --workload data/processed/r3-proxy.jsonl \
+  --config configs/workloads/r3-mooncake-622-proxy.json \
+  --arrival-trace data/raw/conversation_trace.jsonl \
+  --window-start-ms 0 \
+  --window-duration-ms 600000 \
+  --time-scale 2.0 \
+  --output data/manifests/r3-proxy.validation.json
 ~~~
+
+The replay selects the end-exclusive window `[start, start + duration)`, sorts its source
+timestamps chronologically, rebases the first selected timestamp to zero, and emits exactly one
+request per selected timestamp. Do not use `configs/synthetic.json` for R3 replay because that
+configuration deliberately models additional conversation turns.
 
 To preserve Mooncake's observed timestamp and token-length fields instead:
 
@@ -56,8 +75,10 @@ specrhythm import-mooncake \
   --output data/processed/mooncake-normalized.jsonl
 ~~~
 
-time-scale=2.0 compresses inter-arrival gaps by two and therefore approximately doubles the
-arrival rate. Raw traces, generated workloads, and results are ignored by Git by default.
+`time-scale=2.0` compresses inter-arrival gaps by two and therefore approximately doubles the
+arrival rate. The R3 proxy is a plumbing, SLO-shaping, and policy-logic test only: it does not
+contain HumanEval, Alpaca, or CNN/DailyMail payloads, and its acceptance probabilities are not GPU
+measurements. Raw traces, generated workloads, manifests, and results should remain outside Git.
 
 ## Repository map
 
