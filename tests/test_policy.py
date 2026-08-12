@@ -149,7 +149,7 @@ def test_adaserve_style_is_serial_slo_aware_and_never_eager():
     )
     plan = policy.plan(snapshot)
     assert policy.execution_mode == "serial"
-    assert policy.allocator == "slo-aware-two-pass-proxy"
+    assert policy.allocator == "adaserve-tree-aware"
     assert plan.normal_budgets["tight"] > plan.normal_budgets["loose"]
     assert plan.eager_budgets == {}
 
@@ -164,6 +164,23 @@ def test_dual_eager_keeps_slo_unaware_normal_allocation():
         )
     )
     assert plan.normal_budgets == {"tight": 1, "loose": 1}
+
+
+def test_eager_displacement_counts_only_lost_counterfactual_normal_work():
+    eager = _view(
+        "eager",
+        10,
+        confidence=1.0,
+        proposal_budget=1,
+        full_probability=1.0,
+        max_budget=2,
+    )
+    normal = _view("normal", 100, max_budget=1)
+    plan = DualEagerPolicy(budget=4, max_eager_budget=2).plan(
+        _snapshot(normal=(normal,), eager=(eager,), roof=4, residual=4)
+    )
+    assert plan.eager_budgets["eager"] > 0
+    assert plan.normal_budget_displaced_by_eager["eager"] == 0
 
 
 def test_serial_and_dual_policies_return_identical_candidate_plans():

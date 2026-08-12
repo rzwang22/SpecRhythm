@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Optional, Protocol
+
+from specrhythm.tree import CandidateTree, SelectedProposalTree
 
 
 @dataclass(frozen=True)
@@ -19,6 +21,9 @@ class RequestView:
     max_budget: int
     proposal_budget: int = 0
     parent_full_acceptance_probability: float = 0.0
+    candidate_tree: Optional[CandidateTree] = None
+    parent_selected_tree: Optional[SelectedProposalTree] = None
+    estimated_next_iteration_latency_ms: float = 0.0
 
     @property
     def estimated_tpot_ms(self) -> float:
@@ -30,9 +35,21 @@ class RequestView:
 
     @property
     def progress_gap(self) -> int:
-        gap = (self.elapsed_decode_ms + self.waiting_time_ms) / self.slo_tpot_ms
+        return max(0, math.ceil(self.continuous_progress_gap))
+
+    @property
+    def continuous_progress_gap(self) -> float:
+        gap = (
+            self.elapsed_decode_ms + self.estimated_next_iteration_latency_ms
+        ) / self.slo_tpot_ms
         gap -= self.committed_prefix_len
-        return max(0, math.ceil(gap))
+        return max(0.0, gap)
+
+    @property
+    def candidate_progress_gap(self) -> float:
+        """Expected candidate progress needed after the guaranteed root token."""
+
+        return max(0.0, self.continuous_progress_gap - 1.0)
 
     @property
     def acceptance_benefit(self) -> float:
@@ -59,6 +76,14 @@ class PolicySnapshot:
 class StepPlan:
     normal_budgets: dict[str, int] = field(default_factory=dict)
     eager_budgets: dict[str, int] = field(default_factory=dict)
+    normal_trees: dict[str, SelectedProposalTree] = field(default_factory=dict)
+    candidate_trees: dict[str, CandidateTree] = field(default_factory=dict)
+    eager_dependency_paths: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    expected_progress: dict[str, float] = field(default_factory=dict)
+    requested_progress_gap: dict[str, float] = field(default_factory=dict)
+    slo_stage_budgets: dict[str, int] = field(default_factory=dict)
+    residual_stage_budgets: dict[str, int] = field(default_factory=dict)
+    normal_budget_displaced_by_eager: dict[str, int] = field(default_factory=dict)
 
     @property
     def budgets(self) -> dict[str, int]:
@@ -68,6 +93,8 @@ class StepPlan:
 
     @property
     def total_candidates(self) -> int:
+        if self.normal_trees:
+            return sum(tree.candidate_budget for tree in self.normal_trees.values())
         return sum(self.normal_budgets.values())
 
     @property

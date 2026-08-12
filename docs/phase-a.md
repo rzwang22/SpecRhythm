@@ -37,15 +37,17 @@ integration should stop until the policy or workload assumptions are corrected.
 | --- | --- | --- | --- |
 | AR | target decode only | zero candidates | no |
 | Serial SD | `draft_ms + verify_ms` | SLO-unaware round-robin | no |
-| AdaServe-style | `draft_ms + verify_ms` | two-pass SLO-aware proxy | no |
+| AdaServe flat proxy | `draft_ms + verify_ms` | legacy flat-sequence shaping proxy | no |
+| AdaServe tree-aware | `draft_ms + verify_ms` | two-stage path-probability tree selection | no |
 | Dual-Batch | `max(draft_ms, verify_ms)` | round-robin, SLO-unaware | no |
 | Dual-Batch + Rolling Eager | dual batch | round-robin, SLO-unaware | guarded |
-| + shaping | dual batch | two-pass SLO-aware | no |
-| SpecRhythm | dual batch | two-pass SLO-aware | guarded |
+| + shaping | dual batch | two-stage tree-aware | no |
+| SpecRhythm | dual batch | two-stage tree-aware | path-dependent guarded |
 
-The CLI names these rows `ar`, `serial-sd`, `adaserve`, `dual-batch`, `dual-eager`, `shaping`,
-and `specrhythm`. AdaServe-style here is a controlled serial/SLO-aware baseline, not a complete
-AdaServe system reproduction.
+The CLI also exposes `adaserve-flat-proxy`, `shaping-flat-proxy`, and
+`specrhythm-flat-proxy` only to explain superseded results. Tree-aware AdaServe is a controlled
+paper-algorithm model with proxy trees and latencies, not a complete AdaServe system reproduction.
+See [tree-aware-design.md](tree-aware-design.md).
 
 The cumulative comparisons are `serial-sd → adaserve` for shaping under serial execution,
 `serial-sd → dual-batch` for overlap, `dual-batch → dual-eager` for rolling eager,

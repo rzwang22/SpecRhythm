@@ -6,16 +6,20 @@ from specrhythm.policies.baselines import (
     SerialSDPolicy,
 )
 from specrhythm.policies.specrhythm import (
+    AdaServeFlatProxyPolicy,
     AdaServeStylePolicy,
     DualEagerPolicy,
+    LegacyFlatShapingProxyPolicy,
     SpecRhythmPolicy,
 )
 
 __all__ = [
     "ARPolicy",
+    "AdaServeFlatProxyPolicy",
     "AdaServeStylePolicy",
     "DualBatchPolicy",
     "DualEagerPolicy",
+    "LegacyFlatShapingProxyPolicy",
     "SerialSDPolicy",
     "SpecRhythmPolicy",
 ]

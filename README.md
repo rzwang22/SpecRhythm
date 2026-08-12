@@ -102,25 +102,42 @@ See [docs/phase-a.md](docs/phase-a.md) for the evidence standard.
 | --- | --- | --- | --- |
 | `ar` | target-only full active batch | none | no |
 | `serial-sd` | serial `D + V` | SLO-unaware round-robin | no |
-| `adaserve` | serial `D + V` | SLO-aware two-pass proxy | no |
+| `adaserve-flat-proxy` | serial `D + V` | legacy flat-sequence shaping proxy | no |
+| `adaserve` | serial `D + V` | AdaServe tree-aware control-plane allocator | no |
 | `dual-batch` | dual `max(D,V)` | SLO-unaware round-robin | no |
 | `dual-eager` | dual `max(D,V)` | SLO-unaware round-robin | guarded rolling |
-| `shaping` | dual `max(D,V)` | SLO-aware two-pass proxy | no |
-| `specrhythm` | dual `max(D,V)` | SLO-aware two-pass proxy | guarded rolling |
+| `shaping-flat-proxy` | dual `max(D,V)` | legacy flat-sequence shaping proxy | no |
+| `shaping` | dual `max(D,V)` | SpecRhythm tree-aware shaping | no |
+| `specrhythm-flat-proxy` | dual `max(D,V)` | legacy flat-sequence shaping proxy | guarded rolling |
+| `specrhythm` | dual `max(D,V)` | SpecRhythm tree-aware shaping | path-dependent rolling |
 
 `serial-sd` and `dual-batch` intentionally share request ordering, per-request budgets,
 candidate roof, maximum budget, acceptance trace, and active-set limit. Their only execution
 difference for a fixed logical batch is `D + V` versus `max(D,V)`. On an arrival trace, that
 wall-clock difference can legitimately change when later requests enter the active set; both
-modes still apply the same selection and allocation rules. `adaserve` is an **AdaServe-style
-simulator baseline**: it reuses this repository's SLO-aware allocator under serial execution and
-is not a complete reproduction of AdaServe.
+modes still apply the same selection and allocation rules. `adaserve-flat-proxy` preserves the
+old linear allocator for diagnostics only. `adaserve` uses an independent tree-aware allocator,
+but candidate trees, latency, confidence, and roof remain proxies; it is not a complete AdaServe
+reproduction. The exact frozen formulas are in
+[docs/tree-aware-design.md](docs/tree-aware-design.md).
 
 `input_tokens` is preserved in workloads but is not yet an input to the latency surface.
 Context-dependent latency is not implemented. Until GPU calibration, `D(B,K,C)`, `V(B,K,C)`,
 acceptance, confidence, and the candidate roof are simulator/proxy parameters only.
 The current eager full-parent admission threshold (`0.10`) is also an explicit proxy parameter,
 not a measured system constant.
+
+Full per-cycle diagnostics are intentionally streamed outside Git:
+
+```bash
+specrhythm simulate --workload /path/to/r3.jsonl --config configs/simulator.json \
+  --policy specrhythm --output /external/results/summary.json \
+  --cycle-output /external/results/cycles.jsonl \
+  --eager-output /external/results/eager-proposals.jsonl
+```
+
+The summary retains at most 10,000 cycle/eager detail rows and reports truncation counts; all
+class histograms, means, accounting totals, goodput, and throughput remain exact online aggregates.
 
 Project goals, roadmap, semantic boundaries, and per-PR progress are maintained in
 [docs/project-status.md](docs/project-status.md).

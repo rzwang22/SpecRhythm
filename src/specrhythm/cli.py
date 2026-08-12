@@ -6,14 +6,17 @@ import argparse
 import json
 import shlex
 import sys
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Optional, Sequence
 
 from specrhythm.policies import (
+    AdaServeFlatProxyPolicy,
     AdaServeStylePolicy,
     ARPolicy,
     DualBatchPolicy,
     DualEagerPolicy,
+    LegacyFlatShapingProxyPolicy,
     SerialSDPolicy,
     SpecRhythmPolicy,
 )
@@ -33,10 +36,13 @@ from specrhythm.workload import (
 POLICY_ORDER = (
     "ar",
     "serial-sd",
+    "adaserve-flat-proxy",
     "adaserve",
     "dual-batch",
     "dual-eager",
+    "shaping-flat-proxy",
     "shaping",
+    "specrhythm-flat-proxy",
     "specrhythm",
 )
 
@@ -57,15 +63,34 @@ def _policy(name: str, config: SimulatorConfig) -> Any:
     if name == "serial-sd":
         return SerialSDPolicy(config.speculative_budget)
     if name == "adaserve":
-        return AdaServeStylePolicy()
+        return AdaServeStylePolicy(config.n_max_slo)
+    if name == "adaserve-flat-proxy":
+        return AdaServeFlatProxyPolicy()
+    if name == "shaping-flat-proxy":
+        return LegacyFlatShapingProxyPolicy(enable_eager=False)
+    if name == "specrhythm-flat-proxy":
+        return LegacyFlatShapingProxyPolicy(enable_eager=True)
     if name == "dual-batch":
         return DualBatchPolicy(config.speculative_budget)
     if name == "dual-eager":
-        return DualEagerPolicy(config.speculative_budget)
+        return DualEagerPolicy(
+            config.speculative_budget,
+            max_eager_budget=config.max_eager_budget,
+            min_dependency_path_probability=config.min_dependency_path_probability,
+        )
     if name == "shaping":
-        return SpecRhythmPolicy(enable_eager=False)
+        return SpecRhythmPolicy(
+            enable_eager=False,
+            n_max_slo=config.n_max_slo,
+            residual_score=config.specrhythm_residual_score,
+        )
     if name == "specrhythm":
-        return SpecRhythmPolicy()
+        return SpecRhythmPolicy(
+            n_max_slo=config.n_max_slo,
+            residual_score=config.specrhythm_residual_score,
+            max_eager_budget=config.max_eager_budget,
+            min_dependency_path_probability=config.min_dependency_path_probability,
+        )
     raise ValueError(f"unknown policy: {name}")
 
 
@@ -113,16 +138,44 @@ def build_parser() -> argparse.ArgumentParser:
         choices=POLICY_ORDER,
         required=True,
         help=(
-            "execution mode; adaserve is an AdaServe-style simulator baseline, "
-            "not a full AdaServe reproduction"
+            "execution mode; adaserve is a tree-aware control-plane baseline under "
+            "proxy inputs; adaserve-flat-proxy retains the legacy flat-sequence proxy"
         ),
     )
     simulation.add_argument("--output")
+    simulation.add_argument(
+        "--cycle-output",
+        help="optional full per-cycle JSONL diagnostics (keep outside Git)",
+    )
+    simulation.add_argument(
+        "--eager-output",
+        help="optional full per-eager-proposal JSONL diagnostics (keep outside Git)",
+    )
 
     compare = subparsers.add_parser("compare", help="compare all Phase-A policies")
     compare.add_argument("--workload", required=True)
     compare.add_argument("--config", required=True)
     compare.add_argument("--output")
+
+    knee = subparsers.add_parser(
+        "capacity-knee", help="run a proxy capacity-knee policy sweep"
+    )
+    knee.add_argument(
+        "--workload",
+        action="append",
+        nargs=2,
+        metavar=("TIME_SCALE", "PATH"),
+        required=True,
+    )
+    knee.add_argument("--config", required=True)
+    knee.add_argument("--output", required=True)
+
+    eager_grid = subparsers.add_parser(
+        "eager-grid", help="run the complete guarded-eager sensitivity grid"
+    )
+    eager_grid.add_argument("--workload", required=True)
+    eager_grid.add_argument("--config", required=True)
+    eager_grid.add_argument("--output", required=True)
     return parser
 
 
@@ -232,10 +285,55 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         _write_json(report, args.output)
         return 0 if report["valid"] else 1
 
-    workload = Workload.load_jsonl(args.workload)
     config = SimulatorConfig.from_dict(load_json(args.config))
+    if args.command == "capacity-knee":
+        from specrhythm.diagnostics import capacity_knee_report, write_report
+
+        report = capacity_knee_report(
+            ((float(scale), path) for scale, path in args.workload), config
+        )
+        write_report(report, args.output)
+        return 0
+    workload = Workload.load_jsonl(args.workload)
+    if args.command == "eager-grid":
+        from specrhythm.diagnostics import eager_grid_report, write_report
+
+        write_report(eager_grid_report(workload, config), args.output)
+        return 0
     if args.command == "simulate":
-        result = simulate(workload, _policy(args.policy, config), config)
+        cycle_handle = None
+        cycle_sink = None
+        eager_handle = None
+        eager_sink = None
+        if args.cycle_output:
+            cycle_path = Path(args.cycle_output)
+            cycle_path.parent.mkdir(parents=True, exist_ok=True)
+            cycle_handle = cycle_path.open("w", encoding="utf-8")
+
+            def cycle_sink(value):
+                cycle_handle.write(json.dumps(asdict(value), sort_keys=True) + "\n")
+
+        if args.eager_output:
+            eager_path = Path(args.eager_output)
+            eager_path.parent.mkdir(parents=True, exist_ok=True)
+            eager_handle = eager_path.open("w", encoding="utf-8")
+
+            def eager_sink(value):
+                eager_handle.write(json.dumps(asdict(value), sort_keys=True) + "\n")
+
+        try:
+            result = simulate(
+                workload,
+                _policy(args.policy, config),
+                config,
+                cycle_sink=cycle_sink,
+                eager_sink=eager_sink,
+            )
+        finally:
+            if cycle_handle is not None:
+                cycle_handle.close()
+            if eager_handle is not None:
+                eager_handle.close()
         _write_json(result.summary.to_dict(), args.output)
         return 0
     if args.command == "compare":
@@ -245,7 +343,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         ]
         _write_json(
             {
-                "schema_version": "specrhythm.comparison.v2",
+                "schema_version": "specrhythm.comparison.v3",
                 "policy_order": list(names),
                 "summaries": summaries,
             },

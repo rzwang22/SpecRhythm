@@ -19,6 +19,7 @@ from specrhythm.simulator import (
     eager_is_promotable,
     simulate,
 )
+from specrhythm.tree import CandidateTree, CandidateTreeNode, CandidateTreeOracle
 
 
 def _workload(output_tokens=12, acceptance=0.8, count=8):
@@ -66,10 +67,13 @@ def test_cumulative_ablation_order_and_metadata_are_explicit():
     expected = (
         "ar",
         "serial-sd",
+        "adaserve-flat-proxy",
         "adaserve",
         "dual-batch",
         "dual-eager",
+        "shaping-flat-proxy",
         "shaping",
+        "specrhythm-flat-proxy",
         "specrhythm",
     )
     assert POLICY_ORDER == expected
@@ -84,14 +88,29 @@ def test_cumulative_ablation_order_and_metadata_are_explicit():
     assert metadata == {
         "ar": ("ar", "none", "none"),
         "serial-sd": ("serial", "slo-unaware-round-robin", "none"),
-        "adaserve": ("serial", "slo-aware-two-pass-proxy", "none"),
+        "adaserve-flat-proxy": (
+            "serial",
+            "legacy-flat-sequence-shaping-proxy",
+            "none",
+        ),
+        "adaserve": ("serial", "adaserve-tree-aware", "none"),
         "dual-batch": ("dual", "slo-unaware-round-robin", "none"),
         "dual-eager": ("dual", "slo-unaware-round-robin", "guarded-rolling"),
-        "shaping": ("dual", "slo-aware-two-pass-proxy", "none"),
-        "specrhythm": ("dual", "slo-aware-two-pass-proxy", "guarded-rolling"),
+        "shaping-flat-proxy": (
+            "dual",
+            "legacy-flat-sequence-shaping-proxy",
+            "none",
+        ),
+        "shaping": ("dual", "specrhythm-tree-aware", "none"),
+        "specrhythm-flat-proxy": (
+            "dual",
+            "legacy-flat-sequence-shaping-proxy",
+            "guarded-rolling",
+        ),
+        "specrhythm": ("dual", "specrhythm-tree-aware", "guarded-rolling"),
     }
     assert _policy("adaserve", _config()).display_name == (
-        "AdaServe-style simulator baseline"
+        "AdaServe tree-aware simulator baseline"
     )
 
 
@@ -152,19 +171,19 @@ def test_output_length_one_has_no_eager_promotion_or_post_eos_proposal():
 
 
 def test_partial_acceptance_invalidates_eager_proposal():
-    oracle = AcceptanceOracle(
+    root = CandidateTreeNode("root", None, 0, 1.0, 1.0)
+    node_1 = CandidateTreeNode("a", "root", 1, 1.0, 1.0)
+    node_2 = CandidateTreeNode("b", "a", 2, 1.0, 1.0)
+    tree_oracle = CandidateTreeOracle(
         seed=0,
-        max_k=2,
-        traces={
-            ("r0", 0): (True, False),
-            ("r0", 2): (True, True),
-        },
+        injected_trees={("r0", 0): CandidateTree("r0", root, (root, node_1, node_2))},
+        injected_branches={("r0", 0): ("a",)},
     )
     result = simulate(
         _workload(output_tokens=8, acceptance=1.0, count=1),
         SpecRhythmPolicy(),
         _config(roof_candidate_budget=2, max_request_budget=2),
-        acceptance_oracle=oracle,
+        candidate_tree_oracle=tree_oracle,
     )
     assert result.summary.eager_invalidations >= 1
     assert result.summary.invalidated_tokens >= 1
@@ -280,7 +299,7 @@ def test_adaserve_uses_serial_latency_and_never_eager():
     result = simulate(_workload(), AdaServeStylePolicy(), _config())
     assert cycle_latency_ms(result.summary.execution_mode, 7, 11) == 18
     assert result.summary.execution_mode == "serial"
-    assert result.summary.allocator == "slo-aware-two-pass-proxy"
+    assert result.summary.allocator == "adaserve-tree-aware"
     assert result.summary.eager_semantics == "none"
     assert result.summary.eager_drafted_tokens == 0
     assert result.summary.eager_promotions == 0
@@ -329,27 +348,28 @@ def _tight_loose_pressure_config():
         verify_per_candidate_ms=0,
         draft_per_candidate_ms=1,
         speculative_budget=4,
+        candidate_tree_width=1,
         seed=1,
     )
 
 
-def test_adaserve_improves_tight_attainment_over_serial_sd_constructively():
+def test_adaserve_prioritizes_larger_projected_gap_than_serial_sd():
     workload = _tight_loose_pressure_workload()
     config = _tight_loose_pressure_config()
     serial = simulate(workload, SerialSDPolicy(4), config)
     adaserve = simulate(workload, AdaServeStylePolicy(), config)
-    assert adaserve.summary.class_metrics["tight"]["attainment"] > (
-        serial.summary.class_metrics["tight"]["attainment"]
+    assert adaserve.summary.cycle_diagnostics[2].budget_by_slo_class["3"] > (
+        serial.summary.cycle_diagnostics[2].budget_by_slo_class["3"]
     )
 
 
-def test_shaping_improves_tight_attainment_over_dual_batch_constructively():
+def test_shaping_prioritizes_larger_projected_gap_than_dual_batch():
     workload = _tight_loose_pressure_workload()
     config = _tight_loose_pressure_config()
     dual = simulate(workload, DualBatchPolicy(4), config)
     shaping = simulate(workload, SpecRhythmPolicy(enable_eager=False), config)
-    assert shaping.summary.class_metrics["tight"]["attainment"] > (
-        dual.summary.class_metrics["tight"]["attainment"]
+    assert shaping.summary.cycle_diagnostics[1].budget_by_slo_class["3"] > (
+        dual.summary.cycle_diagnostics[1].budget_by_slo_class["3"]
     )
 
 
@@ -360,7 +380,7 @@ def test_high_confidence_short_parent_eager_can_improve_goodput():
                 "r0",
                 0,
                 1,
-                4,
+                6,
                 3,
                 task="tight",
                 acceptance_probability=1.0,
@@ -382,6 +402,7 @@ def test_high_confidence_short_parent_eager_can_improve_goodput():
     dual = simulate(workload, DualBatchPolicy(2), config)
     eager = simulate(workload, DualEagerPolicy(2), config)
     assert eager.summary.eager_promotions > 0
+    assert eager.summary.tree_verified_nodes == eager.summary.verified_tokens
     assert eager.summary.goodput_tokens_per_s > dual.summary.goodput_tokens_per_s
 
 
@@ -400,6 +421,10 @@ def test_all_proposal_tokens_have_one_terminal_disposition():
         (summary.normal_drafted_tokens + summary.eager_drafted_tokens)
         * _config().draft_per_candidate_ms,
     )
+    assert sum(
+        row.get("invalidated_tokens", 0)
+        for row in summary.slo_class_metrics.values()
+    ) == summary.invalidated_tokens
 
 
 def test_finished_requests_never_retain_or_generate_proposals():
@@ -473,6 +498,49 @@ def test_overload_increases_queueing_delay_and_slo_violations():
     assert high.summary.slo_attainment < low.summary.slo_attainment
 
 
+def test_goodput_denominator_spans_first_arrival_processing_and_drain():
+    workload = Workload(
+        [
+            WorkloadRequest("first", 100, 1, 1, 100),
+            WorkloadRequest("last", 150, 1, 1, 100),
+        ]
+    )
+    result = simulate(
+        workload,
+        ARPolicy(),
+        _config(verify_base_ms=10, verify_per_request_ms=0, verify_per_candidate_ms=0),
+    )
+    summary = result.summary
+    assert summary.first_arrival_ms == 100
+    assert summary.last_arrival_ms == 150
+    assert summary.drain_completion_ms == 160
+    assert summary.arrival_span_ms == 50
+    assert summary.processing_and_drain_ms == 10
+    assert summary.makespan_ms == 60
+    assert summary.measurement_ms == 60
+    assert summary.raw_throughput_tokens_per_s == 2 / 0.06
+    assert summary.goodput_tokens_per_s == summary.slo_good_tokens / 0.06
+
+
+def test_projected_progress_uses_one_serial_or_two_dual_cycles():
+    workload = Workload([WorkloadRequest("r", 0, 1, 5, 1)])
+    config = _config(
+        max_active_requests=1,
+        roof_candidate_budget=1,
+        max_request_budget=1,
+        speculative_budget=1,
+        draft_per_candidate_ms=3,
+        verify_base_ms=5,
+        verify_per_request_ms=0,
+        verify_per_candidate_ms=0,
+    )
+    serial = simulate(workload, AdaServeStylePolicy(), config).summary
+    dual = simulate(workload, SpecRhythmPolicy(enable_eager=False), config).summary
+    serial_gap = serial.slo_class_metrics["1"]["mean_requested_progress_gap"]
+    dual_gap = dual.slo_class_metrics["1"]["mean_requested_progress_gap"]
+    assert dual_gap > serial_gap
+
+
 def test_all_modes_satisfy_proposal_and_token_accounting():
     policies = (
         ARPolicy(),
@@ -521,3 +589,8 @@ def test_all_modes_satisfy_proposal_and_token_accounting():
         )
         assert 0 <= summary.draft_compute_waste_ratio <= 1
         assert 0 <= summary.eager_compute_waste_ratio <= 1
+        assert summary.tree_drafted_nodes == (
+            summary.tree_verified_nodes
+            + summary.tree_invalidated_nodes
+            + summary.tree_discarded_at_eos_nodes
+        )
