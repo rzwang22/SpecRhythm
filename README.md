@@ -11,9 +11,9 @@ The repository currently provides:
 - piecewise-Gamma synthetic arrivals and strict, windowed Mooncake timestamp replay;
 - task-conditioned, correlated input/output token lengths;
 - JSON validation reports and checksum-based provenance manifests;
-- explicitly named AR, serial-SD, dual-batch, shaping-only, and SpecRhythm modes;
+- seven explicitly named cumulative-ablation modes from AR through SpecRhythm;
 - a deterministic proposal-lifecycle simulator with guarded eager promotion;
-- goodput, SLO-attainment, throughput, and TPOT metrics;
+- queueing/service/end-to-end latency, goodput, SLO-attainment, and TPOT metrics;
 - tests for budget, prefix, determinism, and accounting invariants.
 
 ## Quick start
@@ -95,3 +95,32 @@ The simulator is useful for rejecting bad policies and checking invariants. It i
 of a speedup or a GPU performance predictor. The current latency surfaces and acceptance inputs
 remain illustrative; engine integration and performance claims require a later measured model.
 See [docs/phase-a.md](docs/phase-a.md) for the evidence standard.
+
+## Simulator mode contract
+
+| Mode | Execution | Allocation | Eager |
+| --- | --- | --- | --- |
+| `ar` | target-only full active batch | none | no |
+| `serial-sd` | serial `D + V` | SLO-unaware round-robin | no |
+| `adaserve` | serial `D + V` | SLO-aware two-pass proxy | no |
+| `dual-batch` | dual `max(D,V)` | SLO-unaware round-robin | no |
+| `dual-eager` | dual `max(D,V)` | SLO-unaware round-robin | guarded rolling |
+| `shaping` | dual `max(D,V)` | SLO-aware two-pass proxy | no |
+| `specrhythm` | dual `max(D,V)` | SLO-aware two-pass proxy | guarded rolling |
+
+`serial-sd` and `dual-batch` intentionally share request ordering, per-request budgets,
+candidate roof, maximum budget, acceptance trace, and active-set limit. Their only execution
+difference for a fixed logical batch is `D + V` versus `max(D,V)`. On an arrival trace, that
+wall-clock difference can legitimately change when later requests enter the active set; both
+modes still apply the same selection and allocation rules. `adaserve` is an **AdaServe-style
+simulator baseline**: it reuses this repository's SLO-aware allocator under serial execution and
+is not a complete reproduction of AdaServe.
+
+`input_tokens` is preserved in workloads but is not yet an input to the latency surface.
+Context-dependent latency is not implemented. Until GPU calibration, `D(B,K,C)`, `V(B,K,C)`,
+acceptance, confidence, and the candidate roof are simulator/proxy parameters only.
+The current eager full-parent admission threshold (`0.10`) is also an explicit proxy parameter,
+not a measured system constant.
+
+Project goals, roadmap, semantic boundaries, and per-PR progress are maintained in
+[docs/project-status.md](docs/project-status.md).

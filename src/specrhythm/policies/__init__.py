@@ -5,11 +5,17 @@ from specrhythm.policies.baselines import (
     DualBatchPolicy,
     SerialSDPolicy,
 )
-from specrhythm.policies.specrhythm import SpecRhythmPolicy
+from specrhythm.policies.specrhythm import (
+    AdaServeStylePolicy,
+    DualEagerPolicy,
+    SpecRhythmPolicy,
+)
 
 __all__ = [
     "ARPolicy",
+    "AdaServeStylePolicy",
     "DualBatchPolicy",
+    "DualEagerPolicy",
     "SerialSDPolicy",
     "SpecRhythmPolicy",
 ]

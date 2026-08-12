@@ -36,12 +36,27 @@ integration should stop until the policy or workload assumptions are corrected.
 | Label | Execution | Allocation | Eager |
 | --- | --- | --- | --- |
 | AR | target decode only | zero candidates | no |
-| Serial SD | `draft_ms + verify_ms` | fixed per request | no |
+| Serial SD | `draft_ms + verify_ms` | SLO-unaware round-robin | no |
+| AdaServe-style | `draft_ms + verify_ms` | two-pass SLO-aware proxy | no |
 | Dual-Batch | `max(draft_ms, verify_ms)` | round-robin, SLO-unaware | no |
+| Dual-Batch + Rolling Eager | dual batch | round-robin, SLO-unaware | guarded |
 | + shaping | dual batch | two-pass SLO-aware | no |
 | SpecRhythm | dual batch | two-pass SLO-aware | guarded |
 
-The CLI names these rows `ar`, `serial-sd`, `dual-batch`, `shaping`, and `specrhythm`.
+The CLI names these rows `ar`, `serial-sd`, `adaserve`, `dual-batch`, `dual-eager`, `shaping`,
+and `specrhythm`. AdaServe-style here is a controlled serial/SLO-aware baseline, not a complete
+AdaServe system reproduction.
+
+The cumulative comparisons are `serial-sd → adaserve` for shaping under serial execution,
+`serial-sd → dual-batch` for overlap, `dual-batch → dual-eager` for rolling eager,
+`dual-batch → shaping` for individual budget shaping, and `shaping → specrhythm` for guarded
+eager on top of shaping.
+
+For a fixed logical batch, Serial SD and Dual-Batch call the same SLO-unaware round-robin
+allocator and share every budget, roof, oracle, and active-set parameter. Only their exposed
+cycle formula differs. Across a timed arrival trace, that formula can change later admission
+times and hence the active set; this queueing effect is part of the comparison, not a second
+allocator difference.
 
 ## Proposal state machine
 
@@ -58,7 +73,9 @@ count as verification and cannot duplicate draft compute.
 
 The summary separately reports normal/eager drafted candidates, verified candidates, accepted
 candidates, promoted eager candidates, invalidated candidates, EOS-discarded candidates, and
-logical draft/verify compute time. The conservation invariant is:
+logical draft/verify compute time at both proposal and token granularity. It also reports
+queueing latency from arrival to admission, resident service latency, and end-to-end decode
+latency. The conservation invariant is:
 
 ~~~text
 normal_drafted + eager_drafted
@@ -69,6 +86,13 @@ promoted <= eager_drafted
 
 Promoted tokens later enter exactly one terminal state, normally verification. These values are
 semantic accounting fields, not measured GPU counters.
+
+Eager admission uses the estimated probability that the entire stored parent proposal will be
+accepted, plus a separate draft-confidence signal and progress gap. Long, rejection-heavy
+parents are suppressed or receive shorter continuations; eager budget is not copied from the
+parent budget. Simulator-semantics v0.2 uses an explicit minimum estimated parent
+full-acceptance probability of `0.10`; this is a proxy control threshold to calibrate, not a
+paper- or GPU-measured constant.
 
 ## Proof gates
 
@@ -118,3 +142,7 @@ draft_confidences, request_id, task, seed
 
 From these records, derive the roofline budget and empirical conditional distributions used by the
 simulator. Never infer speculative acceptance from input/output lengths alone.
+
+The current simulator does not feed `input_tokens` into latency. Context-dependent latency is
+therefore unimplemented, and all draft/verify surfaces, acceptance/confidence inputs, and roof
+budgets remain proxy parameters until calibrated on the target GPU and engine.

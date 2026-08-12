@@ -14,7 +14,8 @@ proxy token lengths. It does not contain HumanEval, Alpaca, or CNN/DailyMail exa
 final R3 evaluation dataset. `specrhythm import-mooncake` is the separate R4 path: it retains
 Mooncake timestamp, length, and prefix-hash fields. Neither path provides a measured speculative
 acceptance profile; collect that on the GPU server for the exact model pair before reporting system
-performance.
+performance. Draft confidence is a separate illustrative workload field and is likewise not
+calibrated.
 
 Recommended external layout on the GPU server:
 

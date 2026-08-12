@@ -21,8 +21,7 @@ class SimulatorConfig:
     verify_per_request_ms: float = 0.08
     verify_per_candidate_ms: float = 0.025
     draft_per_candidate_ms: float = 0.018
-    serial_speculative_budget: int = 4
-    dual_batch_speculative_budget: int = 8
+    speculative_budget: int = 4
     max_cycles: int = 1_000_000
     seed: int = 0
 
@@ -35,8 +34,7 @@ class SimulatorConfig:
             self.max_active_requests,
             self.roof_candidate_budget,
             self.max_request_budget,
-            self.serial_speculative_budget,
-            self.dual_batch_speculative_budget,
+            self.speculative_budget,
             self.max_cycles,
             self.seed,
         )
@@ -48,8 +46,7 @@ class SimulatorConfig:
             )
         if (
             self.max_request_budget < 0
-            or self.serial_speculative_budget < 0
-            or self.dual_batch_speculative_budget < 0
+            or self.speculative_budget < 0
             or self.max_cycles < 1
         ):
             raise ValueError("request budgets must be non-negative and max_cycles positive")
@@ -123,7 +120,9 @@ class RuntimeRequest:
     prefix_epoch: int = 0
     finished: bool = False
     elapsed_decode_ms: float = 0.0
-    acceptance_estimate: float = 0.7
+    service_latency_ms: float = 0.0
+    recent_acceptance_ratio: float = 0.7
+    draft_confidence: float = 0.7
 
     def __post_init__(self) -> None:
         if self.slot not in {0, 1}:
@@ -146,6 +145,8 @@ class RequestResult:
     task: str
     output_tokens: int
     slo_tpot_ms: float
+    queueing_latency_ms: float
+    service_latency_ms: float
     decode_latency_ms: float
     tpot_ms: float
     attained: bool
@@ -153,8 +154,17 @@ class RequestResult:
 
 @dataclass(frozen=True)
 class SimulationSummary:
+    schema_version: str
+    model_status: str
+    input_tokens_modeled: bool
+    context_dependent_latency_modeled: bool
+    proxy_parameter_status: dict[str, str]
+    simulator_parameters: dict[str, Any]
     policy: str
+    display_name: str
     execution_mode: str
+    allocator: str
+    eager_semantics: str
     requests: int
     completed_requests: int
     measurement_ms: float
@@ -164,6 +174,19 @@ class SimulationSummary:
     p50_tpot_ms: Optional[float]
     p90_tpot_ms: Optional[float]
     p99_tpot_ms: Optional[float]
+    mean_queueing_latency_ms: float
+    mean_service_latency_ms: float
+    mean_decode_latency_ms: float
+    p50_queueing_latency_ms: Optional[float]
+    p50_service_latency_ms: Optional[float]
+    p50_decode_latency_ms: Optional[float]
+    normal_drafted_proposals: int
+    eager_drafted_proposals: int
+    verified_proposals: int
+    fully_accepted_proposals: int
+    promoted_proposals: int
+    invalidated_proposals: int
+    discarded_at_eos_proposals: int
     normal_drafted_tokens: int
     eager_drafted_tokens: int
     verified_tokens: int
@@ -175,7 +198,19 @@ class SimulationSummary:
     verify_compute_ms: float
     eager_promotions: int
     eager_invalidations: int
+    eager_discarded_at_eos_proposals: int
+    eager_invalidated_tokens: int
+    eager_discarded_at_eos_tokens: int
+    eager_promotion_proposal_ratio: float
+    eager_invalidation_proposal_ratio: float
+    eager_eos_discard_proposal_ratio: float
+    eager_promotion_token_ratio: float
+    eager_invalidation_token_ratio: float
+    eager_eos_discard_token_ratio: float
+    draft_compute_waste_ratio: float
+    eager_compute_waste_ratio: float
     class_metrics: dict[str, dict[str, float]] = field(default_factory=dict)
+    slo_class_metrics: dict[str, dict[str, float]] = field(default_factory=dict)
 
     @property
     def proposed_draft_tokens(self) -> int:
@@ -268,6 +303,13 @@ class _VerificationOutcome:
 
 @dataclass
 class _LifecycleLedger:
+    normal_drafted_proposals: int = 0
+    eager_drafted_proposals: int = 0
+    verified_proposals: int = 0
+    fully_accepted_proposals: int = 0
+    promoted_proposals: int = 0
+    invalidated_proposals: int = 0
+    discarded_at_eos_proposals: int = 0
     normal_drafted_tokens: int = 0
     eager_drafted_tokens: int = 0
     verified_tokens: int = 0
@@ -279,6 +321,10 @@ class _LifecycleLedger:
     verify_compute_ms: float = 0.0
     eager_promotions: int = 0
     eager_invalidations: int = 0
+    eager_invalidated_tokens: int = 0
+    eager_discarded_at_eos_tokens: int = 0
+    eager_discarded_at_eos_proposals: int = 0
+    eager_accepted_tokens: int = 0
     drafted: set[tuple[Any, ...]] = field(default_factory=set)
     terminal: set[tuple[Any, ...]] = field(default_factory=set)
     promoted: set[tuple[Any, ...]] = field(default_factory=set)
@@ -288,8 +334,10 @@ class _LifecycleLedger:
             raise AssertionError("proposal was drafted more than once")
         self.drafted.add(proposal.key)
         if proposal.source == "normal":
+            self.normal_drafted_proposals += 1
             self.normal_drafted_tokens += proposal.drafted_tokens
         else:
+            self.eager_drafted_proposals += 1
             self.eager_drafted_tokens += proposal.drafted_tokens
         self.draft_compute_ms += proposal.drafted_tokens * draft_per_candidate_ms
 
@@ -299,13 +347,25 @@ class _LifecycleLedger:
             raise AssertionError("accepted tokens must be a subset of verified tokens")
         self.verified_tokens += proposal.drafted_tokens
         self.accepted_tokens += accepted_tokens
+        self.verified_proposals += 1
+        if accepted_tokens == proposal.drafted_tokens and proposal.drafted_tokens > 0:
+            self.fully_accepted_proposals += 1
+        if proposal.source == "eager":
+            self.eager_accepted_tokens += accepted_tokens
 
     def record_invalidated(self, proposal: Proposal, *, at_eos: bool = False) -> None:
         self._record_terminal(proposal)
         if at_eos:
+            self.discarded_at_eos_proposals += 1
             self.discarded_at_eos_tokens += proposal.drafted_tokens
+            if proposal.source == "eager":
+                self.eager_discarded_at_eos_tokens += proposal.drafted_tokens
+                self.eager_discarded_at_eos_proposals += 1
         else:
+            self.invalidated_proposals += 1
             self.invalidated_tokens += proposal.drafted_tokens
+            if proposal.source == "eager":
+                self.eager_invalidated_tokens += proposal.drafted_tokens
 
     def record_promotion(self, proposal: Proposal) -> None:
         if proposal.source != "eager" or proposal.key not in self.drafted:
@@ -313,6 +373,7 @@ class _LifecycleLedger:
         if proposal.key in self.promoted or proposal.key in self.terminal:
             raise AssertionError("proposal was promoted twice or after terminal disposition")
         self.promoted.add(proposal.key)
+        self.promoted_proposals += 1
         self.promoted_tokens += proposal.drafted_tokens
         self.eager_promotions += 1
 
@@ -336,6 +397,32 @@ class _LifecycleLedger:
             raise AssertionError("accepted tokens exceed verified tokens")
         if self.promoted_tokens > self.eager_drafted_tokens:
             raise AssertionError("promoted tokens exceed eager drafted tokens")
+        drafted_proposals = self.normal_drafted_proposals + self.eager_drafted_proposals
+        terminal_proposals = (
+            self.verified_proposals
+            + self.invalidated_proposals
+            + self.discarded_at_eos_proposals
+        )
+        if drafted_proposals != terminal_proposals:
+            raise AssertionError("drafted proposals are not conserved")
+        if self.promoted_proposals > self.eager_drafted_proposals:
+            raise AssertionError("promoted proposals exceed eager drafted proposals")
+        if (
+            self.promoted_proposals
+            + self.eager_invalidations
+            + self.eager_discarded_at_eos_proposals
+            != self.eager_drafted_proposals
+        ):
+            raise AssertionError(
+                "every eager proposal must be promoted, invalidated, or discarded"
+            )
+        if (
+            self.promoted_tokens
+            + self.eager_invalidated_tokens
+            + self.eager_discarded_at_eos_tokens
+            != self.eager_drafted_tokens
+        ):
+            raise AssertionError("eager tokens are not conserved at admission resolution")
 
 
 def eager_is_promotable(
@@ -377,16 +464,19 @@ def _percentile(values: list[float], fraction: float) -> Optional[float]:
 
 
 def _build_summary(
-    policy_name: str,
-    execution_mode: str,
+    policy: SchedulingPolicy,
     results: list[RequestResult],
     measurement_ms: float,
     ledger: _LifecycleLedger,
+    config: SimulatorConfig,
 ) -> SimulationSummary:
     duration_s = measurement_ms / 1000.0
     total_tokens = sum(result.output_tokens for result in results)
     good_tokens = sum(result.output_tokens for result in results if result.attained)
     tpots = [result.tpot_ms for result in results]
+    queueing = [result.queueing_latency_ms for result in results]
+    service = [result.service_latency_ms for result in results]
+    decode = [result.decode_latency_ms for result in results]
     tasks = sorted({result.task for result in results})
     class_metrics: dict[str, dict[str, float]] = {}
     for task in tasks:
@@ -395,10 +485,54 @@ def _build_summary(
             "requests": float(len(subset)),
             "attainment": sum(result.attained for result in subset) / len(subset),
             "mean_tpot_ms": statistics.mean(result.tpot_ms for result in subset),
+            "mean_queueing_latency_ms": statistics.mean(
+                result.queueing_latency_ms for result in subset
+            ),
+            "mean_service_latency_ms": statistics.mean(
+                result.service_latency_ms for result in subset
+            ),
+            "mean_decode_latency_ms": statistics.mean(
+                result.decode_latency_ms for result in subset
+            ),
         }
+    slo_class_metrics: dict[str, dict[str, float]] = {}
+    for slo in sorted({result.slo_tpot_ms for result in results}):
+        subset = [result for result in results if result.slo_tpot_ms == slo]
+        slo_class_metrics[f"{slo:g}"] = {
+            "requests": float(len(subset)),
+            "attainment": sum(result.attained for result in subset) / len(subset),
+            "mean_tpot_ms": statistics.mean(result.tpot_ms for result in subset),
+            "mean_queueing_latency_ms": statistics.mean(
+                result.queueing_latency_ms for result in subset
+            ),
+            "mean_service_latency_ms": statistics.mean(
+                result.service_latency_ms for result in subset
+            ),
+            "mean_decode_latency_ms": statistics.mean(
+                result.decode_latency_ms for result in subset
+            ),
+        }
+    eager_proposals = ledger.eager_drafted_proposals
+    eager_tokens = ledger.eager_drafted_tokens
+    drafted_tokens = ledger.normal_drafted_tokens + eager_tokens
     return SimulationSummary(
-        policy=policy_name,
-        execution_mode=execution_mode,
+        schema_version="specrhythm.simulation-summary.v2",
+        model_status="simulator-proxy-not-gpu-measured",
+        input_tokens_modeled=False,
+        context_dependent_latency_modeled=False,
+        proxy_parameter_status={
+            "draft_latency": "context-independent simulator proxy",
+            "verify_latency": "context-independent simulator proxy",
+            "acceptance": "workload proxy; not GPU-measured",
+            "draft_confidence": "workload proxy; not GPU-calibrated",
+            "candidate_roof": "configured simulator proxy",
+        },
+        simulator_parameters=asdict(config),
+        policy=policy.name,
+        display_name=policy.display_name,
+        execution_mode=policy.execution_mode,
+        allocator=policy.allocator,
+        eager_semantics=policy.eager_semantics,
         requests=len(results),
         completed_requests=len(results),
         measurement_ms=measurement_ms,
@@ -410,6 +544,19 @@ def _build_summary(
         p50_tpot_ms=_percentile(tpots, 0.50),
         p90_tpot_ms=_percentile(tpots, 0.90),
         p99_tpot_ms=_percentile(tpots, 0.99),
+        mean_queueing_latency_ms=statistics.mean(queueing) if queueing else 0.0,
+        mean_service_latency_ms=statistics.mean(service) if service else 0.0,
+        mean_decode_latency_ms=statistics.mean(decode) if decode else 0.0,
+        p50_queueing_latency_ms=_percentile(queueing, 0.50),
+        p50_service_latency_ms=_percentile(service, 0.50),
+        p50_decode_latency_ms=_percentile(decode, 0.50),
+        normal_drafted_proposals=ledger.normal_drafted_proposals,
+        eager_drafted_proposals=ledger.eager_drafted_proposals,
+        verified_proposals=ledger.verified_proposals,
+        fully_accepted_proposals=ledger.fully_accepted_proposals,
+        promoted_proposals=ledger.promoted_proposals,
+        invalidated_proposals=ledger.invalidated_proposals,
+        discarded_at_eos_proposals=ledger.discarded_at_eos_proposals,
         normal_drafted_tokens=ledger.normal_drafted_tokens,
         eager_drafted_tokens=ledger.eager_drafted_tokens,
         verified_tokens=ledger.verified_tokens,
@@ -421,7 +568,41 @@ def _build_summary(
         verify_compute_ms=ledger.verify_compute_ms,
         eager_promotions=ledger.eager_promotions,
         eager_invalidations=ledger.eager_invalidations,
+        eager_discarded_at_eos_proposals=ledger.eager_discarded_at_eos_proposals,
+        eager_invalidated_tokens=ledger.eager_invalidated_tokens,
+        eager_discarded_at_eos_tokens=ledger.eager_discarded_at_eos_tokens,
+        eager_promotion_proposal_ratio=(
+            ledger.promoted_proposals / eager_proposals if eager_proposals else 0.0
+        ),
+        eager_invalidation_proposal_ratio=(
+            ledger.eager_invalidations / eager_proposals if eager_proposals else 0.0
+        ),
+        eager_eos_discard_proposal_ratio=(
+            ledger.eager_discarded_at_eos_proposals / eager_proposals
+            if eager_proposals
+            else 0.0
+        ),
+        eager_promotion_token_ratio=(
+            ledger.promoted_tokens / eager_tokens if eager_tokens else 0.0
+        ),
+        eager_invalidation_token_ratio=(
+            ledger.eager_invalidated_tokens / eager_tokens if eager_tokens else 0.0
+        ),
+        eager_eos_discard_token_ratio=(
+            ledger.eager_discarded_at_eos_tokens / eager_tokens if eager_tokens else 0.0
+        ),
+        draft_compute_waste_ratio=(
+            (drafted_tokens - ledger.accepted_tokens) / drafted_tokens
+            if drafted_tokens
+            else 0.0
+        ),
+        eager_compute_waste_ratio=(
+            (eager_tokens - ledger.eager_accepted_tokens) / eager_tokens
+            if eager_tokens
+            else 0.0
+        ),
         class_metrics=class_metrics,
+        slo_class_metrics=slo_class_metrics,
     )
 
 
@@ -436,6 +617,7 @@ def _request_view(
         return None
     parent_prefix = runtime.committed_prefix_len
     proposal_budget = 0
+    parent_full_acceptance_probability = 0.0
     if parent is not None:
         if not _proposal_matches_runtime(runtime, parent) or parent.drafted_tokens <= 0:
             return None
@@ -445,6 +627,9 @@ def _request_view(
         )
         parent_prefix = parent.parent_prefix_len + full_progress
         proposal_budget = parent.drafted_tokens
+        recent = max(0.0, min(1.0, runtime.recent_acceptance_ratio))
+        confidence = max(0.0, min(1.0, runtime.draft_confidence))
+        parent_full_acceptance_probability = recent ** parent.drafted_tokens * confidence
     remaining = runtime.request.output_tokens - parent_prefix
     if remaining <= 0:
         return None
@@ -453,10 +638,12 @@ def _request_view(
         committed_prefix_len=runtime.committed_prefix_len,
         elapsed_decode_ms=runtime.elapsed_decode_ms,
         slo_tpot_ms=runtime.request.slo_tpot_ms,
-        acceptance_estimate=runtime.acceptance_estimate,
+        recent_acceptance_ratio=runtime.recent_acceptance_ratio,
+        draft_confidence=runtime.draft_confidence,
         waiting_time_ms=waiting_time_ms,
         max_budget=min(config.max_request_budget, remaining),
         proposal_budget=min(proposal_budget, remaining),
+        parent_full_acceptance_probability=parent_full_acceptance_probability,
     )
 
 
@@ -623,7 +810,9 @@ def _verify_proposal(
     runtime.finished = runtime.committed_prefix_len >= runtime.request.output_tokens
     if proposal.drafted_tokens > 0:
         observed = accepted / proposal.drafted_tokens
-        runtime.acceptance_estimate = 0.8 * runtime.acceptance_estimate + 0.2 * observed
+        runtime.recent_acceptance_ratio = (
+            0.8 * runtime.recent_acceptance_ratio + 0.2 * observed
+        )
     return _VerificationOutcome(proposal, True, accepted, fully_accepted)
 
 
@@ -656,8 +845,11 @@ def _resolve_eager(
         runtime.slot = 1 - runtime.slot
         ledger.record_promotion(eager)
         return
-    ledger.eager_invalidations += 1
-    ledger.record_invalidated(eager, at_eos=runtime.finished)
+    if runtime.finished:
+        ledger.record_invalidated(eager, at_eos=True)
+    else:
+        ledger.eager_invalidations += 1
+        ledger.record_invalidated(eager)
 
 
 def _discard_finished_proposals(runtime: RuntimeRequest, ledger: _LifecycleLedger) -> None:
@@ -679,6 +871,8 @@ def _complete_request(runtime: RuntimeRequest) -> RequestResult:
         task=runtime.request.task,
         output_tokens=runtime.request.output_tokens,
         slo_tpot_ms=runtime.request.slo_tpot_ms,
+        queueing_latency_ms=runtime.admitted_at_ms - runtime.request.arrival_time_ms,
+        service_latency_ms=runtime.service_latency_ms,
         decode_latency_ms=runtime.elapsed_decode_ms,
         tpot_ms=tpot,
         attained=tpot <= runtime.request.slo_tpot_ms,
@@ -749,10 +943,10 @@ def simulate(
     ledger = _LifecycleLedger()
     now_ms = 0.0
     cycle = 0
-    first_admission_ms: Optional[float] = None
+    simulation_start_ms = pending[0].arrival_time_ms if pending else 0.0
 
     def admit_ready() -> None:
-        nonlocal pending_index, first_admission_ms
+        nonlocal pending_index
         while pending_index < len(pending) and len(active) < config.max_active_requests:
             request = pending[pending_index]
             if request.arrival_time_ms > now_ms:
@@ -763,12 +957,12 @@ def simulate(
                 request=request,
                 slot=slot,
                 admitted_at_ms=now_ms,
-                acceptance_estimate=request.acceptance_probability,
+                elapsed_decode_ms=now_ms - request.arrival_time_ms,
+                recent_acceptance_ratio=request.acceptance_probability,
+                draft_confidence=request.draft_confidence,
             )
             active[request.request_id] = runtime
             all_runtimes[request.request_id] = runtime
-            if first_admission_ms is None:
-                first_admission_ms = now_ms
             pending_index += 1
 
     def finish_ready() -> None:
@@ -787,12 +981,47 @@ def simulate(
         if not active:
             continue
 
-        if execution_mode == "serial":
+        if execution_mode == "ar":
             verify_runtimes = [
                 runtime
                 for runtime in sorted(active.values(), key=lambda item: item.request.request_id)
-                if runtime.normal_proposal is not None and not runtime.finished
+                if not runtime.finished
             ]
+            verify_ms = _verify_ms(verify_runtimes, config)
+            ledger.verify_compute_ms += verify_ms
+            for runtime in active.values():
+                runtime.elapsed_decode_ms += verify_ms
+                runtime.service_latency_ms += verify_ms
+            for runtime in verify_runtimes:
+                _verify_ar(runtime)
+            now_ms += verify_ms
+            finish_ready()
+        else:
+            verify_slot = cycle % 2
+            verify_runtimes = [
+                runtime
+                for runtime in sorted(active.values(), key=lambda item: item.request.request_id)
+                if runtime.slot == verify_slot
+                and runtime.normal_proposal is not None
+                and not runtime.finished
+            ]
+            normal_runtimes = [
+                runtime
+                for runtime in sorted(active.values(), key=lambda item: item.request.request_id)
+                if runtime.slot != verify_slot
+                and runtime.normal_proposal is None
+                and not runtime.finished
+            ]
+            eager_parents = (
+                [
+                    (runtime, runtime.normal_proposal)
+                    for runtime in verify_runtimes
+                    if runtime.normal_proposal is not None
+                ]
+                if policy.eager_enabled
+                else []
+            )
+
             verify_ms = _verify_ms(verify_runtimes, config)
             verified_candidates = sum(
                 runtime.normal_proposal.drafted_tokens
@@ -802,96 +1031,30 @@ def simulate(
             if verified_candidates > config.roof_candidate_budget:
                 raise AssertionError("stored verify batch exceeded the roof candidate budget")
             ledger.verify_compute_ms += verify_ms
-            for runtime in active.values():
-                runtime.elapsed_decode_ms += verify_ms
-            for runtime in verify_runtimes:
-                _verify_proposal(runtime, oracle, ledger)
-            finish_ready()
-
-            normal_runtimes = [
-                runtime
-                for runtime in sorted(active.values(), key=lambda item: item.request.request_id)
-                if runtime.normal_proposal is None and not runtime.finished
-            ]
-            plan = _plan(policy, normal_runtimes, [], verify_ms, config)
+            plan = _plan(policy, normal_runtimes, eager_parents, verify_ms, config)
             drafted: list[Proposal] = []
             for runtime in normal_runtimes:
                 budget = plan.normal_budgets.get(runtime.request.request_id, 0)
                 drafted.append(_draft_normal(runtime, budget, cycle, config, ledger))
+            parent_by_id = {
+                runtime.request.request_id: parent for runtime, parent in eager_parents
+            }
+            for runtime, parent in eager_parents:
+                budget = plan.eager_budgets.get(runtime.request.request_id)
+                if budget is not None:
+                    proposal = _draft_eager(runtime, parent, budget, cycle, config, ledger)
+                    if proposal is not None:
+                        drafted.append(proposal)
             draft_ms = _proposal_draft_ms(drafted, config)
-            for runtime in active.values():
-                runtime.elapsed_decode_ms += draft_ms
-            now_ms += cycle_latency_ms("serial", draft_ms, verify_ms)
-        else:
-            verify_slot = cycle % 2
-            if execution_mode == "ar":
-                verify_runtimes = [
-                    runtime
-                    for runtime in sorted(
-                        active.values(), key=lambda item: item.request.request_id
-                    )
-                    if runtime.slot == verify_slot and not runtime.finished
-                ]
-                normal_runtimes: list[RuntimeRequest] = []
-                eager_parents: list[tuple[RuntimeRequest, Proposal]] = []
-            else:
-                verify_runtimes = [
-                    runtime
-                    for runtime in sorted(
-                        active.values(), key=lambda item: item.request.request_id
-                    )
-                    if runtime.slot == verify_slot
-                    and runtime.normal_proposal is not None
-                    and not runtime.finished
-                ]
-                normal_runtimes = [
-                    runtime
-                    for runtime in sorted(
-                        active.values(), key=lambda item: item.request.request_id
-                    )
-                    if runtime.slot != verify_slot
-                    and runtime.normal_proposal is None
-                    and not runtime.finished
-                ]
-                eager_parents = [
-                    (runtime, runtime.normal_proposal)
-                    for runtime in verify_runtimes
-                    if runtime.normal_proposal is not None
-                ]
-
-            verify_ms = _verify_ms(verify_runtimes, config)
-            ledger.verify_compute_ms += verify_ms
-            if execution_mode == "dual":
-                plan = _plan(policy, normal_runtimes, eager_parents, verify_ms, config)
-                drafted = []
-                for runtime in normal_runtimes:
-                    budget = plan.normal_budgets.get(runtime.request.request_id, 0)
-                    drafted.append(_draft_normal(runtime, budget, cycle, config, ledger))
-                parent_by_id = {
-                    runtime.request.request_id: parent for runtime, parent in eager_parents
-                }
-                for runtime, parent in eager_parents:
-                    budget = plan.eager_budgets.get(runtime.request.request_id)
-                    if budget is not None:
-                        proposal = _draft_eager(runtime, parent, budget, cycle, config, ledger)
-                        if proposal is not None:
-                            drafted.append(proposal)
-                draft_ms = _proposal_draft_ms(drafted, config)
-            else:
-                parent_by_id = {}
-                draft_ms = 0.0
 
             cycle_ms = cycle_latency_ms(execution_mode, draft_ms, verify_ms)
             for runtime in active.values():
                 runtime.elapsed_decode_ms += cycle_ms
-            if execution_mode == "ar":
-                for runtime in verify_runtimes:
-                    _verify_ar(runtime)
-            else:
-                for runtime in verify_runtimes:
-                    outcome = _verify_proposal(runtime, oracle, ledger)
-                    if runtime.request.request_id in parent_by_id:
-                        _resolve_eager(runtime, outcome, ledger)
+                runtime.service_latency_ms += cycle_ms
+            for runtime in verify_runtimes:
+                outcome = _verify_proposal(runtime, oracle, ledger)
+                if runtime.request.request_id in parent_by_id:
+                    _resolve_eager(runtime, outcome, ledger)
             now_ms += cycle_ms
             finish_ready()
 
@@ -899,7 +1062,7 @@ def simulate(
         admit_ready()
 
     ledger.assert_conservation()
-    measurement_ms = max(0.0, now_ms - (first_admission_ms or 0.0))
+    measurement_ms = max(0.0, now_ms - simulation_start_ms)
     completed.sort(key=lambda item: item.request_id)
     final_states = tuple(_snapshot(all_runtimes[key]) for key in sorted(all_runtimes))
     if any(
@@ -909,7 +1072,7 @@ def simulate(
         for state in final_states
     ):
         raise AssertionError("completed simulation retained unfinished or dangling proposal state")
-    summary = _build_summary(policy.name, execution_mode, completed, measurement_ms, ledger)
+    summary = _build_summary(policy, completed, measurement_ms, ledger, config)
     return SimulationResult(
         summary=summary,
         requests=tuple(completed),

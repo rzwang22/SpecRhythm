@@ -25,6 +25,7 @@ class TaskProfile:
     output_sigma: float
     length_correlation: float
     acceptance_probability: float
+    draft_confidence: float = 0.7
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> TaskProfile:
@@ -317,6 +318,7 @@ def generate_replay_workload(config: dict[str, Any], replay: ArrivalReplay) -> W
                 conversation_id=None,
                 turn_index=None,
                 acceptance_probability=profile.acceptance_probability,
+                draft_confidence=profile.draft_confidence,
                 metadata={
                     "source": "mooncake-arrival-replay",
                     "source_timestamp_ms": source_timestamp_ms,
@@ -413,6 +415,7 @@ def generate_workload(
                     "conversation_id": conversation_id,
                     "turn_index": turn_index if conversation_id else None,
                     "acceptance_probability": profile.acceptance_probability,
+                    "draft_confidence": profile.draft_confidence,
                     "metadata": {"source": "parametric-or-composed", "seed": seed},
                 }
             )
@@ -441,6 +444,7 @@ def import_mooncake(
     time_scale: float = 1.0,
     slo_tpot_ms: float = 50.0,
     acceptance_probability: float = 0.7,
+    draft_confidence: float = 0.7,
 ) -> Workload:
     """Normalize the public Mooncake JSONL schema without copying raw content."""
 
@@ -468,6 +472,7 @@ def import_mooncake(
                 output_tokens=int(row["output_length"]),
                 slo_tpot_ms=slo_tpot_ms,
                 acceptance_probability=acceptance_probability,
+                draft_confidence=draft_confidence,
                 metadata=metadata,
             )
         )

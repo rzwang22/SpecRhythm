@@ -13,10 +13,12 @@ class RequestView:
     committed_prefix_len: int
     elapsed_decode_ms: float
     slo_tpot_ms: float
-    acceptance_estimate: float
+    recent_acceptance_ratio: float
+    draft_confidence: float
     waiting_time_ms: float
     max_budget: int
     proposal_budget: int = 0
+    parent_full_acceptance_probability: float = 0.0
 
     @property
     def estimated_tpot_ms(self) -> float:
@@ -34,7 +36,9 @@ class RequestView:
 
     @property
     def acceptance_benefit(self) -> float:
-        return max(0.0, min(1.0, self.acceptance_estimate))
+        recent = max(0.0, min(1.0, self.recent_acceptance_ratio))
+        confidence = max(0.0, min(1.0, self.draft_confidence))
+        return recent * confidence
 
 
 @dataclass(frozen=True)
@@ -73,7 +77,10 @@ class StepPlan:
 
 class SchedulingPolicy(Protocol):
     name: str
+    display_name: str
     execution_mode: str
+    allocator: str
     eager_enabled: bool
+    eager_semantics: str
 
     def plan(self, snapshot: PolicySnapshot) -> StepPlan: ...

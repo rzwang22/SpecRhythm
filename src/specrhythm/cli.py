@@ -9,7 +9,14 @@ import sys
 from pathlib import Path
 from typing import Any, Optional, Sequence
 
-from specrhythm.policies import ARPolicy, DualBatchPolicy, SerialSDPolicy, SpecRhythmPolicy
+from specrhythm.policies import (
+    AdaServeStylePolicy,
+    ARPolicy,
+    DualBatchPolicy,
+    DualEagerPolicy,
+    SerialSDPolicy,
+    SpecRhythmPolicy,
+)
 from specrhythm.provenance import build_manifest, pin_source_url
 from specrhythm.schema import Workload
 from specrhythm.simulator import SimulatorConfig, simulate
@@ -21,6 +28,16 @@ from specrhythm.workload import (
     load_json,
     select_arrival_replay,
     summarize_workload,
+)
+
+POLICY_ORDER = (
+    "ar",
+    "serial-sd",
+    "adaserve",
+    "dual-batch",
+    "dual-eager",
+    "shaping",
+    "specrhythm",
 )
 
 
@@ -38,9 +55,13 @@ def _policy(name: str, config: SimulatorConfig) -> Any:
     if name == "ar":
         return ARPolicy()
     if name == "serial-sd":
-        return SerialSDPolicy(config.serial_speculative_budget)
+        return SerialSDPolicy(config.speculative_budget)
+    if name == "adaserve":
+        return AdaServeStylePolicy()
     if name == "dual-batch":
-        return DualBatchPolicy(config.dual_batch_speculative_budget)
+        return DualBatchPolicy(config.speculative_budget)
+    if name == "dual-eager":
+        return DualEagerPolicy(config.speculative_budget)
     if name == "shaping":
         return SpecRhythmPolicy(enable_eager=False)
     if name == "specrhythm":
@@ -69,6 +90,7 @@ def build_parser() -> argparse.ArgumentParser:
     mooncake.add_argument("--time-scale", type=float, default=1.0)
     mooncake.add_argument("--slo-tpot-ms", type=float, default=50.0)
     mooncake.add_argument("--acceptance-probability", type=float, default=0.7)
+    mooncake.add_argument("--draft-confidence", type=float, default=0.7)
 
     summary = subparsers.add_parser("summarize", help="summarize a canonical workload")
     summary.add_argument("--workload", required=True)
@@ -88,8 +110,12 @@ def build_parser() -> argparse.ArgumentParser:
     simulation.add_argument("--config", required=True)
     simulation.add_argument(
         "--policy",
-        choices=["ar", "serial-sd", "dual-batch", "shaping", "specrhythm"],
+        choices=POLICY_ORDER,
         required=True,
+        help=(
+            "execution mode; adaserve is an AdaServe-style simulator baseline, "
+            "not a full AdaServe reproduction"
+        ),
     )
     simulation.add_argument("--output")
 
@@ -175,6 +201,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             time_scale=args.time_scale,
             slo_tpot_ms=args.slo_tpot_ms,
             acceptance_probability=args.acceptance_probability,
+            draft_confidence=args.draft_confidence,
         )
         workload.save_jsonl(args.output)
         _write_json(summarize_workload(workload), None)
@@ -212,11 +239,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         _write_json(result.summary.to_dict(), args.output)
         return 0
     if args.command == "compare":
-        names = ("ar", "serial-sd", "dual-batch", "shaping", "specrhythm")
+        names = POLICY_ORDER
         summaries = [
             simulate(workload, _policy(name, config), config).summary.to_dict() for name in names
         ]
-        _write_json({"summaries": summaries}, args.output)
+        _write_json(
+            {
+                "schema_version": "specrhythm.comparison.v2",
+                "policy_order": list(names),
+                "summaries": summaries,
+            },
+            args.output,
+        )
         return 0
     raise AssertionError("unreachable")
 

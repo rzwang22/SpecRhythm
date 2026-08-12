@@ -34,9 +34,14 @@ The repository's JSONL schema includes:
   "conversation_id": null,
   "turn_index": null,
   "acceptance_probability": 0.7,
+  "draft_confidence": 0.7,
   "metadata": {"source": "mooncake-fast25"}
 }
 ~~~
+
+`acceptance_probability` and `draft_confidence` are separate proxy inputs. The first drives the
+prefix-indexed acceptance oracle; the second represents a draft-side confidence signal used by
+allocation and eager admission. Neither is GPU-measured in workload-v0.1.
 
 Use relative time and retain a provenance manifest containing source URL, upstream commit SHA,
 download date, tokenizer, transformation command, seed, and output checksum.
