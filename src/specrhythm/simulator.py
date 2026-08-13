@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import math
 import statistics
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from typing import Any, Callable, Optional
 
 from specrhythm.policies.base import PolicySnapshot, RequestView, SchedulingPolicy, StepPlan
@@ -216,6 +216,35 @@ class CycleDiagnostic:
     cycle_latency_ms: float
     predicted_cycle_latency_ms: float
     prediction_error_ms: float
+    verify_requests: int = 0
+    verified_candidate_nodes: int = 0
+    committed_candidate_tokens: int = 0
+    root_progress: int = 0
+    total_progress: int = 0
+    base_request_ids: tuple[str, ...] = ()
+    base_candidate_nodes: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    base_work_preserved: bool = True
+
+
+@dataclass(frozen=True)
+class AllocationOpportunityDiagnostic:
+    request_id: str
+    slo_tpot_ms: float
+    drafted_at_cycle: int
+    progress_gap: float
+    required_total_progress: float
+    required_candidate_progress: float
+    maximum_attainable_candidate_progress: float
+    maximum_attainable_total_progress: float
+    one_cycle_feasible: bool
+    stage1_budget: int
+    stage2_budget: int
+    base_budget: int
+    selected_expected_progress: float
+    realized_committed_progress: int
+    realized_candidate_progress: int
+    root_progress: int
+    remaining_output_tokens: int
 
 
 @dataclass(frozen=True)
@@ -310,6 +339,10 @@ class SimulationSummary:
     draft_compute_waste_ratio: float
     eager_compute_waste_ratio: float
     root_in_candidate_budget: bool
+    root_progress_definition: str
+    candidate_roof_definition: str
+    target_input_positions: str
+    verify_latency_inputs: dict[str, Any]
     tree_drafted_nodes: int
     tree_verified_nodes: int
     tree_accepted_nodes: int
@@ -323,11 +356,28 @@ class SimulationSummary:
     mean_candidate_tree_nodes: float
     selected_path_probability_distribution: dict[str, float]
     allocator_stage_metrics: dict[str, int]
+    cycles: int
+    requests_completed_per_cycle: float
+    mean_verify_batch: float
+    candidate_roof_utilization: float
+    one_cycle_infeasible_opportunity_ratio: float
+    stage1_nodes_to_one_cycle_infeasible: int
+    stage1_infeasible_node_ratio: float
+    verified_candidate_nodes_per_cycle: float
+    candidate_committed_tokens_per_cycle: float
+    root_progress_per_cycle: float
+    total_progress_per_cycle: float
+    accepted_candidate_tokens_per_verified_node: float
+    selected_expected_progress_per_opportunity: float
+    realized_committed_progress_per_opportunity: float
+    base_preservation_violations: int
     cycle_diagnostics: tuple[CycleDiagnostic, ...] = ()
     cycle_diagnostics_truncated: int = 0
     eager_diagnostics: tuple[EagerDiagnostic, ...] = ()
     eager_diagnostics_truncated: int = 0
     request_allocation_diagnostics: tuple[RequestAllocationDiagnostic, ...] = ()
+    allocation_opportunity_diagnostics: tuple[AllocationOpportunityDiagnostic, ...] = ()
+    allocation_opportunity_diagnostics_truncated: int = 0
     class_metrics: dict[str, dict[str, Any]] = field(default_factory=dict)
     slo_class_metrics: dict[str, dict[str, Any]] = field(default_factory=dict)
 
@@ -419,6 +469,8 @@ class _VerificationOutcome:
     accepted_tokens: int
     fully_accepted: bool
     accepted_branch_node_ids: tuple[str, ...] = ()
+    committed_progress: int = 0
+    root_progress: int = 0
 
 
 @dataclass
@@ -469,7 +521,29 @@ class _LifecycleLedger:
     residual_stage_nodes: int = 0
     eager_detail_limit: int = 10_000
     eager_events_truncated: int = 0
+    allocation_events: dict[tuple[Any, ...], dict[str, Any]] = field(default_factory=dict)
+    pending_allocation_events: dict[tuple[str, int], dict[str, Any]] = field(
+        default_factory=dict
+    )
+    completed_allocation_events: list[AllocationOpportunityDiagnostic] = field(
+        default_factory=list
+    )
+    allocation_detail_limit: int = 10_000
+    allocation_events_truncated: int = 0
+    allocation_opportunities: int = 0
+    one_cycle_infeasible_opportunities: int = 0
+    stage1_nodes_to_one_cycle_infeasible: int = 0
+    selected_expected_progress_total: float = 0.0
+    realized_committed_progress_total: int = 0
+    base_selected_nodes: int = 0
+    candidate_roof_used: int = 0
+    candidate_roof_capacity: int = 0
+    base_preservation_violations: int = 0
+    verify_request_positions: int = 0
     eager_sink: Optional[Callable[[EagerDiagnostic], None]] = field(
+        default=None, repr=False
+    )
+    allocation_sink: Optional[Callable[[AllocationOpportunityDiagnostic], None]] = field(
         default=None, repr=False
     )
     drafted: set[tuple[Any, ...]] = field(default_factory=set)
@@ -552,6 +626,12 @@ class _LifecycleLedger:
 
     def record_invalidated(self, proposal: Proposal, *, at_eos: bool = False) -> None:
         self._record_terminal(proposal)
+        self.resolve_allocation(
+            proposal,
+            committed_progress=0,
+            candidate_progress=0,
+            root_progress=0,
+        )
         if at_eos:
             self.discarded_at_eos_proposals += 1
             self.discarded_at_eos_tokens += proposal.drafted_tokens
@@ -580,15 +660,24 @@ class _LifecycleLedger:
                 self.completed_eager_events.append(event)
             else:
                 self.eager_events_truncated += 1
+
     def record_allocation(
         self,
         request_id: str,
         slo_tpot_ms: float,
+        drafted_at_cycle: int,
         budget: int,
         requested_gap: float,
         expected_progress: float,
         slo_stage_budget: int,
         residual_stage_budget: int,
+        base_budget: int,
+        required_total_progress: float,
+        required_candidate_progress: float,
+        maximum_attainable_candidate_progress: float,
+        maximum_attainable_total_progress: float,
+        one_cycle_feasible: bool,
+        remaining_output_tokens: int,
     ) -> None:
         label = f"{slo_tpot_ms:g}"
         stats = self.class_stats.setdefault(
@@ -616,6 +705,36 @@ class _LifecycleLedger:
         self.candidate_expected_progress += expected_progress
         self.slo_stage_nodes += slo_stage_budget
         self.residual_stage_nodes += residual_stage_budget
+        self.allocation_opportunities += 1
+        self.one_cycle_infeasible_opportunities += int(not one_cycle_feasible)
+        if not one_cycle_feasible:
+            self.stage1_nodes_to_one_cycle_infeasible += slo_stage_budget
+        self.selected_expected_progress_total += expected_progress
+        self.base_selected_nodes += base_budget
+        event = {
+            "request_id": request_id,
+            "slo_tpot_ms": slo_tpot_ms,
+            "drafted_at_cycle": drafted_at_cycle,
+            "progress_gap": requested_gap,
+            "required_total_progress": required_total_progress,
+            "required_candidate_progress": required_candidate_progress,
+            "maximum_attainable_candidate_progress": (
+                maximum_attainable_candidate_progress
+            ),
+            "maximum_attainable_total_progress": maximum_attainable_total_progress,
+            "one_cycle_feasible": one_cycle_feasible,
+            "stage1_budget": slo_stage_budget,
+            "stage2_budget": residual_stage_budget,
+            "base_budget": base_budget,
+            "selected_expected_progress": expected_progress,
+            "realized_committed_progress": 0,
+            "realized_candidate_progress": 0,
+            "root_progress": 0,
+            "remaining_output_tokens": remaining_output_tokens,
+        }
+        key = (request_id, drafted_at_cycle)
+        self.allocation_events[key] = event
+        self.pending_allocation_events[(request_id, drafted_at_cycle)] = event
         request_stats = self.request_stats.setdefault(
             request_id,
             {
@@ -629,6 +748,33 @@ class _LifecycleLedger:
         request_stats["allocated_candidate_nodes"] += budget
         request_stats["expected_progress"] += expected_progress
         request_stats["allocation_opportunities"] += 1
+
+    def resolve_allocation(
+        self,
+        proposal: Proposal,
+        *,
+        committed_progress: int,
+        candidate_progress: int,
+        root_progress: int,
+    ) -> None:
+        if proposal.source != "normal":
+            return
+        key = (proposal.request_id, proposal.drafted_at_cycle)
+        event = self.pending_allocation_events.pop(key, None)
+        if event is None:
+            return
+        event["realized_committed_progress"] = committed_progress
+        event["realized_candidate_progress"] = candidate_progress
+        event["root_progress"] = root_progress
+        self.realized_committed_progress_total += committed_progress
+        diagnostic = AllocationOpportunityDiagnostic(**event)
+        if self.allocation_sink is not None:
+            self.allocation_sink(diagnostic)
+        if len(self.completed_allocation_events) < self.allocation_detail_limit:
+            self.completed_allocation_events.append(diagnostic)
+        else:
+            self.allocation_events_truncated += 1
+        self.allocation_events.pop(key, None)
 
     def record_promotion(self, proposal: Proposal) -> None:
         if proposal.source != "eager" or proposal.key not in self.drafted:
@@ -715,6 +861,8 @@ class _LifecycleLedger:
             raise AssertionError("tree nodes must have exactly one terminal disposition")
         if self.tree_accepted_nodes > self.tree_verified_nodes:
             raise AssertionError("accepted tree nodes exceed verified tree nodes")
+        if self.pending_allocation_events or self.allocation_events:
+            raise AssertionError("every normal allocation opportunity must be resolved")
 
 
 def eager_is_promotable(
@@ -776,6 +924,7 @@ def _build_summary(
     last_arrival_ms: float,
     drain_completion_ms: float,
     class_diagnostics: dict[str, dict[str, float]],
+    cycles: int,
     cycle_diagnostics: list[CycleDiagnostic],
     cycle_diagnostics_truncated: int,
 ) -> SimulationSummary:
@@ -810,6 +959,9 @@ def _build_summary(
         slo_class_metrics[f"{slo:g}"] = {
             "requests": float(len(subset)),
             "attainment": sum(result.attained for result in subset) / len(subset),
+            "slo_good_tokens": sum(
+                result.output_tokens for result in subset if result.attained
+            ),
             "mean_tpot_ms": statistics.mean(result.tpot_ms for result in subset),
             "mean_queueing_latency_ms": statistics.mean(
                 result.queueing_latency_ms for result in subset
@@ -860,7 +1012,7 @@ def _build_summary(
                 return bucket / 100.0
         return 0.0
     return SimulationSummary(
-        schema_version="specrhythm.simulation-summary.v3",
+        schema_version="specrhythm.simulation-summary.v4",
         model_status="simulator-proxy-not-gpu-measured",
         input_tokens_modeled=False,
         context_dependent_latency_modeled=False,
@@ -955,6 +1107,26 @@ def _build_summary(
             else 0.0
         ),
         root_in_candidate_budget=False,
+        root_progress_definition=(
+            "one target token committed by each valid non-EOS proposal verification; "
+            "counted once and separately from accepted candidate nodes"
+        ),
+        candidate_roof_definition=(
+            "maximum non-root candidate nodes drafted in one cycle; normal and eager "
+            "candidate nodes share the configured roof"
+        ),
+        target_input_positions=(
+            "one root target-input position per verified request, outside the candidate roof"
+        ),
+        verify_latency_inputs={
+            "formula": (
+                "verify_base_ms + verify_per_request_ms * target_input_positions + "
+                "verify_per_candidate_ms * selected_candidate_nodes"
+            ),
+            "request_count_modeled": True,
+            "candidate_node_count_modeled": True,
+            "context_length_modeled": False,
+        },
         tree_drafted_nodes=ledger.tree_drafted_nodes,
         tree_verified_nodes=ledger.tree_verified_nodes,
         tree_accepted_nodes=ledger.tree_accepted_nodes,
@@ -992,7 +1164,61 @@ def _build_summary(
         allocator_stage_metrics={
             "slo_stage_selected_nodes": ledger.slo_stage_nodes,
             "residual_stage_selected_nodes": ledger.residual_stage_nodes,
+            "base_selected_nodes": ledger.base_selected_nodes,
         },
+        cycles=cycles,
+        requests_completed_per_cycle=len(results) / cycles if cycles else 0.0,
+        mean_verify_batch=(
+            ledger.verify_request_positions / cycles if cycles else 0.0
+        ),
+        candidate_roof_utilization=(
+            ledger.candidate_roof_used / ledger.candidate_roof_capacity
+            if ledger.candidate_roof_capacity
+            else 0.0
+        ),
+        one_cycle_infeasible_opportunity_ratio=(
+            ledger.one_cycle_infeasible_opportunities / ledger.allocation_opportunities
+            if ledger.allocation_opportunities
+            else 0.0
+        ),
+        stage1_nodes_to_one_cycle_infeasible=(
+            ledger.stage1_nodes_to_one_cycle_infeasible
+        ),
+        stage1_infeasible_node_ratio=(
+            ledger.stage1_nodes_to_one_cycle_infeasible / ledger.slo_stage_nodes
+            if ledger.slo_stage_nodes
+            else 0.0
+        ),
+        verified_candidate_nodes_per_cycle=(
+            ledger.verified_tokens / cycles if cycles else 0.0
+        ),
+        candidate_committed_tokens_per_cycle=(
+            ledger.accepted_tokens / cycles if cycles else 0.0
+        ),
+        root_progress_per_cycle=(
+            ledger.baseline_root_progress / cycles if cycles else 0.0
+        ),
+        total_progress_per_cycle=(
+            (ledger.baseline_root_progress + ledger.accepted_tokens) / cycles
+            if cycles
+            else 0.0
+        ),
+        accepted_candidate_tokens_per_verified_node=(
+            ledger.accepted_tokens / ledger.verified_tokens
+            if ledger.verified_tokens
+            else 0.0
+        ),
+        selected_expected_progress_per_opportunity=(
+            ledger.selected_expected_progress_total / ledger.allocation_opportunities
+            if ledger.allocation_opportunities
+            else 0.0
+        ),
+        realized_committed_progress_per_opportunity=(
+            ledger.realized_committed_progress_total / ledger.allocation_opportunities
+            if ledger.allocation_opportunities
+            else 0.0
+        ),
+        base_preservation_violations=ledger.base_preservation_violations,
         cycle_diagnostics=tuple(cycle_diagnostics),
         cycle_diagnostics_truncated=cycle_diagnostics_truncated,
         eager_diagnostics=tuple(
@@ -1023,6 +1249,12 @@ def _build_summary(
                 ),
             )
             for result in sorted(results, key=lambda item: item.request_id)
+        ),
+        allocation_opportunity_diagnostics=tuple(
+            ledger.completed_allocation_events
+        ),
+        allocation_opportunity_diagnostics_truncated=(
+            ledger.allocation_events_truncated
         ),
         class_metrics=class_metrics,
         slo_class_metrics=slo_class_metrics,
@@ -1198,6 +1430,28 @@ def _plan(
             slo_stage_budgets={request_id: 0 for request_id in plan.normal_budgets},
             residual_stage_budgets=dict(plan.normal_budgets),
             normal_budget_displaced_by_eager=plan.normal_budget_displaced_by_eager,
+            required_total_progress={
+                request_id: by_request[request_id].required_total_progress
+                for request_id in plan.normal_budgets
+            },
+            required_candidate_progress={
+                request_id: by_request[request_id].required_candidate_progress
+                for request_id in plan.normal_budgets
+            },
+            maximum_attainable_candidate_progress={
+                request_id: by_request[
+                    request_id
+                ].maximum_attainable_candidate_progress
+                for request_id in plan.normal_budgets
+            },
+            maximum_attainable_total_progress={
+                request_id: by_request[request_id].maximum_attainable_total_progress
+                for request_id in plan.normal_budgets
+            },
+            one_cycle_feasible={
+                request_id: by_request[request_id].one_cycle_feasible
+                for request_id in plan.normal_budgets
+            },
         )
     normal_ids = {view.request_id for view in normal_views}
     eager_ids = {view.request_id for view in eager_views}
@@ -1219,6 +1473,15 @@ def _plan(
             or budget > by_id[request_id].max_budget
         ):
             raise ValueError(f"policy {policy.name} returned an invalid normal budget")
+        base_tree = plan.base_normal_trees.get(request_id)
+        selected_tree = plan.normal_trees.get(request_id)
+        if base_tree is not None:
+            if selected_tree is None or not set(base_tree.selected_node_ids).issubset(
+                selected_tree.selected_node_ids
+            ):
+                raise ValueError(f"policy {policy.name} evicted base candidate nodes")
+            if budget < plan.base_normal_budgets.get(request_id, 0):
+                raise ValueError(f"policy {policy.name} reduced a base request budget")
     for request_id, budget in plan.eager_budgets.items():
         if (
             not isinstance(budget, int)
@@ -1377,6 +1640,13 @@ def _verify_proposal(
     ledger.baseline_root_progress += int(progress > 0)
     fully_accepted = proposal.drafted_tokens > 0 and accepted == proposal.drafted_tokens
     ledger.record_verified(proposal, accepted)
+    root_progress = int(progress > 0)
+    ledger.resolve_allocation(
+        proposal,
+        committed_progress=progress,
+        candidate_progress=accepted,
+        root_progress=root_progress,
+    )
     runtime.committed_prefix_len += progress
     runtime.prefix_epoch += 1
     runtime.finished = runtime.committed_prefix_len >= runtime.request.output_tokens
@@ -1386,7 +1656,13 @@ def _verify_proposal(
             0.8 * runtime.recent_acceptance_ratio + 0.2 * observed
         )
     return _VerificationOutcome(
-        proposal, True, accepted, fully_accepted, accepted_branch
+        proposal,
+        True,
+        accepted,
+        fully_accepted,
+        accepted_branch,
+        progress,
+        root_progress,
     )
 
 
@@ -1503,6 +1779,7 @@ def simulate(
     candidate_tree_oracle: Optional[CandidateTreeOracle] = None,
     cycle_sink: Optional[Callable[[CycleDiagnostic], None]] = None,
     eager_sink: Optional[Callable[[EagerDiagnostic], None]] = None,
+    allocation_sink: Optional[Callable[[AllocationOpportunityDiagnostic], None]] = None,
 ) -> SimulationResult:
     """Run an explicit AR, serial-SD, or dual-batch proposal state machine."""
 
@@ -1519,7 +1796,9 @@ def simulate(
     active: dict[str, RuntimeRequest] = {}
     all_runtimes: dict[str, RuntimeRequest] = {}
     completed: list[RequestResult] = []
-    ledger = _LifecycleLedger(eager_sink=eager_sink)
+    ledger = _LifecycleLedger(
+        eager_sink=eager_sink, allocation_sink=allocation_sink
+    )
     class_diagnostics: dict[str, dict[str, Any]] = {}
     cycle_diagnostics: list[CycleDiagnostic] = []
     cycle_diagnostics_truncated = 0
@@ -1584,6 +1863,7 @@ def simulate(
             ]
             verify_ms = _verify_ms(verify_runtimes, config)
             ledger.verify_compute_ms += verify_ms
+            ledger.verify_request_positions += len(verify_runtimes)
             for runtime in active.values():
                 runtime.elapsed_decode_ms += verify_ms
                 runtime.service_latency_ms += verify_ms
@@ -1604,6 +1884,9 @@ def simulate(
                     cycle_latency_ms=verify_ms,
                     predicted_cycle_latency_ms=previous_cycle_ms or verify_ms,
                     prediction_error_ms=verify_ms - (previous_cycle_ms or verify_ms),
+                    verify_requests=len(verify_runtimes),
+                    root_progress=len(verify_runtimes),
+                    total_progress=len(verify_runtimes),
                 ))
             else:
                 cycle_diagnostics_truncated += 1
@@ -1645,6 +1928,9 @@ def simulate(
             if verified_candidates > config.roof_candidate_budget:
                 raise AssertionError("stored verify batch exceeded the roof candidate budget")
             ledger.verify_compute_ms += verify_ms
+            ledger.verify_request_positions += len(verify_runtimes)
+            root_before_cycle = ledger.baseline_root_progress
+            accepted_before_cycle = ledger.accepted_tokens
             plan = _plan(
                 policy,
                 normal_runtimes,
@@ -1663,11 +1949,23 @@ def simulate(
                 ledger.record_allocation(
                     runtime.request.request_id,
                     runtime.request.slo_tpot_ms,
+                    cycle,
                     budget,
                     plan.requested_progress_gap.get(runtime.request.request_id, 0.0),
                     plan.expected_progress.get(runtime.request.request_id, 0.0),
                     plan.slo_stage_budgets.get(runtime.request.request_id, 0),
                     plan.residual_stage_budgets.get(runtime.request.request_id, budget),
+                    plan.base_normal_budgets.get(runtime.request.request_id, 0),
+                    plan.required_total_progress.get(runtime.request.request_id, 0.0),
+                    plan.required_candidate_progress.get(runtime.request.request_id, 0.0),
+                    plan.maximum_attainable_candidate_progress.get(
+                        runtime.request.request_id, 0.0
+                    ),
+                    plan.maximum_attainable_total_progress.get(
+                        runtime.request.request_id, 1.0
+                    ),
+                    plan.one_cycle_feasible.get(runtime.request.request_id, True),
+                    runtime.request.output_tokens - runtime.committed_prefix_len,
                 )
                 selected = plan.normal_trees.get(runtime.request.request_id)
                 tree = None
@@ -1759,8 +2057,28 @@ def simulate(
                 config.draft_per_candidate_ms * config.roof_candidate_budget,
                 verify_ms,
             )
-            if should_materialize_cycle():
-                record_cycle(CycleDiagnostic(
+            diagnostic_base_trees = (
+                plan.normal_trees
+                if policy.name == "dual-batch"
+                else plan.base_normal_trees
+            )
+            base_candidate_nodes = {
+                request_id: diagnostic_base_trees[request_id].selected_node_ids
+                for request_id in diagnostic_base_trees
+            }
+            base_work_preserved = all(
+                set(nodes).issubset(
+                    plan.normal_trees[request_id].selected_node_ids
+                )
+                for request_id, nodes in base_candidate_nodes.items()
+            )
+            if not base_work_preserved:
+                ledger.base_preservation_violations += 1
+            planned_candidates = plan.total_candidates + plan.total_eager_candidates
+            ledger.candidate_roof_used += planned_candidates
+            if planned_candidates > 0:
+                ledger.candidate_roof_capacity += config.roof_candidate_budget
+            diagnostic = CycleDiagnostic(
                     cycle=cycle,
                     active_requests=len(active),
                     pending_requests=len(pending) - pending_index,
@@ -1774,9 +2092,12 @@ def simulate(
                     cycle_latency_ms=cycle_ms,
                     predicted_cycle_latency_ms=predicted,
                     prediction_error_ms=cycle_ms - predicted,
-                ))
-            else:
-                cycle_diagnostics_truncated += 1
+                    verify_requests=len(verify_runtimes),
+                    verified_candidate_nodes=verified_candidates,
+                    base_request_ids=tuple(sorted(base_candidate_nodes)),
+                    base_candidate_nodes=base_candidate_nodes,
+                    base_work_preserved=base_work_preserved,
+                )
             for runtime in active.values():
                 runtime.elapsed_decode_ms += cycle_ms
                 runtime.service_latency_ms += cycle_ms
@@ -1784,6 +2105,18 @@ def simulate(
                 outcome = _verify_proposal(runtime, oracle, tree_oracle, ledger)
                 if runtime.request.request_id in parent_by_id:
                     _resolve_eager(runtime, outcome, ledger)
+            root_progress_cycle = ledger.baseline_root_progress - root_before_cycle
+            candidate_progress_cycle = ledger.accepted_tokens - accepted_before_cycle
+            diagnostic = replace(
+                diagnostic,
+                committed_candidate_tokens=candidate_progress_cycle,
+                root_progress=root_progress_cycle,
+                total_progress=root_progress_cycle + candidate_progress_cycle,
+            )
+            if should_materialize_cycle():
+                record_cycle(diagnostic)
+            else:
+                cycle_diagnostics_truncated += 1
             now_ms += cycle_ms
             finish_ready()
             previous_cycle_ms = cycle_ms
@@ -1814,6 +2147,7 @@ def simulate(
         last_arrival_ms=last_arrival,
         drain_completion_ms=now_ms,
         class_diagnostics=class_diagnostics,
+        cycles=cycle,
         cycle_diagnostics=cycle_diagnostics,
         cycle_diagnostics_truncated=cycle_diagnostics_truncated,
     )

@@ -9,6 +9,7 @@ from specrhythm.policies.base import PolicySnapshot, RequestView, StepPlan
 from specrhythm.policies.baselines import allocate_round_robin
 from specrhythm.policies.tree_aware import (
     allocate_adaserve_tree_aware,
+    allocate_specrhythm_residual,
     allocate_specrhythm_tree_aware,
 )
 from specrhythm.tree import predicted_dependency_path
@@ -360,9 +361,65 @@ class SpecRhythmPolicy:
             requested_progress_gap=normal.requested_progress_gap,
             slo_stage_budgets=normal.slo_stage_budgets,
             residual_stage_budgets=normal.residual_stage_budgets,
+            required_total_progress=normal.required_total_progress,
+            required_candidate_progress=normal.required_candidate_progress,
+            maximum_attainable_candidate_progress=(
+                normal.maximum_attainable_candidate_progress
+            ),
+            maximum_attainable_total_progress=(
+                normal.maximum_attainable_total_progress
+            ),
+            one_cycle_feasible=normal.one_cycle_feasible,
             normal_budget_displaced_by_eager=_attribute_normal_displacement(
                 eager,
                 actual_normal_candidates=normal.total_candidates,
                 counterfactual_normal_candidates=counterfactual.total_candidates,
             ),
+        )
+
+
+class ShapingDiagnosticPolicy:
+    """Guarded Phase-1 shaping ablation; never a default policy."""
+
+    execution_mode = "dual"
+    eager_enabled = False
+    eager_semantics = "none"
+
+    def __init__(
+        self,
+        variant: str,
+        *,
+        speculative_budget: int = 4,
+        residual_score: str = "urgency-path-probability",
+        n_max_slo: int = 8,
+    ) -> None:
+        if variant not in {
+            "shaping-feasible",
+            "shaping-residual",
+            "shaping-feasible-residual",
+        }:
+            raise ValueError("unknown shaping diagnostic variant")
+        self.name = variant
+        self.display_name = variant.replace("-", " ").title() + " diagnostic"
+        self.allocator = variant + "-tree-aware-diagnostic"
+        self.speculative_budget = speculative_budget
+        self.residual_score = residual_score
+        self.n_max_slo = n_max_slo
+        self.feasible_only = "feasible" in variant
+        self.residual_only = "residual" in variant
+
+    def plan(self, snapshot: PolicySnapshot) -> StepPlan:
+        if self.residual_only:
+            return allocate_specrhythm_residual(
+                snapshot,
+                per_request_budget=self.speculative_budget,
+                n_max_slo=self.n_max_slo,
+                residual_score=self.residual_score,
+                stage1_feasible_only=self.feasible_only,
+            )
+        return allocate_specrhythm_tree_aware(
+            snapshot,
+            n_max_slo=self.n_max_slo,
+            residual_score=self.residual_score,
+            stage1_feasible_only=True,
         )

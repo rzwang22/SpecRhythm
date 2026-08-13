@@ -1,6 +1,6 @@
 import math
 
-from specrhythm.cli import POLICY_ORDER, _policy
+from specrhythm.cli import DIAGNOSTIC_POLICY_ORDER, POLICY_ORDER, _policy
 from specrhythm.policies import (
     AdaServeStylePolicy,
     ARPolicy,
@@ -118,6 +118,26 @@ def test_simulation_is_deterministic():
     first = simulate(_workload(), SpecRhythmPolicy(), _config())
     second = simulate(_workload(), SpecRhythmPolicy(), _config())
     assert first == second
+
+
+def test_allocation_diagnostic_stream_is_deterministic():
+    first = []
+    second = []
+    config = _config()
+    simulate(
+        _workload(),
+        _policy("shaping-feasible-residual", config),
+        config,
+        allocation_sink=first.append,
+    )
+    simulate(
+        _workload(),
+        _policy("shaping-feasible-residual", config),
+        config,
+        allocation_sink=second.append,
+    )
+    assert first == second
+    assert first
 
 
 def test_ar_proposes_no_draft_tokens():
@@ -318,6 +338,50 @@ def test_summary_marks_unmodeled_context_and_proxy_parameters():
         "candidate_roof": "configured simulator proxy",
     }
     assert summary.simulator_parameters["speculative_budget"] == 4
+    assert summary.root_in_candidate_budget is False
+    assert summary.verify_latency_inputs["request_count_modeled"] is True
+    assert summary.verify_latency_inputs["candidate_node_count_modeled"] is True
+    assert "outside the candidate roof" in summary.target_input_positions
+
+
+def test_root_progress_is_counted_once_in_gap_progress_and_latency():
+    summary = simulate(
+        _workload(output_tokens=7, acceptance=1.0, count=1),
+        _policy("shaping-feasible", _config()),
+        _config(max_active_requests=1),
+    ).summary
+    assert summary.baseline_root_progress + summary.accepted_tokens == 7
+    assert math.isclose(
+        summary.total_progress_per_cycle,
+        summary.root_progress_per_cycle
+        + summary.candidate_committed_tokens_per_cycle,
+    )
+    for opportunity in summary.allocation_opportunity_diagnostics:
+        assert math.isclose(
+            opportunity.required_candidate_progress,
+            max(0.0, opportunity.required_total_progress - 1.0),
+        )
+        assert math.isclose(
+            opportunity.maximum_attainable_total_progress,
+            1.0 + opportunity.maximum_attainable_candidate_progress,
+        )
+
+
+def test_diagnostic_variants_are_deterministic_and_preserve_base_work():
+    workload = _workload(output_tokens=9, count=4)
+    config = _config(roof_candidate_budget=10, speculative_budget=2)
+    for name in DIAGNOSTIC_POLICY_ORDER:
+        first = simulate(workload, _policy(name, config), config)
+        second = simulate(workload, _policy(name, config), config)
+        assert first == second
+        assert first.summary.base_preservation_violations == 0
+        assert all(
+            cycle.base_work_preserved for cycle in first.summary.cycle_diagnostics
+        )
+        assert all(
+            cycle.normal_budget + cycle.eager_budget <= cycle.candidate_roof
+            for cycle in first.summary.cycle_diagnostics
+        )
 
 
 def _tight_loose_pressure_workload():
@@ -371,6 +435,36 @@ def test_shaping_prioritizes_larger_projected_gap_than_dual_batch():
     assert shaping.summary.cycle_diagnostics[1].budget_by_slo_class["3"] > (
         dual.summary.cycle_diagnostics[1].budget_by_slo_class["3"]
     )
+
+
+def test_default_shaping_reports_stage1_infeasible_allocations():
+    workload = Workload(
+        [
+            WorkloadRequest(
+                "r",
+                0,
+                1,
+                8,
+                1,
+                acceptance_probability=0.8,
+                draft_confidence=0.8,
+            )
+        ]
+    )
+    summary = simulate(
+        workload,
+        SpecRhythmPolicy(enable_eager=False),
+        _config(
+            max_active_requests=1,
+            roof_candidate_budget=2,
+            max_request_budget=2,
+            verify_base_ms=5,
+            verify_per_request_ms=0,
+            verify_per_candidate_ms=0,
+        ),
+    ).summary
+    assert summary.one_cycle_infeasible_opportunity_ratio > 0
+    assert summary.stage1_nodes_to_one_cycle_infeasible > 0
 
 
 def test_high_confidence_short_parent_eager_can_improve_goodput():
@@ -550,6 +644,7 @@ def test_all_modes_satisfy_proposal_and_token_accounting():
         DualEagerPolicy(2),
         SpecRhythmPolicy(enable_eager=False),
         SpecRhythmPolicy(),
+        *(_policy(name, _config()) for name in DIAGNOSTIC_POLICY_ORDER),
     )
     for policy in policies:
         summary = simulate(_workload(output_tokens=7), policy, _config()).summary

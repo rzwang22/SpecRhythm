@@ -5,6 +5,7 @@ import pytest
 from specrhythm.policies.base import PolicySnapshot, RequestView
 from specrhythm.policies.tree_aware import (
     allocate_adaserve_tree_aware,
+    allocate_specrhythm_residual,
     allocate_specrhythm_tree_aware,
     expected_progress_for_plan,
 )
@@ -58,6 +59,79 @@ def test_tree_prefix_closure_and_expected_progress():
     assert math.isclose(expected_tree_progress(tree, selected), 1.12)
     with pytest.raises(ValueError, match="prefix closed"):
         make_selected_tree(tree, ("b",))
+
+
+def test_one_cycle_feasibility_boundary_counts_root_once():
+    tree = _tree("r", [("a", "root", 1, 0.8, 0.8)])
+    boundary = _view("r", 1, tree, elapsed=1.8, max_budget=1)
+    above = _view("r", 1, tree, elapsed=1.800001, max_budget=1)
+    assert math.isclose(boundary.required_total_progress, 1.8)
+    assert math.isclose(boundary.required_candidate_progress, 0.8)
+    assert math.isclose(boundary.maximum_attainable_candidate_progress, 0.8)
+    assert math.isclose(boundary.maximum_attainable_total_progress, 1.8)
+    assert boundary.one_cycle_feasible
+    assert not above.one_cycle_feasible
+
+
+def test_feasible_guard_excludes_infeasible_only_from_stage1():
+    tree = _tree(
+        "r",
+        [
+            ("a", "root", 1, 0.8, 0.8),
+            ("b", "a", 2, 0.8, 0.64),
+        ],
+    )
+    infeasible = _view("r", 1, tree, elapsed=4, max_budget=2)
+    plan = allocate_specrhythm_tree_aware(
+        _snapshot(infeasible, roof=2),
+        n_max_slo=2,
+        stage1_feasible_only=True,
+    )
+    assert not plan.one_cycle_feasible["r"]
+    assert plan.slo_stage_budgets["r"] == 0
+    assert plan.residual_stage_budgets["r"] == 2
+    assert plan.normal_budgets["r"] == 2
+
+
+def test_residual_zero_strictly_preserves_dual_batch_allocation():
+    oracle = CandidateTreeOracle(1664)
+    requests = tuple(
+        _view(
+            f"r{index}",
+            40,
+            oracle.tree(f"r{index}", 0, width=2, depth=4, draft_confidence=0.8),
+            max_budget=4,
+        )
+        for index in range(2)
+    )
+    plan = allocate_specrhythm_residual(
+        _snapshot(*requests, roof=4),
+        per_request_budget=2,
+        n_max_slo=4,
+    )
+    assert plan.normal_budgets == {"r0": 2, "r1": 2}
+    assert plan.normal_trees == plan.base_normal_trees
+    assert plan.slo_stage_budgets == {"r0": 0, "r1": 0}
+    assert plan.residual_stage_budgets == {"r0": 0, "r1": 0}
+
+
+def test_residual_additions_preserve_base_prefixes_and_roof():
+    tree = CandidateTreeOracle(7).tree(
+        "r", 0, width=2, depth=3, draft_confidence=0.9
+    )
+    plan = allocate_specrhythm_residual(
+        _snapshot(_view("r", 1, tree, elapsed=1.5, max_budget=3), roof=3),
+        per_request_budget=1,
+        n_max_slo=3,
+    )
+    base = plan.base_normal_trees["r"]
+    selected = plan.normal_trees["r"]
+    assert base.candidate_budget == 1
+    assert set(base.selected_node_ids).issubset(selected.selected_node_ids)
+    assert selected.candidate_budget == 3
+    assert plan.total_candidates <= 3
+    # Construction validates prefix closure; rebuilding makes the invariant explicit.
+    assert make_selected_tree(tree, selected.selected_node_ids) == selected
 
 
 def test_adaserve_figure5_style_selection():

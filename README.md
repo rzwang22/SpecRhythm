@@ -108,6 +108,9 @@ See [docs/phase-a.md](docs/phase-a.md) for the evidence standard.
 | `dual-eager` | dual `max(D,V)` | SLO-unaware round-robin | guarded rolling |
 | `shaping-flat-proxy` | dual `max(D,V)` | legacy flat-sequence shaping proxy | no |
 | `shaping` | dual `max(D,V)` | SpecRhythm tree-aware shaping | no |
+| `shaping-feasible` | dual `max(D,V)` | shaping with one-cycle-feasible stage 1 | no |
+| `shaping-residual` | dual `max(D,V)` | frozen Dual-Batch base + residual shaping | no |
+| `shaping-feasible-residual` | dual `max(D,V)` | frozen base + feasible residual stage 1 | no |
 | `specrhythm-flat-proxy` | dual `max(D,V)` | legacy flat-sequence shaping proxy | guarded rolling |
 | `specrhythm` | dual `max(D,V)` | SpecRhythm tree-aware shaping | path-dependent rolling |
 
@@ -121,6 +124,11 @@ but candidate trees, latency, confidence, and roof remain proxies; it is not a c
 reproduction. The exact frozen formulas are in
 [docs/tree-aware-design.md](docs/tree-aware-design.md).
 
+The three `shaping-*` additions above are Phase-1 causal diagnostics, not proposed defaults.
+`one_cycle_infeasible` means only that the frozen projected cycle cannot recover the SLO; it does
+not classify a request as permanently unsalvageable. Residual variants preserve the complete
+same-state Dual-Batch base plan before using otherwise-unused candidate roof.
+
 `input_tokens` is preserved in workloads but is not yet an input to the latency surface.
 Context-dependent latency is not implemented. Until GPU calibration, `D(B,K,C)`, `V(B,K,C)`,
 acceptance, confidence, and the candidate roof are simulator/proxy parameters only.
@@ -133,11 +141,14 @@ Full per-cycle diagnostics are intentionally streamed outside Git:
 specrhythm simulate --workload /path/to/r3.jsonl --config configs/simulator.json \
   --policy specrhythm --output /external/results/summary.json \
   --cycle-output /external/results/cycles.jsonl \
-  --eager-output /external/results/eager-proposals.jsonl
+  --eager-output /external/results/eager-proposals.jsonl \
+  --allocation-output /external/results/allocation-opportunities.jsonl
 ```
 
-The summary retains at most 10,000 cycle/eager detail rows and reports truncation counts; all
-class histograms, means, accounting totals, goodput, and throughput remain exact online aggregates.
+The summary retains at most 10,000 cycle/eager/allocation detail rows and reports truncation
+counts; full streams can remain outside Git. All class histograms, feasibility/stage totals,
+progress rates, accounting totals, goodput, and throughput remain exact online aggregates.
 
 Project goals, roadmap, semantic boundaries, and per-PR progress are maintained in
-[docs/project-status.md](docs/project-status.md).
+[docs/project-status.md](docs/project-status.md). The scoped Phase-1 causal results are in
+[docs/phase1-shaping-diagnosis.md](docs/phase1-shaping-diagnosis.md).

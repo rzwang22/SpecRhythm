@@ -18,6 +18,7 @@ from specrhythm.policies import (
     DualEagerPolicy,
     LegacyFlatShapingProxyPolicy,
     SerialSDPolicy,
+    ShapingDiagnosticPolicy,
     SpecRhythmPolicy,
 )
 from specrhythm.provenance import build_manifest, pin_source_url
@@ -45,6 +46,14 @@ POLICY_ORDER = (
     "specrhythm-flat-proxy",
     "specrhythm",
 )
+
+DIAGNOSTIC_POLICY_ORDER = (
+    "shaping-feasible",
+    "shaping-residual",
+    "shaping-feasible-residual",
+)
+
+SIMULATION_POLICY_ORDER = POLICY_ORDER + DIAGNOSTIC_POLICY_ORDER
 
 
 def _write_json(value: Any, path: Optional[str]) -> None:
@@ -81,6 +90,13 @@ def _policy(name: str, config: SimulatorConfig) -> Any:
     if name == "shaping":
         return SpecRhythmPolicy(
             enable_eager=False,
+            n_max_slo=config.n_max_slo,
+            residual_score=config.specrhythm_residual_score,
+        )
+    if name in DIAGNOSTIC_POLICY_ORDER:
+        return ShapingDiagnosticPolicy(
+            name,
+            speculative_budget=config.speculative_budget,
             n_max_slo=config.n_max_slo,
             residual_score=config.specrhythm_residual_score,
         )
@@ -135,7 +151,7 @@ def build_parser() -> argparse.ArgumentParser:
     simulation.add_argument("--config", required=True)
     simulation.add_argument(
         "--policy",
-        choices=POLICY_ORDER,
+        choices=SIMULATION_POLICY_ORDER,
         required=True,
         help=(
             "execution mode; adaserve is a tree-aware control-plane baseline under "
@@ -150,6 +166,10 @@ def build_parser() -> argparse.ArgumentParser:
     simulation.add_argument(
         "--eager-output",
         help="optional full per-eager-proposal JSONL diagnostics (keep outside Git)",
+    )
+    simulation.add_argument(
+        "--allocation-output",
+        help="optional full per-allocation-opportunity JSONL diagnostics (keep outside Git)",
     )
 
     compare = subparsers.add_parser("compare", help="compare all Phase-A policies")
@@ -305,6 +325,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         cycle_sink = None
         eager_handle = None
         eager_sink = None
+        allocation_handle = None
+        allocation_sink = None
         if args.cycle_output:
             cycle_path = Path(args.cycle_output)
             cycle_path.parent.mkdir(parents=True, exist_ok=True)
@@ -321,6 +343,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             def eager_sink(value):
                 eager_handle.write(json.dumps(asdict(value), sort_keys=True) + "\n")
 
+        if args.allocation_output:
+            allocation_path = Path(args.allocation_output)
+            allocation_path.parent.mkdir(parents=True, exist_ok=True)
+            allocation_handle = allocation_path.open("w", encoding="utf-8")
+
+            def allocation_sink(value):
+                allocation_handle.write(json.dumps(asdict(value), sort_keys=True) + "\n")
+
         try:
             result = simulate(
                 workload,
@@ -328,12 +358,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 config,
                 cycle_sink=cycle_sink,
                 eager_sink=eager_sink,
+                allocation_sink=allocation_sink,
             )
         finally:
             if cycle_handle is not None:
                 cycle_handle.close()
             if eager_handle is not None:
                 eager_handle.close()
+            if allocation_handle is not None:
+                allocation_handle.close()
         _write_json(result.summary.to_dict(), args.output)
         return 0
     if args.command == "compare":

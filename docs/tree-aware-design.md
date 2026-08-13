@@ -18,6 +18,44 @@ The AdaServe artifact commit `7f07ba2bf98c505c86dd4c1bacb6384454fa37a5`
 uses a total batch-token budget that includes one root per request. This repository converts that
 to a non-root candidate roof explicitly instead of silently mixing conventions.
 
+The latency proxy uses both kinds of work, without charging either twice:
+
+```text
+V = verify_base_ms
+    + verify_per_request_ms * target_input_positions
+    + verify_per_candidate_ms * selected_candidate_nodes
+```
+
+`target_input_positions` is the number of requests verified in the cycle: each contributes one
+root/target input position. `selected_candidate_nodes` is the number of stored non-root candidate
+nodes in those proposals. Consequently, adding a request can add base verification latency even
+when its candidate budget is zero. Candidate-roof utilization uses drafted non-root nodes over
+`roof_candidate_budget` for cycles with a non-empty allocation opportunity; pure verification or
+idle-slot cycles are excluded. The reported Dual-Batch and shaping utilization values therefore
+have the same denominator and exclude roots.
+
+## Frozen one-cycle feasibility diagnostic
+
+For an allocation opportunity, the projected-progress quantity remains:
+
+```text
+A_i = max(0, (elapsed_latency_i + estimated_next_cycle_latency) / tpot_slo_i
+             - generated_tokens_i)
+required_total_progress_i = A_i
+required_candidate_progress_i = max(0, A_i - 1)
+maximum_attainable_total_progress_i
+  = 1 + maximum_expected_candidate_progress_i
+one_cycle_feasible_i
+  = required_total_progress_i <= maximum_attainable_total_progress_i
+```
+
+`A_i` is total required progress and has not already subtracted a future root. Exactly one
+guaranteed root is therefore removed when deriving the candidate gap and restored when computing
+maximum total progress. It is not subtracted or added anywhere else. The maximum expected
+candidate progress is the highest-weight prefix-closed selection within the request's existing
+candidate tree and per-request cap. This label only says whether the current projected cycle can
+recover the SLO; `one_cycle_infeasible` does not mean globally or permanently unsalvageable.
+
 ## Deterministic tree and verifier
 
 `CandidateTreeOracle(seed)` indexes a candidate tree and target branch by
@@ -67,6 +105,24 @@ residual urgency * node expected progress
 The diagnostic ablation `path-probability` removes residual urgency and is AdaServe-like. The
 default `urgency-path-probability` is not changed based on which experiment is favorable. All
 ties use score, request ID, then node ID. Prefix closure and `max_request_budget` remain mandatory.
+
+## Phase-1 guarded shaping diagnostics
+
+The following policies are diagnostic ablations only. They do not alter or replace the default
+`shaping`, `dual-eager`, or `specrhythm` algorithms.
+
+- `shaping-feasible` changes only stage-1 eligibility: a positive-gap request must also be
+  `one_cycle_feasible`. Infeasible requests remain eligible for the unchanged stage 2.
+- `shaping-residual` first invokes the same round-robin allocator as `dual-batch` on the same
+  snapshot. Its request set, per-request budgets, selected path nodes, and root opportunities are
+  frozen. Shaping may only add prefix-closed nodes using unused roof; a zero residual roof is
+  exactly the Dual-Batch plan.
+- `shaping-feasible-residual` combines frozen base work with feasible-only residual stage 1;
+  infeasible requests still participate in residual stage 2.
+
+Every residual plan carries its counterfactual base request IDs and candidate node IDs. Runtime
+validation rejects any plan that removes a base node, reduces a base budget, breaks prefix closure,
+or exceeds the shared candidate roof. The three variants add no urgency threshold or tuned knob.
 
 ## Rolling eager dependency
 

@@ -1,6 +1,6 @@
 # SpecRhythm project status
 
-Last updated: 2026-08-12
+Last updated: 2026-08-13
 
 Maintenance rule: every code-changing PR updates this file with its scope, status, evidence,
 known limitations, and next gate before that PR is considered complete.
@@ -32,7 +32,52 @@ claims.
 | PR | Status | Scope | Evidence / boundary |
 | --- | --- | --- | --- |
 | [#1 workload-v0.1](https://github.com/rzwang22/SpecRhythm/pull/1) | merged | strict Mooncake replay, R3 proxy config, validator, manifest, fixture tests and docs | workload plumbing only; proxy payload and illustrative acceptance |
-| [#2 simulator-semantics-v0.2](https://github.com/rzwang22/SpecRhythm/pull/2) | draft, tree-aware control-plane revision implemented; review pending | proposal lifecycle, deterministic tree oracle, independent AdaServe/SpecRhythm allocators, class/cycle diagnostics, path-aware eager and accounting | 2×-4× capacity-knee and eager-grid evidence complete; pure Python proxy only; no GPU integration or performance claim |
+| [#2 simulator-semantics-v0.2](https://github.com/rzwang22/SpecRhythm/pull/2) | draft, Phase 1 shaping diagnosis implemented; review pending | proposal lifecycle, deterministic tree oracle, tree-aware allocators, guarded shaping ablations, class/cycle/opportunity diagnostics, path-aware eager and accounting | 2×-4× knee evidence plus the scoped 2.75×/3.0×/3.25× causal diagnosis; pure Python proxy only; no GPU integration or performance claim |
+
+## Phase 1: shaping causal diagnosis
+
+Three opt-in diagnostics were added without changing the default algorithms:
+`shaping-feasible`, `shaping-residual`, and `shaping-feasible-residual`. One-cycle feasibility uses
+the frozen total progress gap, counts one future root exactly once, and does not label a request
+globally unsalvageable. Residual variants freeze the same-state Dual-Batch request set, per-request
+budget, selected candidate path, and root opportunities before shaping otherwise-unused roof.
+
+The scoped full-R3 proxy results are:
+
+| Load | Policy | Goodput tok/s | Attainment | Queue s | P90 TPOT ms | Total progress/cycle | Infeasible opportunities | Stage-1 → infeasible |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 2.75× | Dual-Batch | 2557.9 | 0.990 | 0.36 | 28.4 | 63.61 | 0.055 | 0 |
+| 2.75× | shaping | 2566.5 | 0.996 | 0.25 | 26.3 | 69.74 | 0.035 | 336,357 (85.7% of stage 1) |
+| 2.75× | feasible | 2565.7 | 0.996 | 0.25 | 26.3 | 69.74 | 0.035 | 0 |
+| 2.75× | residual | 2567.5 | 0.998 | 0.19 | 25.0 | 69.62 | 0.027 | 128,113 (92.0%) |
+| 2.75× | feasible + residual | 2566.8 | 0.997 | 0.19 | 24.9 | 69.61 | 0.027 | 0 |
+| 3.0× | Dual-Batch | 1968.3 | 0.673 | 5.91 | 119.9 | 69.93 | 0.409 | 0 |
+| 3.0× | shaping | 1746.8 | 0.632 | 11.50 | 228.3 | 74.60 | 0.425 | 3,597,597 (99.0%) |
+| 3.0× | feasible | 1750.3 | 0.633 | 11.28 | 224.3 | 74.64 | 0.424 | 0 |
+| 3.0× | residual | 2146.6 | 0.728 | 4.30 | 93.6 | 76.70 | 0.353 | 1,177,804 (99.4%) |
+| 3.0× | feasible + residual | 2144.7 | 0.727 | 4.31 | 93.6 | 76.71 | 0.354 | 0 |
+| 3.25× | Dual-Batch | 1291.6 | 0.421 | 22.70 | 373.5 | 73.24 | 0.640 | 0 |
+| 3.25× | shaping | 1117.4 | 0.394 | 37.43 | 612.5 | 76.81 | 0.655 | 5,421,587 (99.6%) |
+| 3.25× | feasible | 1116.2 | 0.394 | 37.29 | 609.8 | 76.87 | 0.654 | 0 |
+| 3.25× | residual | 1414.4 | 0.457 | 19.17 | 321.8 | 80.57 | 0.609 | 1,761,091 (99.8%) |
+| 3.25× | feasible + residual | 1415.0 | 0.457 | 19.14 | 321.6 | 80.57 | 0.608 | 0 |
+
+The feasible-only guard removes essentially all stage-1 allocation to one-cycle-infeasible
+requests but leaves goodput almost unchanged. Preserving Dual-Batch breadth/base opportunities is
+the materially positive intervention at 3.0× and 3.25×. Combining the guards adds no material gain
+over residual preservation alone. This supports breadth/root opportunity cost as the dominant
+modeled cause at the proxy knee; it does not validate a new default or a GPU performance claim.
+
+All residual runs report zero base-preservation violations. Their base trees come from the exact
+Dual-Batch allocator and sequence-path materializer on each variant's same cycle state; residual
+nodes are prefix closed and never evict base work. Because earlier scheduling choices can make
+independent runs reach different later states, the invariant is a same-state counterfactual, not
+a claim that cycle IDs across divergent runs always contain identical active request sets.
+
+Detailed summaries remain outside Git under
+`SpecRhythm-data/results/simulator-semantics-v0.2/phase1-shaping-diagnosis/`.
+The full table, class-good-token breakdown, progress accounting, and utilization-denominator audit
+are in [phase1-shaping-diagnosis.md](phase1-shaping-diagnosis.md).
 
 ## Superseded flat-proxy evidence
 

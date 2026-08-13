@@ -167,6 +167,28 @@ def expected_tree_progress(tree: CandidateTree, selected: SelectedProposalTree) 
     return sum(by_id[node_id].path_probability for node_id in selected.selected_node_ids)
 
 
+def maximum_expected_candidate_progress(tree: CandidateTree, budget: int) -> float:
+    """Return the maximum prefix-closed expected progress under a node budget.
+
+    Candidate path probabilities are non-increasing along every edge. Sorting by
+    probability, then shallower depth, therefore cannot select a descendant before
+    its ancestor and yields the maximum-weight prefix-closed set.
+    """
+
+    if not isinstance(budget, int) or isinstance(budget, bool) or budget < 0:
+        raise ValueError("candidate progress budget must be a non-negative integer")
+    ranked = sorted(
+        tree.candidate_nodes,
+        key=lambda node: (-node.path_probability, node.depth, node.node_id),
+    )
+    selected = ranked[:budget]
+    chosen = {node.node_id for node in selected}
+    for node in selected:
+        if node.parent_id != tree.root.node_id and node.parent_id not in chosen:
+            raise AssertionError("maximum-progress selection lost prefix closure")
+    return sum(node.path_probability for node in selected)
+
+
 def predicted_dependency_path(
     tree: CandidateTree, selected: SelectedProposalTree
 ) -> tuple[str, ...]:

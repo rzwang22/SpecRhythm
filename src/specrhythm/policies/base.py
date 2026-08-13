@@ -6,7 +6,11 @@ import math
 from dataclasses import dataclass, field
 from typing import Optional, Protocol
 
-from specrhythm.tree import CandidateTree, SelectedProposalTree
+from specrhythm.tree import (
+    CandidateTree,
+    SelectedProposalTree,
+    maximum_expected_candidate_progress,
+)
 
 
 @dataclass(frozen=True)
@@ -52,6 +56,40 @@ class RequestView:
         return max(0.0, self.continuous_progress_gap - 1.0)
 
     @property
+    def required_total_progress(self) -> float:
+        """Total root-plus-candidate progress required by the frozen SLO gap."""
+
+        return self.continuous_progress_gap
+
+    @property
+    def required_candidate_progress(self) -> float:
+        """Candidate progress required after counting one guaranteed root once."""
+
+        return self.candidate_progress_gap
+
+    @property
+    def maximum_attainable_candidate_progress(self) -> float:
+        if self.candidate_tree is None:
+            return sum(
+                self.acceptance_benefit**depth
+                for depth in range(1, self.max_budget + 1)
+            )
+        return maximum_expected_candidate_progress(
+            self.candidate_tree, self.max_budget
+        )
+
+    @property
+    def maximum_attainable_total_progress(self) -> float:
+        return 1.0 + self.maximum_attainable_candidate_progress
+
+    @property
+    def one_cycle_feasible(self) -> bool:
+        return (
+            self.required_total_progress
+            <= self.maximum_attainable_total_progress + 1e-12
+        )
+
+    @property
     def acceptance_benefit(self) -> float:
         recent = max(0.0, min(1.0, self.recent_acceptance_ratio))
         confidence = max(0.0, min(1.0, self.draft_confidence))
@@ -84,6 +122,15 @@ class StepPlan:
     slo_stage_budgets: dict[str, int] = field(default_factory=dict)
     residual_stage_budgets: dict[str, int] = field(default_factory=dict)
     normal_budget_displaced_by_eager: dict[str, int] = field(default_factory=dict)
+    base_normal_budgets: dict[str, int] = field(default_factory=dict)
+    base_normal_trees: dict[str, SelectedProposalTree] = field(default_factory=dict)
+    required_total_progress: dict[str, float] = field(default_factory=dict)
+    required_candidate_progress: dict[str, float] = field(default_factory=dict)
+    maximum_attainable_candidate_progress: dict[str, float] = field(
+        default_factory=dict
+    )
+    maximum_attainable_total_progress: dict[str, float] = field(default_factory=dict)
+    one_cycle_feasible: dict[str, bool] = field(default_factory=dict)
 
     @property
     def budgets(self) -> dict[str, int]:

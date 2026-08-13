@@ -4,15 +4,17 @@ from __future__ import annotations
 
 import heapq
 from dataclasses import dataclass
-from typing import Callable
+from typing import Callable, Optional
 
 from specrhythm.policies.base import PolicySnapshot, RequestView, StepPlan
+from specrhythm.policies.baselines import allocate_round_robin
 from specrhythm.tree import (
     CandidateTree,
     CandidateTreeNode,
     SelectedProposalTree,
     expected_tree_progress,
     make_selected_tree,
+    select_sequence_path,
 )
 
 
@@ -64,14 +66,25 @@ class _SelectionState:
         return make_selected_tree(self.tree, self.selected)
 
 
-def _states(snapshot: PolicySnapshot) -> dict[str, _SelectionState]:
+def _states(
+    snapshot: PolicySnapshot,
+    initial_trees: Optional[dict[str, SelectedProposalTree]] = None,
+) -> dict[str, _SelectionState]:
     result = {}
     for request in snapshot.normal_requests:
-        result[request.request_id] = _SelectionState(
+        state = _SelectionState(
             request=request,
             tree=request.candidate_tree or _fallback_sequence_tree(request),
             selected=[],
         )
+        initial = (initial_trees or {}).get(request.request_id)
+        if initial is not None:
+            for node_id in initial.selected_node_ids:
+                eligible = {node.node_id: node for node in state.eligible(request.max_budget)}
+                if node_id not in eligible:
+                    raise ValueError("initial proposal tree is not prefix closed")
+                state.add(eligible[node_id])
+        result[request.request_id] = state
     return result
 
 
@@ -128,8 +141,12 @@ def _allocate_frontier(
 
 
 def _finish(
-    states: dict[str, _SelectionState], slo_stage: dict[str, int]
+    states: dict[str, _SelectionState],
+    slo_stage: dict[str, int],
+    base_trees: Optional[dict[str, SelectedProposalTree]] = None,
 ) -> StepPlan:
+    has_base = base_trees is not None
+    base_trees = base_trees or {}
     trees = {request_id: state.proposal() for request_id, state in states.items()}
     return StepPlan(
         normal_budgets={key: tree.candidate_budget for key, tree in trees.items()},
@@ -141,7 +158,31 @@ def _finish(
         },
         slo_stage_budgets=slo_stage,
         residual_stage_budgets={
-            key: len(state.selected) - slo_stage[key] for key, state in states.items()
+            key: len(state.selected)
+            - base_trees.get(key, SelectedProposalTree((), (), 0)).candidate_budget
+            - slo_stage[key]
+            for key, state in states.items()
+        },
+        base_normal_budgets={
+            key: tree.candidate_budget for key, tree in base_trees.items()
+        },
+        base_normal_trees=dict(base_trees) if has_base else {},
+        required_total_progress={
+            key: state.request.required_total_progress for key, state in states.items()
+        },
+        required_candidate_progress={
+            key: state.request.required_candidate_progress for key, state in states.items()
+        },
+        maximum_attainable_candidate_progress={
+            key: state.request.maximum_attainable_candidate_progress
+            for key, state in states.items()
+        },
+        maximum_attainable_total_progress={
+            key: state.request.maximum_attainable_total_progress
+            for key, state in states.items()
+        },
+        one_cycle_feasible={
+            key: state.request.one_cycle_feasible for key, state in states.items()
         },
     )
 
@@ -197,14 +238,21 @@ def allocate_specrhythm_tree_aware(
     *,
     n_max_slo: int,
     residual_score: str = "urgency-path-probability",
+    stage1_feasible_only: bool = False,
+    base_trees: Optional[dict[str, SelectedProposalTree]] = None,
 ) -> StepPlan:
     """SpecRhythm §4.4 control-plane interpretation frozen in the design document."""
 
     if residual_score not in {"path-probability", "urgency-path-probability"}:
         raise ValueError("unknown SpecRhythm residual score")
-    states = _states(snapshot)
+    states = _states(snapshot, base_trees)
     slo_stage = {request_id: 0 for request_id in states}
-    remaining = snapshot.roof_candidate_budget
+    base_candidates = sum(
+        tree.candidate_budget for tree in (base_trees or {}).values()
+    )
+    if base_candidates > snapshot.roof_candidate_budget:
+        raise ValueError("base proposal trees exceed the candidate roof")
+    remaining = snapshot.roof_candidate_budget - base_candidates
 
     # Stage 1: among requests with an uncovered projected gap, greedily select the
     # eligible node with greatest residual-urgency-weighted expected progress.
@@ -215,6 +263,7 @@ def allocate_specrhythm_tree_aware(
         enabled=lambda state: (
             state.request.candidate_progress_gap > 0
             and state.expected + 1e-12 < state.request.candidate_progress_gap
+            and (not stage1_feasible_only or state.request.one_cycle_feasible)
         ),
         score=lambda state, node: _residual_urgency(state) * node.path_probability,
         on_add=lambda state: slo_stage.__setitem__(
@@ -237,7 +286,33 @@ def allocate_specrhythm_tree_aware(
         ),
         on_add=lambda state: None,
     )
-    return _finish(states, slo_stage)
+    return _finish(states, slo_stage, base_trees)
+
+
+def allocate_specrhythm_residual(
+    snapshot: PolicySnapshot,
+    *,
+    per_request_budget: int,
+    n_max_slo: int,
+    residual_score: str = "urgency-path-probability",
+    stage1_feasible_only: bool = False,
+) -> StepPlan:
+    """Freeze Dual-Batch work, then shape only otherwise-unused candidate roof."""
+
+    base_budgets = allocate_round_robin(snapshot, per_request_budget)
+    base_trees = {}
+    for request in snapshot.normal_requests:
+        tree = request.candidate_tree or _fallback_sequence_tree(request)
+        base_trees[request.request_id] = select_sequence_path(
+            tree, base_budgets[request.request_id]
+        )
+    return allocate_specrhythm_tree_aware(
+        snapshot,
+        n_max_slo=n_max_slo,
+        residual_score=residual_score,
+        stage1_feasible_only=stage1_feasible_only,
+        base_trees=base_trees,
+    )
 
 
 def expected_progress_for_plan(

@@ -10,6 +10,7 @@ from specrhythm.policies.specrhythm import (
     AdaServeStylePolicy,
     DualEagerPolicy,
     LegacyFlatShapingProxyPolicy,
+    ShapingDiagnosticPolicy,
     SpecRhythmPolicy,
 )
 
@@ -20,6 +21,7 @@ __all__ = [
     "DualBatchPolicy",
     "DualEagerPolicy",
     "LegacyFlatShapingProxyPolicy",
+    "ShapingDiagnosticPolicy",
     "SerialSDPolicy",
     "SpecRhythmPolicy",
 ]
