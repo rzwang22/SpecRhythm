@@ -11,9 +11,9 @@ The repository currently provides:
 - piecewise-Gamma synthetic arrivals and strict, windowed Mooncake timestamp replay;
 - task-conditioned, correlated input/output token lengths;
 - JSON validation reports and checksum-based provenance manifests;
-- AR, fixed-budget, MineDraft-like uniform, shaping-only, and full SpecRhythm policies;
-- a deterministic dual-batch discrete-event simulator;
-- goodput, SLO-attainment, throughput, and TPOT metrics;
+- seven explicitly named cumulative-ablation modes from AR through SpecRhythm;
+- a deterministic proposal-lifecycle simulator with guarded eager promotion;
+- queueing/service/end-to-end latency, goodput, SLO-attainment, and TPOT metrics;
 - tests for budget, prefix, determinism, and accounting invariants.
 
 ## Quick start
@@ -92,5 +92,99 @@ tests/                   Unit and integration tests
 ~~~
 
 The simulator is useful for rejecting bad policies and checking invariants. It is not evidence
-of a speedup until its latency and acceptance inputs are calibrated on the intended model pair,
-GPU topology, and engine. See [docs/phase-a.md](docs/phase-a.md) for the evidence standard.
+of a speedup or a GPU performance predictor. The current latency surfaces and acceptance inputs
+remain illustrative; engine integration and performance claims require a later measured model.
+See [docs/phase-a.md](docs/phase-a.md) for the evidence standard.
+
+## Simulator mode contract
+
+| Mode | Execution | Allocation | Eager |
+| --- | --- | --- | --- |
+| `ar` | target-only full active batch | none | no |
+| `serial-sd` | serial `D + V` | SLO-unaware round-robin | no |
+| `adaserve-flat-proxy` | serial `D + V` | legacy flat-sequence shaping proxy | no |
+| `adaserve` | serial `D + V` | AdaServe tree-aware control-plane allocator | no |
+| `dual-batch` | dual `max(D,V)` | SLO-unaware round-robin | no |
+| `dual-eager` | dual `max(D,V)` | SLO-unaware round-robin | guarded rolling |
+| `shaping-flat-proxy` | dual `max(D,V)` | legacy flat-sequence shaping proxy | no |
+| `shaping` | dual `max(D,V)` | SpecRhythm tree-aware shaping | no |
+| `shaping-feasible` | dual `max(D,V)` | shaping with one-cycle-feasible stage 1 | no |
+| `residual-round-robin` | dual `max(D,V)` | frozen Dual-Batch base + request-round-robin fill | no |
+| `residual-probability` | dual `max(D,V)` | frozen Dual-Batch base + path-probability fill | no |
+| `shaping-residual` | dual `max(D,V)` | frozen Dual-Batch base + residual shaping | no |
+| `feasible-residual` | dual `max(D,V)` | frozen base + feasible residual shaping | no |
+| `shaping-feasible-residual` | dual `max(D,V)` | frozen base + feasible residual stage 1 | no |
+| `specrhythm-flat-proxy` | dual `max(D,V)` | legacy flat-sequence shaping proxy | guarded rolling |
+| `specrhythm` | dual `max(D,V)` | SpecRhythm tree-aware shaping | path-dependent rolling |
+
+`serial-sd` and `dual-batch` intentionally share request ordering, per-request budgets,
+candidate roof, maximum budget, acceptance trace, and active-set limit. Their only execution
+difference for a fixed logical batch is `D + V` versus `max(D,V)`. On an arrival trace, that
+wall-clock difference can legitimately change when later requests enter the active set; both
+modes still apply the same selection and allocation rules. `adaserve-flat-proxy` preserves the
+old linear allocator for diagnostics only. `adaserve` uses an independent tree-aware allocator,
+but candidate trees, latency, confidence, and roof remain proxies; it is not a complete AdaServe
+reproduction. The exact frozen formulas are in
+[docs/tree-aware-design.md](docs/tree-aware-design.md).
+
+The three `shaping-*` additions above are Phase-1 causal diagnostics, not proposed defaults.
+`one_cycle_infeasible` means only that the frozen projected cycle cannot recover the SLO; it does
+not classify a request as permanently unsalvageable. Residual variants preserve the complete
+same-state Dual-Batch base plan before using otherwise-unused candidate roof.
+
+Phase 1.5 aligns residual roof utilization and finds that `residual-probability` materially
+outperforms `shaping-residual` at 3.0× and 3.25×. The current SLO-stage formula is therefore kept
+only as a diagnostic/provenance path, not promoted as a forward mechanism. See
+[docs/phase1.5-residual-selection.md](docs/phase1.5-residual-selection.md).
+
+Phase 2 is exposed through separate diagnostic commands, not through the normal policy order or
+cumulative ablation. It replays common Residual-Probability snapshots with nested search pools and
+target-leaking oracle ceilings:
+
+```bash
+specrhythm phase2-replay --workload /external/r3-3.0x.jsonl \
+  --config configs/simulator.json --sample-size 10000 \
+  --output /external/phase2/r3-3.0x.json \
+  --snapshot-output /external/phase2/r3-3.0x-snapshots.jsonl.gz
+
+specrhythm phase2-simulate --workload /external/r3-3.0x.jsonl \
+  --config configs/simulator.json --variant oracle-global-residual \
+  --search-ratio 4 --output /external/phase2/r3-3.0x-c-4x.json
+```
+
+All Phase-2 variants are diagnostic only. Ratios above 1 assume fully hidden search and do not
+include a measured large-pool draft latency. See
+[docs/phase2-oracle-headroom.md](docs/phase2-oracle-headroom.md).
+
+The completed audit contains 3/3 common replays (10,000 corrected-queue snapshots each), 9/9
+references, and all 48 end-to-end cells. A_1× exactly reproduces Residual-Probability at all
+three loads. The dominant oracle gap is within-request candidate selection; however, the canonical
+target is already fully covered by the frozen 1× pool, so this experiment cannot identify real
+missing-target coverage or claim that 8× search is free.
+
+`input_tokens` is preserved in workloads but is not yet an input to the latency surface.
+Context-dependent latency is not implemented. Until GPU calibration, `D(B,K,C)`, `V(B,K,C)`,
+acceptance, confidence, and the candidate roof are simulator/proxy parameters only.
+The current eager full-parent admission threshold (`0.10`) is also an explicit proxy parameter,
+not a measured system constant.
+The candidate roof constrains only non-root nodes; it is not a measured hardware frontier. GPU
+profiling must measure `T_verify(B_req, B_cand, C)` jointly rather than sweeping candidate nodes
+alone.
+
+Full per-cycle diagnostics are intentionally streamed outside Git:
+
+```bash
+specrhythm simulate --workload /path/to/r3.jsonl --config configs/simulator.json \
+  --policy specrhythm --output /external/results/summary.json \
+  --cycle-output /external/results/cycles.jsonl \
+  --eager-output /external/results/eager-proposals.jsonl \
+  --allocation-output /external/results/allocation-opportunities.jsonl
+```
+
+The summary retains at most 10,000 cycle/eager/allocation detail rows and reports truncation
+counts; full streams can remain outside Git. All class histograms, feasibility/stage totals,
+progress rates, accounting totals, goodput, and throughput remain exact online aggregates.
+
+Project goals, roadmap, semantic boundaries, and per-PR progress are maintained in
+[docs/project-status.md](docs/project-status.md). The scoped Phase-1 causal results are in
+[docs/phase1-shaping-diagnosis.md](docs/phase1-shaping-diagnosis.md).

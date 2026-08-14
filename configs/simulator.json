@@ -6,7 +6,13 @@
   "verify_per_request_ms": 0.12,
   "verify_per_candidate_ms": 0.035,
   "draft_per_candidate_ms": 0.025,
-  "fixed_speculative_budget": 4,
+  "speculative_budget": 4,
+  "candidate_tree_width": 2,
+  "candidate_tree_depth": 8,
+  "n_max_slo": 8,
+  "max_eager_budget": 2,
+  "min_dependency_path_probability": 0.1,
+  "specrhythm_residual_score": "urgency-path-probability",
   "max_cycles": 1000000,
   "seed": 1664
 }

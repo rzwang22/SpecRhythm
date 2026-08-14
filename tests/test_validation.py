@@ -63,6 +63,16 @@ def test_validate_cli_returns_nonzero_and_writes_report(tmp_path):
     assert json.loads(report_path.read_text())["valid"] is False
 
 
+def test_validator_rejects_invalid_draft_confidence(tmp_path):
+    record = _record("request-0", 0)
+    record["draft_confidence"] = 1.1
+    report = validate_workload(_write(tmp_path, [record]))
+    assert report["valid"] is False
+    assert "invalid_draft_confidence" in {
+        error["code"] for error in report["errors"]
+    }
+
+
 def test_validator_rejects_empty_workload(tmp_path):
     path = tmp_path / "empty.jsonl"
     path.write_text("")

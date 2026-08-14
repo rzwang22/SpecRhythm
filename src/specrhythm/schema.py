@@ -13,9 +13,9 @@ from typing import Any, Iterable, Optional, Union
 class WorkloadRequest:
     """One request entering the decode scheduler.
 
-    arrival_time_ms is relative time. slo_tpot_ms applies to decode time only.
-    Acceptance probability is a Phase-A calibration input, not a property that can be inferred
-    from token lengths.
+    arrival_time_ms is relative time. slo_tpot_ms applies to end-to-end decode time from arrival,
+    including queueing before active-set admission. Acceptance probability and draft confidence
+    are separate Phase-A calibration inputs, not properties inferred from token lengths.
     """
 
     request_id: str
@@ -30,6 +30,7 @@ class WorkloadRequest:
     turn_index: Optional[int] = None
     acceptance_probability: float = 0.7
     metadata: dict[str, Any] = field(default_factory=dict)
+    draft_confidence: float = 0.7
 
     def __post_init__(self) -> None:
         if not isinstance(self.request_id, str) or not self.request_id.strip():
@@ -64,6 +65,13 @@ class WorkloadRequest:
             or not 0 <= self.acceptance_probability <= 1
         ):
             raise ValueError("acceptance_probability must be finite and in [0, 1]")
+        if (
+            not isinstance(self.draft_confidence, (int, float))
+            or isinstance(self.draft_confidence, bool)
+            or not math.isfinite(self.draft_confidence)
+            or not 0 <= self.draft_confidence <= 1
+        ):
+            raise ValueError("draft_confidence must be finite and in [0, 1]")
         if self.turn_index is not None and (
             not isinstance(self.turn_index, int)
             or isinstance(self.turn_index, bool)

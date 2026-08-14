@@ -146,6 +146,18 @@ def validate_workload(
                 line_number,
             )
 
+        confidence = row.get("draft_confidence", 0.7)
+        if (
+            not _is_number(confidence)
+            or not math.isfinite(float(confidence))
+            or not 0 <= float(confidence) <= 1
+        ):
+            add_error(
+                "invalid_draft_confidence",
+                "draft_confidence must be finite and in [0, 1]",
+                line_number,
+            )
+
         task_value = row.get("task")
         task = str(task_value) if task_value is not None else "unknown"
         tasks[task] += 1

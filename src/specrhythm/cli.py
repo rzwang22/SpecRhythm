@@ -1,15 +1,33 @@
-"""Command-line entry point for workload and Phase-A experiments."""
+"""Command-line entry point for workload and simulator experiments."""
 
 from __future__ import annotations
 
 import argparse
+import gzip
 import json
 import shlex
 import sys
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Optional, Sequence
 
-from specrhythm.policies import ARPolicy, FixedBudgetPolicy, MineDraftPolicy, SpecRhythmPolicy
+from specrhythm.phase2 import (
+    PHASE2_VARIANTS,
+    SEARCH_RATIOS,
+    common_snapshot_replay,
+    run_phase2_end_to_end,
+)
+from specrhythm.policies import (
+    AdaServeFlatProxyPolicy,
+    AdaServeStylePolicy,
+    ARPolicy,
+    DualBatchPolicy,
+    DualEagerPolicy,
+    LegacyFlatShapingProxyPolicy,
+    SerialSDPolicy,
+    ShapingDiagnosticPolicy,
+    SpecRhythmPolicy,
+)
 from specrhythm.provenance import build_manifest, pin_source_url
 from specrhythm.schema import Workload
 from specrhythm.simulator import SimulatorConfig, simulate
@@ -22,6 +40,30 @@ from specrhythm.workload import (
     select_arrival_replay,
     summarize_workload,
 )
+
+POLICY_ORDER = (
+    "ar",
+    "serial-sd",
+    "adaserve-flat-proxy",
+    "adaserve",
+    "dual-batch",
+    "dual-eager",
+    "shaping-flat-proxy",
+    "shaping",
+    "specrhythm-flat-proxy",
+    "specrhythm",
+)
+
+DIAGNOSTIC_POLICY_ORDER = (
+    "shaping-feasible",
+    "residual-round-robin",
+    "residual-probability",
+    "shaping-residual",
+    "feasible-residual",
+    "shaping-feasible-residual",
+)
+
+SIMULATION_POLICY_ORDER = POLICY_ORDER + DIAGNOSTIC_POLICY_ORDER
 
 
 def _write_json(value: Any, path: Optional[str]) -> None:
@@ -37,14 +79,44 @@ def _write_json(value: Any, path: Optional[str]) -> None:
 def _policy(name: str, config: SimulatorConfig) -> Any:
     if name == "ar":
         return ARPolicy()
-    if name == "fixed":
-        return FixedBudgetPolicy(config.fixed_speculative_budget)
-    if name == "minedraft":
-        return MineDraftPolicy(config.max_request_budget)
+    if name == "serial-sd":
+        return SerialSDPolicy(config.speculative_budget)
+    if name == "adaserve":
+        return AdaServeStylePolicy(config.n_max_slo)
+    if name == "adaserve-flat-proxy":
+        return AdaServeFlatProxyPolicy()
+    if name == "shaping-flat-proxy":
+        return LegacyFlatShapingProxyPolicy(enable_eager=False)
+    if name == "specrhythm-flat-proxy":
+        return LegacyFlatShapingProxyPolicy(enable_eager=True)
+    if name == "dual-batch":
+        return DualBatchPolicy(config.speculative_budget)
+    if name == "dual-eager":
+        return DualEagerPolicy(
+            config.speculative_budget,
+            max_eager_budget=config.max_eager_budget,
+            min_dependency_path_probability=config.min_dependency_path_probability,
+        )
     if name == "shaping":
-        return SpecRhythmPolicy(enable_eager=False)
+        return SpecRhythmPolicy(
+            enable_eager=False,
+            n_max_slo=config.n_max_slo,
+            residual_score=config.specrhythm_residual_score,
+        )
+    if name in DIAGNOSTIC_POLICY_ORDER:
+        return ShapingDiagnosticPolicy(
+            name,
+            speculative_budget=config.speculative_budget,
+            n_max_slo=config.n_max_slo,
+            residual_score=config.specrhythm_residual_score,
+        )
     if name == "specrhythm":
-        return SpecRhythmPolicy()
+        return SpecRhythmPolicy(
+            n_max_slo=config.n_max_slo,
+            residual_score=config.specrhythm_residual_score,
+            max_eager_budget=config.max_eager_budget,
+            min_dependency_path_probability=config.min_dependency_path_probability,
+        )
     raise ValueError(f"unknown policy: {name}")
 
 
@@ -69,6 +141,7 @@ def build_parser() -> argparse.ArgumentParser:
     mooncake.add_argument("--time-scale", type=float, default=1.0)
     mooncake.add_argument("--slo-tpot-ms", type=float, default=50.0)
     mooncake.add_argument("--acceptance-probability", type=float, default=0.7)
+    mooncake.add_argument("--draft-confidence", type=float, default=0.7)
 
     summary = subparsers.add_parser("summarize", help="summarize a canonical workload")
     summary.add_argument("--workload", required=True)
@@ -88,15 +161,88 @@ def build_parser() -> argparse.ArgumentParser:
     simulation.add_argument("--config", required=True)
     simulation.add_argument(
         "--policy",
-        choices=["ar", "fixed", "minedraft", "shaping", "specrhythm"],
+        choices=SIMULATION_POLICY_ORDER,
         required=True,
+        help=(
+            "execution mode; adaserve is a tree-aware control-plane baseline under "
+            "proxy inputs; adaserve-flat-proxy retains the legacy flat-sequence proxy"
+        ),
     )
     simulation.add_argument("--output")
+    simulation.add_argument(
+        "--cycle-output",
+        help="optional full per-cycle JSONL diagnostics (keep outside Git)",
+    )
+    simulation.add_argument(
+        "--eager-output",
+        help="optional full per-eager-proposal JSONL diagnostics (keep outside Git)",
+    )
+    simulation.add_argument(
+        "--allocation-output",
+        help="optional full per-allocation-opportunity JSONL diagnostics (keep outside Git)",
+    )
 
     compare = subparsers.add_parser("compare", help="compare all Phase-A policies")
     compare.add_argument("--workload", required=True)
     compare.add_argument("--config", required=True)
     compare.add_argument("--output")
+
+    knee = subparsers.add_parser(
+        "capacity-knee", help="run a proxy capacity-knee policy sweep"
+    )
+    knee.add_argument(
+        "--workload",
+        action="append",
+        nargs=2,
+        metavar=("TIME_SCALE", "PATH"),
+        required=True,
+    )
+    knee.add_argument("--config", required=True)
+    knee.add_argument("--output", required=True)
+
+    eager_grid = subparsers.add_parser(
+        "eager-grid", help="run the complete guarded-eager sensitivity grid"
+    )
+    eager_grid.add_argument("--workload", required=True)
+    eager_grid.add_argument("--config", required=True)
+    eager_grid.add_argument("--output", required=True)
+
+    phase2_replay = subparsers.add_parser(
+        "phase2-replay",
+        help="run diagnostic-only common-snapshot oracle headroom replay",
+        description=(
+            "Replay diagnostic-only structural oracle headroom on common snapshots. "
+            "Search cost is metadata-only, all ratios assume fully hidden search, and "
+            "the output is not a deployable measured result."
+        ),
+    )
+    phase2_replay.add_argument("--workload", required=True)
+    phase2_replay.add_argument("--config", required=True)
+    phase2_replay.add_argument("--sample-size", type=int, default=10_000)
+    phase2_replay.add_argument("--output", required=True)
+    phase2_replay.add_argument(
+        "--snapshot-output",
+        help="optional compact reproducible snapshot JSONL or JSONL.GZ outside Git",
+    )
+
+    phase2_simulate = subparsers.add_parser(
+        "phase2-simulate",
+        help="run one diagnostic-only fully-hidden-search system upper bound",
+        description=(
+            "Run a diagnostic-only end-to-end system upper bound. Oracle variants "
+            "may leak target outcomes, large-pool search cost is not charged, and the "
+            "output is not a deployable measured result."
+        ),
+    )
+    phase2_simulate.add_argument("--workload", required=True)
+    phase2_simulate.add_argument("--config", required=True)
+    phase2_simulate.add_argument(
+        "--variant", choices=tuple(PHASE2_VARIANTS.values()), required=True
+    )
+    phase2_simulate.add_argument(
+        "--search-ratio", choices=SEARCH_RATIOS, type=int, required=True
+    )
+    phase2_simulate.add_argument("--output", required=True)
     return parser
 
 
@@ -175,6 +321,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             time_scale=args.time_scale,
             slo_tpot_ms=args.slo_tpot_ms,
             acceptance_probability=args.acceptance_probability,
+            draft_confidence=args.draft_confidence,
         )
         workload.save_jsonl(args.output)
         _write_json(summarize_workload(workload), None)
@@ -205,18 +352,124 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         _write_json(report, args.output)
         return 0 if report["valid"] else 1
 
-    workload = Workload.load_jsonl(args.workload)
     config = SimulatorConfig.from_dict(load_json(args.config))
+    if args.command == "capacity-knee":
+        from specrhythm.diagnostics import capacity_knee_report, write_report
+
+        report = capacity_knee_report(
+            ((float(scale), path) for scale, path in args.workload), config
+        )
+        write_report(report, args.output)
+        return 0
+    workload = Workload.load_jsonl(args.workload)
+    if args.command == "eager-grid":
+        from specrhythm.diagnostics import eager_grid_report, write_report
+
+        write_report(eager_grid_report(workload, config), args.output)
+        return 0
+    if args.command == "phase2-replay":
+        snapshot_handle = None
+        snapshot_sink = None
+        if args.snapshot_output:
+            snapshot_path = Path(args.snapshot_output)
+            snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+            if snapshot_path.suffix == ".gz":
+                snapshot_handle = gzip.open(snapshot_path, "wt", encoding="utf-8")
+            else:
+                snapshot_handle = snapshot_path.open("w", encoding="utf-8")
+
+            def snapshot_sink(value):
+                snapshot_handle.write(json.dumps(value, sort_keys=True) + "\n")
+
+        try:
+            report = common_snapshot_replay(
+                workload,
+                config,
+                sample_size=args.sample_size,
+                snapshot_sink=snapshot_sink,
+            )
+        finally:
+            if snapshot_handle is not None:
+                snapshot_handle.close()
+        _write_json(report, args.output)
+        return 0
+    if args.command == "phase2-simulate":
+        variant = next(
+            key for key, value in PHASE2_VARIANTS.items() if value == args.variant
+        )
+        result = run_phase2_end_to_end(
+            workload,
+            config,
+            variant=variant,
+            search_ratio=args.search_ratio,
+        )
+        payload = result.summary.to_dict()
+        payload["evidence_kind"] = "fully-hidden-search-system-upper-bound"
+        payload["deployable_measured_result"] = False
+        _write_json(payload, args.output)
+        return 0
     if args.command == "simulate":
-        result = simulate(workload, _policy(args.policy, config), config)
+        cycle_handle = None
+        cycle_sink = None
+        eager_handle = None
+        eager_sink = None
+        allocation_handle = None
+        allocation_sink = None
+        if args.cycle_output:
+            cycle_path = Path(args.cycle_output)
+            cycle_path.parent.mkdir(parents=True, exist_ok=True)
+            cycle_handle = cycle_path.open("w", encoding="utf-8")
+
+            def cycle_sink(value):
+                cycle_handle.write(json.dumps(asdict(value), sort_keys=True) + "\n")
+
+        if args.eager_output:
+            eager_path = Path(args.eager_output)
+            eager_path.parent.mkdir(parents=True, exist_ok=True)
+            eager_handle = eager_path.open("w", encoding="utf-8")
+
+            def eager_sink(value):
+                eager_handle.write(json.dumps(asdict(value), sort_keys=True) + "\n")
+
+        if args.allocation_output:
+            allocation_path = Path(args.allocation_output)
+            allocation_path.parent.mkdir(parents=True, exist_ok=True)
+            allocation_handle = allocation_path.open("w", encoding="utf-8")
+
+            def allocation_sink(value):
+                allocation_handle.write(json.dumps(asdict(value), sort_keys=True) + "\n")
+
+        try:
+            result = simulate(
+                workload,
+                _policy(args.policy, config),
+                config,
+                cycle_sink=cycle_sink,
+                eager_sink=eager_sink,
+                allocation_sink=allocation_sink,
+            )
+        finally:
+            if cycle_handle is not None:
+                cycle_handle.close()
+            if eager_handle is not None:
+                eager_handle.close()
+            if allocation_handle is not None:
+                allocation_handle.close()
         _write_json(result.summary.to_dict(), args.output)
         return 0
     if args.command == "compare":
-        names = ("ar", "fixed", "minedraft", "shaping", "specrhythm")
+        names = POLICY_ORDER
         summaries = [
             simulate(workload, _policy(name, config), config).summary.to_dict() for name in names
         ]
-        _write_json({"summaries": summaries}, args.output)
+        _write_json(
+            {
+                "schema_version": "specrhythm.comparison.v3",
+                "policy_order": list(names),
+                "summaries": summaries,
+            },
+            args.output,
+        )
         return 0
     raise AssertionError("unreachable")
 
