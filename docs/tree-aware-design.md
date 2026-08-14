@@ -69,6 +69,55 @@ carry a conditional token confidence and cumulative path probability. The verifi
 target branch and returns its node IDs plus committed progress. Selection is valid only when every
 non-root ancestor is selected. With width 1, the model is exactly sequence speculative decoding.
 
+The historical verifier chooses its target child from the children in the `CandidateTree` passed
+to `verify`. That is policy independent while the pool is fixed, but it is not search-ratio
+independent: adding children could change the random-choice range and therefore ground truth.
+Phase 2 does not silently change this historical behavior. Its isolated canonical oracle first
+projects the immutable 1× tree, freezes the historical target trajectory on that tree, and only
+then appends deterministic branches. Consequently A_1× is checked against the historical
+Residual-Probability plan on every replayed snapshot, while 2×/4×/8× share one target trajectory.
+
+## Phase-2 search and verification budgets
+
+Phase 2 separates candidate generation from target verification:
+
+```text
+B_search = non-root nodes materialized in the candidate pool
+B_verify = non-root selected nodes sent to target verification
+```
+
+The configured candidate roof, base request set, root opportunities, `B_verify`, and
+`T_verify(B_req, B_cand, C)` inputs remain fixed. Only `B_search` grows by 1×, 2×, 4×, or 8×.
+The maximum forest is generated once conceptually; lower-ratio pools are prefix-closed subsets.
+Original node IDs, parents, depths, confidence, and path probability are copied exactly. Requested
+and realized pool sizes are reported separately. Roots count in neither search nor candidate
+verification budgets.
+
+The Phase-2 generator preserves the complete historical 1× forest and appends deterministic
+root-to-depth branches. This makes the nesting and A_1× compatibility exact, but it also exposes a
+model limitation: the historical target trajectory already lies entirely in the 1× forest. Extra
+branches can test selector robustness to a larger pool, but cannot reveal missing-target coverage
+or better-drafter headroom. A zero pool gain in this diagnostic must not be interpreted as zero
+large-pool headroom for a real drafter.
+
+Four diagnostic-only selectors operate on each common snapshot:
+
+- `residual-probability-current-selector` (A) freezes the Dual-Batch base and fills residual roof
+  by path probability without target access.
+- `oracle-within-request-residual` (B) preserves A's per-request residual budget vector and uses
+  the canonical target only to choose nodes within each request.
+- `oracle-global-residual` (C) preserves every base node but reallocates residual slots across
+  base requests to maximize current-cycle committed candidate progress.
+- `oracle-full-tree-ceiling` (D) preserves all base requests and roots and the same global
+  `B_verify`, but may replace base and residual nodes.
+
+B/C/D are explicit target-leaking upper bounds. Every selected tree must be a prefix-closed subset
+of its ratio-specific pool. Common-snapshot validation requires `B >= A`, `C >= B`, and `D >= C`
+for realized candidate progress before any aggregation. End-to-end runs use the same variants only
+as fully-hidden-search system upper bounds; their divergent later states are not direct
+displacement evidence. Search latency is metadata-only, so no ratio greater than 1 is deployable
+goodput evidence.
+
 ## AdaServe tree-aware allocation
 
 For request `i`:

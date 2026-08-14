@@ -32,7 +32,7 @@ claims.
 | PR | Status | Scope | Evidence / boundary |
 | --- | --- | --- | --- |
 | [#1 workload-v0.1](https://github.com/rzwang22/SpecRhythm/pull/1) | merged | strict Mooncake replay, R3 proxy config, validator, manifest, fixture tests and docs | workload plumbing only; proxy payload and illustrative acceptance |
-| [#2 simulator-semantics-v0.2](https://github.com/rzwang22/SpecRhythm/pull/2) | draft, Phase 1.5 residual selection diagnosis implemented; review pending | proposal lifecycle, deterministic tree oracle, tree-aware allocators, base-preserving residual controls, class/cycle/opportunity diagnostics, path-aware eager and accounting | scoped 2.75×/3.0×/3.25× residual-selector evidence; pure Python proxy only; no GPU integration or performance claim |
+| [#2 simulator-semantics-v0.2](https://github.com/rzwang22/SpecRhythm/pull/2) | draft, Phase 2 oracle-headroom implementation and matrix complete; review pending | proposal lifecycle, deterministic tree oracle, tree-aware allocators, base-preserving residual controls, Phase-2 nested search pools and common-snapshot oracle replay, path-aware eager and accounting | pure-Python proxy and oracle upper bounds only; no deployable oracle, measured search cost, GPU integration, or performance claim |
 
 ## Phase 1.5: residual selection
 
@@ -56,6 +56,46 @@ The scalar candidate roof is explicitly not a GPU capacity claim. The proxy char
 root positions and candidate positions, while GPU calibration must measure the joint surface
 `T_verify(B_req, B_cand, C)`. Full results and definitions are in
 [phase1.5-residual-selection.md](phase1.5-residual-selection.md).
+
+## Phase 2: oracle headroom
+
+Phase 2 leaves every existing policy unchanged and exposes two separate diagnostic commands.
+`phase2-replay` performs the primary same-snapshot causal comparison, while `phase2-simulate`
+reports secondary end-to-end, fully-hidden-search upper bounds. Neither command is part of the
+normal policy order.
+
+The historical target oracle samples its next target child from the tree passed to verification,
+so changing pool width would also change ground truth. The isolated Phase-2 oracle instead freezes
+the historical target trajectory on the immutable 1× tree, then adds deterministic, prefix-closed
+branches. This makes `A_1×` strictly comparable with Residual-Probability and keeps target truth
+constant across ratios and selectors. It also means the canonical target is always present in the
+1× pool: this proxy can measure selector, cross-request residual-allocation, and full-tree gaps,
+but it cannot identify real missing-target or better-drafter pool-coverage headroom.
+
+The primary replay uses 10,000 deterministic, stratified snapshots per load and keeps
+`B_verify`, request roots, the target outcome, and the proxy verification surface fixed while
+expanding metadata-only `B_search` to 1×/2×/4×/8×. Variants A/B/C/D isolate the current
+target-blind selector, within-request target oracle, global residual oracle, and full-tree oracle
+ceiling respectively. All are marked diagnostic-only; B/C/D explicitly leak target outcomes and
+all ratios assume search is fully hidden. Detailed definitions, sampling coverage, results, and
+decision boundaries are in [phase2-oracle-headroom.md](phase2-oracle-headroom.md).
+
+The completion audit reused all valid interrupted-run artifacts and executed only nine missing
+3.25× cells. Final coverage is 3/3 common replays with exactly 10,000 corrected-queue snapshots
+each, 9/9 references, and 48/48 end-to-end oracle cells. A_1× reproduces Phase-1.5
+Residual-Probability at all three loads with exact integer equality and floating-point absolute
+tolerance `1e-12`.
+
+On common snapshots at 8×, B−A adds 16.36/17.07/17.55 committed candidates per cycle across
+2.75×/3.0×/3.25×; C−B adds 1.69/3.18/4.02; D−C adds 2.49/2.83/3.01. All
+360,000 ordered dominance checks pass. A loses 9.26/9.34/9.33 candidates per cycle versus A_1×
+because added branches are distractors around a target already fully covered by 1×.
+
+End to end, A's 1×→8× goodput falls 2567.0→1761.1, 2452.3→1114.0, and
+1587.4→742.1 tokens/s. B largely removes the selector loss; at 3.25× it reaches
+2952.6/.9412 goodput/attainment at 4×. C reaches 3030.2/.9963 and D 3033.7/.9988, with C/D
+core outcomes unchanged by ratio because their oracle already finds the 1× target. These are
+fully-hidden-search system ceilings, not deployable or GPU-measured performance.
 
 ## Phase 1: shaping causal diagnosis
 
@@ -104,9 +144,11 @@ are in [phase1-shaping-diagnosis.md](phase1-shaping-diagnosis.md).
 
 ## Superseded flat-proxy evidence
 
-- The superseded flat revision had 80 passing tests. The tree-aware revision has 106 passing tests,
-  Ruff clean, including prefix closure, Figure 5 selection, width-1 degeneration, path-dependent
-  eager, goodput denominator, and proposal/token/tree-node conservation.
+- The superseded flat revision had 80 passing tests. The current tree-aware/Phase-2 revision has
+  115 passing tests and is Ruff clean, including prefix closure, Figure 5 selection, width-1
+  degeneration, path-dependent eager, goodput denominator, proposal/token/tree-node conservation,
+  and both Phase-2 CLI commands. The recovery baseline had 114 tests; one integration test was
+  added to exercise `phase2-replay` and `phase2-simulate` through the CLI.
 - Full Mooncake R3 proxy replay validates at 12,031 requests for 1×, 2×, 4×, and 8×
   time scales, corresponding to 3.401, 6.802, 13.605, and 27.210 requests/s.
 - 1× and 2× remain mostly below the configured proxy capacity; 4× and 8× show large queueing

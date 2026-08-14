@@ -28,6 +28,8 @@ class RequestView:
     candidate_tree: Optional[CandidateTree] = None
     parent_selected_tree: Optional[SelectedProposalTree] = None
     estimated_next_iteration_latency_ms: float = 0.0
+    acceptance_probability: float = 0.7
+    prefix_epoch: int = 0
 
     @property
     def estimated_tpot_ms(self) -> float:

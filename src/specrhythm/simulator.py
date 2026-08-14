@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import math
 import statistics
+from bisect import bisect_right
 from dataclasses import asdict, dataclass, field, replace
 from typing import Any, Callable, Optional
 
@@ -227,6 +228,22 @@ class CycleDiagnostic:
 
 
 @dataclass(frozen=True)
+class PlanningDiagnostic:
+    """One policy-independent planning opportunity for counterfactual replay."""
+
+    cycle: int
+    now_ms: float
+    active_requests: int
+    active_request_ids: tuple[str, ...]
+    pending_requests: int
+    verification_request_count: int
+    verified_candidate_nodes: int
+    verify_latency_ms: float
+    snapshot: PolicySnapshot
+    plan: StepPlan
+
+
+@dataclass(frozen=True)
 class AllocationOpportunityDiagnostic:
     request_id: str
     slo_tpot_ms: float
@@ -287,6 +304,11 @@ class SimulationSummary:
     base_allocator: str
     residual_selector: str
     eager_semantics: str
+    diagnostic_only: bool
+    uses_target_outcome: bool
+    assumes_fully_hidden_search: bool
+    search_latency_mode: str
+    search_budget_ratio: int
     requests: int
     completed_requests: int
     first_arrival_ms: float
@@ -356,6 +378,15 @@ class SimulationSummary:
     mean_candidate_tree_width: float
     mean_candidate_tree_depth: float
     mean_candidate_tree_nodes: float
+    maximum_pool_width: int
+    maximum_pool_depth: int
+    mean_pool_width: float
+    mean_pool_depth: float
+    requested_search_nodes: int
+    realized_search_nodes: int
+    achieved_search_ratio: float
+    verified_candidate_nodes: int
+    search_to_verify_ratio: float
     selected_path_probability_distribution: dict[str, float]
     allocator_stage_metrics: dict[str, int]
     cycles: int
@@ -513,6 +544,11 @@ class _LifecycleLedger:
     candidate_tree_width_sum: int = 0
     candidate_tree_depth_sum: int = 0
     candidate_tree_node_sum: int = 0
+    candidate_tree_width_max: int = 0
+    candidate_tree_depth_max: int = 0
+    requested_search_nodes: int = 0
+    realized_search_nodes: int = 0
+    base_search_nodes: float = 0.0
     class_stats: dict[str, dict[str, Any]] = field(default_factory=dict)
     request_stats: dict[str, dict[str, Any]] = field(default_factory=dict)
     eager_events: dict[tuple[Any, ...], dict[str, Any]] = field(default_factory=dict)
@@ -603,7 +639,28 @@ class _LifecycleLedger:
             self.candidate_tree_samples += 1
             self.candidate_tree_width_sum += proposal.candidate_tree.width
             self.candidate_tree_depth_sum += proposal.candidate_tree.depth
-            self.candidate_tree_node_sum += len(proposal.candidate_tree.candidate_nodes)
+            realized_nodes = len(proposal.candidate_tree.candidate_nodes)
+            self.candidate_tree_node_sum += realized_nodes
+            self.candidate_tree_width_max = max(
+                self.candidate_tree_width_max, proposal.candidate_tree.width
+            )
+            self.candidate_tree_depth_max = max(
+                self.candidate_tree_depth_max, proposal.candidate_tree.depth
+            )
+            self.requested_search_nodes += (
+                proposal.candidate_tree.requested_candidate_nodes
+                if proposal.candidate_tree.requested_candidate_nodes is not None
+                else realized_nodes
+            )
+            self.realized_search_nodes += realized_nodes
+            requested_nodes = (
+                proposal.candidate_tree.requested_candidate_nodes
+                if proposal.candidate_tree.requested_candidate_nodes is not None
+                else realized_nodes
+            )
+            self.base_search_nodes += (
+                requested_nodes / proposal.candidate_tree.search_budget_ratio
+            )
 
     def record_verified(self, proposal: Proposal, accepted_tokens: int) -> None:
         self._record_terminal(proposal)
@@ -1014,7 +1071,7 @@ def _build_summary(
                 return bucket / 100.0
         return 0.0
     return SimulationSummary(
-        schema_version="specrhythm.simulation-summary.v4",
+        schema_version="specrhythm.simulation-summary.v5",
         model_status="simulator-proxy-not-gpu-measured",
         input_tokens_modeled=False,
         context_dependent_latency_modeled=False,
@@ -1033,6 +1090,13 @@ def _build_summary(
         base_allocator=getattr(policy, "base_allocator", "not-applicable"),
         residual_selector=getattr(policy, "residual_selector", "not-applicable"),
         eager_semantics=policy.eager_semantics,
+        diagnostic_only=getattr(policy, "diagnostic_only", False),
+        uses_target_outcome=getattr(policy, "uses_target_outcome", False),
+        assumes_fully_hidden_search=getattr(
+            policy, "assumes_fully_hidden_search", False
+        ),
+        search_latency_mode=getattr(policy, "search_latency_mode", "modeled-selected-only"),
+        search_budget_ratio=getattr(policy, "search_budget_ratio", 1),
         requests=len(results),
         completed_requests=len(results),
         first_arrival_ms=first_arrival_ms,
@@ -1157,6 +1221,31 @@ def _build_summary(
         mean_candidate_tree_nodes=(
             ledger.candidate_tree_node_sum / ledger.candidate_tree_samples
             if ledger.candidate_tree_samples
+            else 0.0
+        ),
+        maximum_pool_width=ledger.candidate_tree_width_max,
+        maximum_pool_depth=ledger.candidate_tree_depth_max,
+        mean_pool_width=(
+            ledger.candidate_tree_width_sum / ledger.candidate_tree_samples
+            if ledger.candidate_tree_samples
+            else 0.0
+        ),
+        mean_pool_depth=(
+            ledger.candidate_tree_depth_sum / ledger.candidate_tree_samples
+            if ledger.candidate_tree_samples
+            else 0.0
+        ),
+        requested_search_nodes=ledger.requested_search_nodes,
+        realized_search_nodes=ledger.realized_search_nodes,
+        achieved_search_ratio=(
+            ledger.realized_search_nodes / ledger.base_search_nodes
+            if ledger.base_search_nodes
+            else 0.0
+        ),
+        verified_candidate_nodes=ledger.verified_tokens,
+        search_to_verify_ratio=(
+            ledger.realized_search_nodes / ledger.verified_tokens
+            if ledger.verified_tokens
             else 0.0
         ),
         selected_path_probability_distribution={
@@ -1323,6 +1412,8 @@ def _request_view(
         candidate_tree=candidate_tree or (parent.candidate_tree if parent is not None else None),
         parent_selected_tree=parent.selected_tree if parent is not None else None,
         estimated_next_iteration_latency_ms=estimated_next_iteration_latency_ms,
+        acceptance_probability=runtime.request.acceptance_probability,
+        prefix_epoch=runtime.prefix_epoch,
     )
 
 
@@ -1334,7 +1425,7 @@ def _plan(
     config: SimulatorConfig,
     tree_oracle: CandidateTreeOracle,
     previous_cycle_ms: float,
-) -> StepPlan:
+) -> tuple[StepPlan, PolicySnapshot]:
     estimated_draft_ms = config.draft_per_candidate_ms * min(
         config.roof_candidate_budget,
         sum(
@@ -1484,7 +1575,9 @@ def _plan(
             raise ValueError(f"policy {policy.name} returned an invalid normal budget")
         base_tree = plan.base_normal_trees.get(request_id)
         selected_tree = plan.normal_trees.get(request_id)
-        if base_tree is not None:
+        if base_tree is not None and not getattr(
+            policy, "allows_base_node_replacement", False
+        ):
             if selected_tree is None or not set(base_tree.selected_node_ids).issubset(
                 selected_tree.selected_node_ids
             ):
@@ -1499,7 +1592,7 @@ def _plan(
             or budget > eager_by_id[request_id].max_budget
         ):
             raise ValueError(f"policy {policy.name} returned an invalid eager budget")
-    return plan
+    return plan, snapshot
 
 
 def _draft_normal(
@@ -1789,6 +1882,7 @@ def simulate(
     cycle_sink: Optional[Callable[[CycleDiagnostic], None]] = None,
     eager_sink: Optional[Callable[[EagerDiagnostic], None]] = None,
     allocation_sink: Optional[Callable[[AllocationOpportunityDiagnostic], None]] = None,
+    planning_sink: Optional[Callable[[PlanningDiagnostic], None]] = None,
 ) -> SimulationResult:
     """Run an explicit AR, serial-SD, or dual-batch proposal state machine."""
 
@@ -1801,6 +1895,7 @@ def simulate(
         raise ValueError("acceptance oracle max_k is smaller than max_request_budget")
 
     pending = list(workload.requests)
+    pending_arrival_times = [request.arrival_time_ms for request in pending]
     pending_index = 0
     active: dict[str, RuntimeRequest] = {}
     all_runtimes: dict[str, RuntimeRequest] = {}
@@ -1855,6 +1950,12 @@ def simulate(
             _discard_finished_proposals(runtime, ledger)
             completed.append(_complete_request(runtime))
 
+    def waiting_request_count() -> int:
+        """Count arrived requests waiting for admission, excluding future arrivals."""
+
+        ready_end = bisect_right(pending_arrival_times, now_ms, lo=pending_index)
+        return ready_end - pending_index
+
     while pending_index < len(pending) or active:
         if cycle >= config.max_cycles:
             raise RuntimeError("simulation exceeded max_cycles")
@@ -1882,7 +1983,7 @@ def simulate(
                 record_cycle(CycleDiagnostic(
                     cycle=cycle,
                     active_requests=len(active),
-                    pending_requests=len(pending) - pending_index,
+                    pending_requests=waiting_request_count(),
                     candidate_roof=0,
                     normal_budget=0,
                     eager_budget=0,
@@ -1940,7 +2041,7 @@ def simulate(
             ledger.verify_request_positions += len(verify_runtimes)
             root_before_cycle = ledger.baseline_root_progress
             accepted_before_cycle = ledger.accepted_tokens
-            plan = _plan(
+            plan, policy_snapshot = _plan(
                 policy,
                 normal_runtimes,
                 eager_parents,
@@ -1949,6 +2050,21 @@ def simulate(
                 tree_oracle,
                 previous_cycle_ms,
             )
+            if planning_sink is not None:
+                planning_sink(
+                    PlanningDiagnostic(
+                        cycle=cycle,
+                        now_ms=now_ms,
+                        active_requests=len(active),
+                        active_request_ids=tuple(sorted(active)),
+                        pending_requests=waiting_request_count(),
+                        verification_request_count=len(verify_runtimes),
+                        verified_candidate_nodes=verified_candidates,
+                        verify_latency_ms=verify_ms,
+                        snapshot=policy_snapshot,
+                        plan=plan,
+                    )
+                )
             drafted: list[Proposal] = []
             normal_by_id = {
                 runtime.request.request_id: runtime for runtime in normal_runtimes
@@ -2076,8 +2192,12 @@ def simulate(
                 for request_id in diagnostic_base_trees
             }
             base_work_preserved = all(
-                set(nodes).issubset(
-                    plan.normal_trees[request_id].selected_node_ids
+                request_id in plan.normal_trees
+                and (
+                    getattr(policy, "allows_base_node_replacement", False)
+                    or set(nodes).issubset(
+                        plan.normal_trees[request_id].selected_node_ids
+                    )
                 )
                 for request_id, nodes in base_candidate_nodes.items()
             )
@@ -2090,7 +2210,7 @@ def simulate(
             diagnostic = CycleDiagnostic(
                     cycle=cycle,
                     active_requests=len(active),
-                    pending_requests=len(pending) - pending_index,
+                    pending_requests=waiting_request_count(),
                     candidate_roof=config.roof_candidate_budget,
                     normal_budget=plan.total_candidates,
                     eager_budget=plan.total_eager_candidates,

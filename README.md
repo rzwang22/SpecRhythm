@@ -137,6 +137,31 @@ outperforms `shaping-residual` at 3.0× and 3.25×. The current SLO-stage formul
 only as a diagnostic/provenance path, not promoted as a forward mechanism. See
 [docs/phase1.5-residual-selection.md](docs/phase1.5-residual-selection.md).
 
+Phase 2 is exposed through separate diagnostic commands, not through the normal policy order or
+cumulative ablation. It replays common Residual-Probability snapshots with nested search pools and
+target-leaking oracle ceilings:
+
+```bash
+specrhythm phase2-replay --workload /external/r3-3.0x.jsonl \
+  --config configs/simulator.json --sample-size 10000 \
+  --output /external/phase2/r3-3.0x.json \
+  --snapshot-output /external/phase2/r3-3.0x-snapshots.jsonl.gz
+
+specrhythm phase2-simulate --workload /external/r3-3.0x.jsonl \
+  --config configs/simulator.json --variant oracle-global-residual \
+  --search-ratio 4 --output /external/phase2/r3-3.0x-c-4x.json
+```
+
+All Phase-2 variants are diagnostic only. Ratios above 1 assume fully hidden search and do not
+include a measured large-pool draft latency. See
+[docs/phase2-oracle-headroom.md](docs/phase2-oracle-headroom.md).
+
+The completed audit contains 3/3 common replays (10,000 corrected-queue snapshots each), 9/9
+references, and all 48 end-to-end cells. A_1× exactly reproduces Residual-Probability at all
+three loads. The dominant oracle gap is within-request candidate selection; however, the canonical
+target is already fully covered by the frozen 1× pool, so this experiment cannot identify real
+missing-target coverage or claim that 8× search is free.
+
 `input_tokens` is preserved in workloads but is not yet an input to the latency surface.
 Context-dependent latency is not implemented. Until GPU calibration, `D(B,K,C)`, `V(B,K,C)`,
 acceptance, confidence, and the candidate roof are simulator/proxy parameters only.

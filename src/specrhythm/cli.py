@@ -1,8 +1,9 @@
-"""Command-line entry point for workload and Phase-A experiments."""
+"""Command-line entry point for workload and simulator experiments."""
 
 from __future__ import annotations
 
 import argparse
+import gzip
 import json
 import shlex
 import sys
@@ -10,6 +11,12 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Optional, Sequence
 
+from specrhythm.phase2 import (
+    PHASE2_VARIANTS,
+    SEARCH_RATIOS,
+    common_snapshot_replay,
+    run_phase2_end_to_end,
+)
 from specrhythm.policies import (
     AdaServeFlatProxyPolicy,
     AdaServeStylePolicy,
@@ -199,6 +206,43 @@ def build_parser() -> argparse.ArgumentParser:
     eager_grid.add_argument("--workload", required=True)
     eager_grid.add_argument("--config", required=True)
     eager_grid.add_argument("--output", required=True)
+
+    phase2_replay = subparsers.add_parser(
+        "phase2-replay",
+        help="run diagnostic-only common-snapshot oracle headroom replay",
+        description=(
+            "Replay diagnostic-only structural oracle headroom on common snapshots. "
+            "Search cost is metadata-only, all ratios assume fully hidden search, and "
+            "the output is not a deployable measured result."
+        ),
+    )
+    phase2_replay.add_argument("--workload", required=True)
+    phase2_replay.add_argument("--config", required=True)
+    phase2_replay.add_argument("--sample-size", type=int, default=10_000)
+    phase2_replay.add_argument("--output", required=True)
+    phase2_replay.add_argument(
+        "--snapshot-output",
+        help="optional compact reproducible snapshot JSONL or JSONL.GZ outside Git",
+    )
+
+    phase2_simulate = subparsers.add_parser(
+        "phase2-simulate",
+        help="run one diagnostic-only fully-hidden-search system upper bound",
+        description=(
+            "Run a diagnostic-only end-to-end system upper bound. Oracle variants "
+            "may leak target outcomes, large-pool search cost is not charged, and the "
+            "output is not a deployable measured result."
+        ),
+    )
+    phase2_simulate.add_argument("--workload", required=True)
+    phase2_simulate.add_argument("--config", required=True)
+    phase2_simulate.add_argument(
+        "--variant", choices=tuple(PHASE2_VARIANTS.values()), required=True
+    )
+    phase2_simulate.add_argument(
+        "--search-ratio", choices=SEARCH_RATIOS, type=int, required=True
+    )
+    phase2_simulate.add_argument("--output", required=True)
     return parser
 
 
@@ -322,6 +366,47 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         from specrhythm.diagnostics import eager_grid_report, write_report
 
         write_report(eager_grid_report(workload, config), args.output)
+        return 0
+    if args.command == "phase2-replay":
+        snapshot_handle = None
+        snapshot_sink = None
+        if args.snapshot_output:
+            snapshot_path = Path(args.snapshot_output)
+            snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+            if snapshot_path.suffix == ".gz":
+                snapshot_handle = gzip.open(snapshot_path, "wt", encoding="utf-8")
+            else:
+                snapshot_handle = snapshot_path.open("w", encoding="utf-8")
+
+            def snapshot_sink(value):
+                snapshot_handle.write(json.dumps(value, sort_keys=True) + "\n")
+
+        try:
+            report = common_snapshot_replay(
+                workload,
+                config,
+                sample_size=args.sample_size,
+                snapshot_sink=snapshot_sink,
+            )
+        finally:
+            if snapshot_handle is not None:
+                snapshot_handle.close()
+        _write_json(report, args.output)
+        return 0
+    if args.command == "phase2-simulate":
+        variant = next(
+            key for key, value in PHASE2_VARIANTS.items() if value == args.variant
+        )
+        result = run_phase2_end_to_end(
+            workload,
+            config,
+            variant=variant,
+            search_ratio=args.search_ratio,
+        )
+        payload = result.summary.to_dict()
+        payload["evidence_kind"] = "fully-hidden-search-system-upper-bound"
+        payload["deployable_measured_result"] = False
+        _write_json(payload, args.output)
         return 0
     if args.command == "simulate":
         cycle_handle = None

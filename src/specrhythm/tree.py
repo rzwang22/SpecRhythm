@@ -33,6 +33,8 @@ class CandidateTree:
     request_id: str
     root: CandidateTreeNode
     nodes: tuple[CandidateTreeNode, ...]
+    requested_candidate_nodes: Optional[int] = None
+    search_budget_ratio: int = 1
     _by_id: dict[str, CandidateTreeNode] = field(
         init=False, repr=False, compare=False, hash=False
     )
@@ -56,6 +58,15 @@ class CandidateTree:
                 raise ValueError("candidate tree node has an invalid parent or depth")
             if node.path_probability > parent.path_probability + 1e-12:
                 raise ValueError("child path probability cannot exceed its parent")
+        requested = self.requested_candidate_nodes
+        if requested is not None and requested < len(self.candidate_nodes):
+            raise ValueError("requested candidate nodes cannot be below realized nodes")
+        if (
+            not isinstance(self.search_budget_ratio, int)
+            or isinstance(self.search_budget_ratio, bool)
+            or self.search_budget_ratio < 1
+        ):
+            raise ValueError("search budget ratio must be a positive integer")
         children: dict[str, list[CandidateTreeNode]] = {}
         for node in self.candidate_nodes:
             children.setdefault(node.parent_id or "", []).append(node)
