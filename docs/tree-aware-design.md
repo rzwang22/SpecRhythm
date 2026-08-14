@@ -34,6 +34,11 @@ when its candidate budget is zero. Candidate-roof utilization uses drafted non-r
 idle-slot cycles are excluded. The reported Dual-Batch and shaping utilization values therefore
 have the same denominator and exclude roots.
 
+The scalar candidate roof is not asserted to be a hardware-capacity frontier. The intended GPU
+surface is `T_verify(B_req, B_cand, C)`: root/request positions and candidate positions must be
+swept jointly across context. The current additive proxy uses both count axes but leaves context
+dependence unmodeled. A later calibration that measures only candidate nodes would be invalid.
+
 ## Frozen one-cycle feasibility diagnostic
 
 For an allocation opportunity, the projected-progress quantity remains:
@@ -123,6 +128,19 @@ The following policies are diagnostic ablations only. They do not alter or repla
 Every residual plan carries its counterfactual base request IDs and candidate node IDs. Runtime
 validation rejects any plan that removes a base node, reduces a base budget, breaks prefix closure,
 or exceeds the shared candidate roof. The three variants add no urgency threshold or tuned knob.
+
+## Phase-1.5 residual-selector controls
+
+`residual-round-robin` and `residual-probability` reuse the same frozen Dual-Batch base constructor
+as the two residual shaping variants. Round-robin gives at most one additional node to each request
+per pass and uses path probability only for its local frontier tie. Probability selection globally
+ranks all prefix-eligible residual nodes by path probability. Both continue until the same roof or
+the same per-request/tree limits are exhausted.
+
+The Phase-1.5 result rejects the current SLO-aware residual stage as a forward mechanism:
+probability-only residual selection is materially better at 3.0× and 3.25× under aligned roof
+utilization. The SLO-aware variants remain frozen for provenance and diagnosis; this result does
+not silently replace the default `shaping` or `specrhythm` implementations.
 
 ## Rolling eager dependency
 

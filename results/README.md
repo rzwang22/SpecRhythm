@@ -17,5 +17,9 @@ comparison order. Their summaries include one-cycle feasibility, stage allocatio
 progress rates, same-state base-preservation checks, and optional full allocation-opportunity
 JSONL streams.
 
+Phase 1.5 adds `residual-round-robin`, `residual-probability`, and the `feasible-residual` alias to
+isolate residual selection under a frozen Dual-Batch base. Detailed JSON stays outside Git; the
+reviewed aggregate report is `docs/phase1.5-residual-selection.md`.
+
 These reports remain local because their latency, acceptance, confidence, and roof inputs are
 proxy parameters. They are not GPU benchmark artifacts.

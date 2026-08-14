@@ -109,7 +109,10 @@ See [docs/phase-a.md](docs/phase-a.md) for the evidence standard.
 | `shaping-flat-proxy` | dual `max(D,V)` | legacy flat-sequence shaping proxy | no |
 | `shaping` | dual `max(D,V)` | SpecRhythm tree-aware shaping | no |
 | `shaping-feasible` | dual `max(D,V)` | shaping with one-cycle-feasible stage 1 | no |
+| `residual-round-robin` | dual `max(D,V)` | frozen Dual-Batch base + request-round-robin fill | no |
+| `residual-probability` | dual `max(D,V)` | frozen Dual-Batch base + path-probability fill | no |
 | `shaping-residual` | dual `max(D,V)` | frozen Dual-Batch base + residual shaping | no |
+| `feasible-residual` | dual `max(D,V)` | frozen base + feasible residual shaping | no |
 | `shaping-feasible-residual` | dual `max(D,V)` | frozen base + feasible residual stage 1 | no |
 | `specrhythm-flat-proxy` | dual `max(D,V)` | legacy flat-sequence shaping proxy | guarded rolling |
 | `specrhythm` | dual `max(D,V)` | SpecRhythm tree-aware shaping | path-dependent rolling |
@@ -129,11 +132,19 @@ The three `shaping-*` additions above are Phase-1 causal diagnostics, not propos
 not classify a request as permanently unsalvageable. Residual variants preserve the complete
 same-state Dual-Batch base plan before using otherwise-unused candidate roof.
 
+Phase 1.5 aligns residual roof utilization and finds that `residual-probability` materially
+outperforms `shaping-residual` at 3.0× and 3.25×. The current SLO-stage formula is therefore kept
+only as a diagnostic/provenance path, not promoted as a forward mechanism. See
+[docs/phase1.5-residual-selection.md](docs/phase1.5-residual-selection.md).
+
 `input_tokens` is preserved in workloads but is not yet an input to the latency surface.
 Context-dependent latency is not implemented. Until GPU calibration, `D(B,K,C)`, `V(B,K,C)`,
 acceptance, confidence, and the candidate roof are simulator/proxy parameters only.
 The current eager full-parent admission threshold (`0.10`) is also an explicit proxy parameter,
 not a measured system constant.
+The candidate roof constrains only non-root nodes; it is not a measured hardware frontier. GPU
+profiling must measure `T_verify(B_req, B_cand, C)` jointly rather than sweeping candidate nodes
+alone.
 
 Full per-cycle diagnostics are intentionally streamed outside Git:
 

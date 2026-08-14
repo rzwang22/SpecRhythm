@@ -49,7 +49,10 @@ POLICY_ORDER = (
 
 DIAGNOSTIC_POLICY_ORDER = (
     "shaping-feasible",
+    "residual-round-robin",
+    "residual-probability",
     "shaping-residual",
+    "feasible-residual",
     "shaping-feasible-residual",
 )
 

@@ -9,6 +9,8 @@ from specrhythm.policies.base import PolicySnapshot, RequestView, StepPlan
 from specrhythm.policies.baselines import allocate_round_robin
 from specrhythm.policies.tree_aware import (
     allocate_adaserve_tree_aware,
+    allocate_probability_residual,
+    allocate_round_robin_residual,
     allocate_specrhythm_residual,
     allocate_specrhythm_tree_aware,
 )
@@ -395,7 +397,10 @@ class ShapingDiagnosticPolicy:
     ) -> None:
         if variant not in {
             "shaping-feasible",
+            "residual-round-robin",
+            "residual-probability",
             "shaping-residual",
+            "feasible-residual",
             "shaping-feasible-residual",
         }:
             raise ValueError("unknown shaping diagnostic variant")
@@ -407,8 +412,31 @@ class ShapingDiagnosticPolicy:
         self.n_max_slo = n_max_slo
         self.feasible_only = "feasible" in variant
         self.residual_only = "residual" in variant
+        self.base_allocator = (
+            "dual-batch-slo-unaware-round-robin"
+            if self.residual_only
+            else "none"
+        )
+        self.residual_selector = {
+            "shaping-feasible": "not-applicable",
+            "residual-round-robin": "request-round-robin",
+            "residual-probability": "path-probability",
+            "shaping-residual": "slo-aware-two-stage",
+            "feasible-residual": "feasibility-gated-slo-aware-two-stage",
+            "shaping-feasible-residual": (
+                "feasibility-gated-slo-aware-two-stage"
+            ),
+        }[variant]
 
     def plan(self, snapshot: PolicySnapshot) -> StepPlan:
+        if self.name == "residual-round-robin":
+            return allocate_round_robin_residual(
+                snapshot, per_request_budget=self.speculative_budget
+            )
+        if self.name == "residual-probability":
+            return allocate_probability_residual(
+                snapshot, per_request_budget=self.speculative_budget
+            )
         if self.residual_only:
             return allocate_specrhythm_residual(
                 snapshot,

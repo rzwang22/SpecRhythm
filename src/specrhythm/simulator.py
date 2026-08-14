@@ -284,6 +284,8 @@ class SimulationSummary:
     display_name: str
     execution_mode: str
     allocator: str
+    base_allocator: str
+    residual_selector: str
     eager_semantics: str
     requests: int
     completed_requests: int
@@ -1028,6 +1030,8 @@ def _build_summary(
         display_name=policy.display_name,
         execution_mode=policy.execution_mode,
         allocator=policy.allocator,
+        base_allocator=getattr(policy, "base_allocator", "not-applicable"),
+        residual_selector=getattr(policy, "residual_selector", "not-applicable"),
         eager_semantics=policy.eager_semantics,
         requests=len(results),
         completed_requests=len(results),
@@ -1119,6 +1123,7 @@ def _build_summary(
             "one root target-input position per verified request, outside the candidate roof"
         ),
         verify_latency_inputs={
+            "surface": "T_verify(B_req, B_cand, C)",
             "formula": (
                 "verify_base_ms + verify_per_request_ms * target_input_positions + "
                 "verify_per_candidate_ms * selected_candidate_nodes"
@@ -1126,6 +1131,10 @@ def _build_summary(
             "request_count_modeled": True,
             "candidate_node_count_modeled": True,
             "context_length_modeled": False,
+            "profiling_requirement": (
+                "GPU calibration must sweep request/root positions and candidate "
+                "positions jointly across context C"
+            ),
         },
         tree_drafted_nodes=ledger.tree_drafted_nodes,
         tree_verified_nodes=ledger.tree_verified_nodes,

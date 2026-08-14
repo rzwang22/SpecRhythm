@@ -5,6 +5,8 @@ import pytest
 from specrhythm.policies.base import PolicySnapshot, RequestView
 from specrhythm.policies.tree_aware import (
     allocate_adaserve_tree_aware,
+    allocate_probability_residual,
+    allocate_round_robin_residual,
     allocate_specrhythm_residual,
     allocate_specrhythm_tree_aware,
     expected_progress_for_plan,
@@ -132,6 +134,66 @@ def test_residual_additions_preserve_base_prefixes_and_roof():
     assert plan.total_candidates <= 3
     # Construction validates prefix closure; rebuilding makes the invariant explicit.
     assert make_selected_tree(tree, selected.selected_node_ids) == selected
+
+
+def test_residual_selectors_share_exact_base_forest_roof_and_utilization():
+    oracle = CandidateTreeOracle(1664)
+    requests = tuple(
+        _view(
+            f"r{index}",
+            40 if index == 0 else 150,
+            oracle.tree(f"r{index}", 0, width=2, depth=5, draft_confidence=0.8),
+            elapsed=3 if index == 0 else 0,
+            max_budget=5,
+        )
+        for index in range(3)
+    )
+    snapshot = _snapshot(*requests, roof=12)
+    plans = (
+        allocate_round_robin_residual(snapshot, per_request_budget=2),
+        allocate_probability_residual(snapshot, per_request_budget=2),
+        allocate_specrhythm_residual(
+            snapshot, per_request_budget=2, n_max_slo=5
+        ),
+        allocate_specrhythm_residual(
+            snapshot,
+            per_request_budget=2,
+            n_max_slo=5,
+            stage1_feasible_only=True,
+        ),
+    )
+    expected_base = plans[0].base_normal_trees
+    expected_forest = plans[0].candidate_trees
+    for plan in plans:
+        assert plan.base_normal_trees == expected_base
+        assert plan.candidate_trees == expected_forest
+        assert plan.total_candidates == snapshot.roof_candidate_budget
+        for request_id, base in expected_base.items():
+            assert set(base.selected_node_ids).issubset(
+                plan.normal_trees[request_id].selected_node_ids
+            )
+            assert make_selected_tree(
+                expected_forest[request_id],
+                plan.normal_trees[request_id].selected_node_ids,
+            ) == plan.normal_trees[request_id]
+
+
+def test_probability_residual_is_slo_unaware_and_can_differ_from_shaping():
+    high_probability = _tree(
+        "loose", [("loose-a", "root", 1, 0.95, 0.95)]
+    )
+    urgent = _tree("tight", [("tight-a", "root", 1, 0.4, 0.4)])
+    snapshot = _snapshot(
+        _view("loose", 150, high_probability, max_budget=1),
+        _view("tight", 1, urgent, elapsed=2, max_budget=1),
+        roof=1,
+    )
+    probability = allocate_probability_residual(snapshot, per_request_budget=0)
+    shaping = allocate_specrhythm_residual(
+        snapshot, per_request_budget=0, n_max_slo=1
+    )
+    assert probability.normal_budgets == {"loose": 1, "tight": 0}
+    assert shaping.normal_budgets == {"loose": 0, "tight": 1}
 
 
 def test_adaserve_figure5_style_selection():

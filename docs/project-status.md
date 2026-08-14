@@ -1,6 +1,6 @@
 # SpecRhythm project status
 
-Last updated: 2026-08-13
+Last updated: 2026-08-14
 
 Maintenance rule: every code-changing PR updates this file with its scope, status, evidence,
 known limitations, and next gate before that PR is considered complete.
@@ -32,7 +32,30 @@ claims.
 | PR | Status | Scope | Evidence / boundary |
 | --- | --- | --- | --- |
 | [#1 workload-v0.1](https://github.com/rzwang22/SpecRhythm/pull/1) | merged | strict Mooncake replay, R3 proxy config, validator, manifest, fixture tests and docs | workload plumbing only; proxy payload and illustrative acceptance |
-| [#2 simulator-semantics-v0.2](https://github.com/rzwang22/SpecRhythm/pull/2) | draft, Phase 1 shaping diagnosis implemented; review pending | proposal lifecycle, deterministic tree oracle, tree-aware allocators, guarded shaping ablations, class/cycle/opportunity diagnostics, path-aware eager and accounting | 2×-4× knee evidence plus the scoped 2.75×/3.0×/3.25× causal diagnosis; pure Python proxy only; no GPU integration or performance claim |
+| [#2 simulator-semantics-v0.2](https://github.com/rzwang22/SpecRhythm/pull/2) | draft, Phase 1.5 residual selection diagnosis implemented; review pending | proposal lifecycle, deterministic tree oracle, tree-aware allocators, base-preserving residual controls, class/cycle/opportunity diagnostics, path-aware eager and accounting | scoped 2.75×/3.0×/3.25× residual-selector evidence; pure Python proxy only; no GPU integration or performance claim |
+
+## Phase 1.5: residual selection
+
+Four residual policies freeze the exact same-state Dual-Batch request set, budgets, path nodes,
+candidate forest, roof, and deterministic target outcome, then differ only in residual selection:
+request round-robin, path probability, current SLO-aware two-stage, or feasibility-gated two-stage.
+All runs report zero base-preservation violations, and residual roof utilization is aligned within
+0.15 percentage points at 2.75×, 0.06 points at 3.0×, and 0.05 points at 3.25×.
+
+The decisive result is Probability versus Shaping. At 3.0×, probability raises goodput
+2146.6→2452.3 tokens/s, raises attainment 0.728→0.816, and lowers mean queueing 4.30→2.43 seconds.
+At 3.25×, it raises goodput 1414.4→1587.4, raises attainment 0.457→0.502, and lowers queueing
+19.17→15.05 seconds. The two are effectively tied below the knee at 2.75×.
+
+This rejects the current SLO-stage formula as a forward mechanism: filling idle roof helps, while
+global path-probability selection is more efficient than the SLO-weighted residual stage under
+pressure. The rejected policies remain only for provenance and diagnosis. The next mechanism gate
+is candidate selection or Overdraft-and-Prune, not further tuning of these SLO weights.
+
+The scalar candidate roof is explicitly not a GPU capacity claim. The proxy charges both request
+root positions and candidate positions, while GPU calibration must measure the joint surface
+`T_verify(B_req, B_cand, C)`. Full results and definitions are in
+[phase1.5-residual-selection.md](phase1.5-residual-selection.md).
 
 ## Phase 1: shaping causal diagnosis
 
@@ -81,7 +104,7 @@ are in [phase1-shaping-diagnosis.md](phase1-shaping-diagnosis.md).
 
 ## Superseded flat-proxy evidence
 
-- The superseded flat revision had 80 passing tests. The tree-aware revision has 95 passing tests,
+- The superseded flat revision had 80 passing tests. The tree-aware revision has 106 passing tests,
   Ruff clean, including prefix closure, Figure 5 selection, width-1 degeneration, path-dependent
   eager, goodput denominator, and proposal/token/tree-node conservation.
 - Full Mooncake R3 proxy replay validates at 12,031 requests for 1×, 2×, 4×, and 8×

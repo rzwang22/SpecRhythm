@@ -299,13 +299,7 @@ def allocate_specrhythm_residual(
 ) -> StepPlan:
     """Freeze Dual-Batch work, then shape only otherwise-unused candidate roof."""
 
-    base_budgets = allocate_round_robin(snapshot, per_request_budget)
-    base_trees = {}
-    for request in snapshot.normal_requests:
-        tree = request.candidate_tree or _fallback_sequence_tree(request)
-        base_trees[request.request_id] = select_sequence_path(
-            tree, base_budgets[request.request_id]
-        )
+    base_trees = _dual_batch_base_trees(snapshot, per_request_budget)
     return allocate_specrhythm_tree_aware(
         snapshot,
         n_max_slo=n_max_slo,
@@ -313,6 +307,71 @@ def allocate_specrhythm_residual(
         stage1_feasible_only=stage1_feasible_only,
         base_trees=base_trees,
     )
+
+
+def _dual_batch_base_trees(
+    snapshot: PolicySnapshot, per_request_budget: int
+) -> dict[str, SelectedProposalTree]:
+    """Materialize the exact Dual-Batch allocation on the shared candidate forest."""
+
+    base_budgets = allocate_round_robin(snapshot, per_request_budget)
+    base_trees = {}
+    for request in snapshot.normal_requests:
+        tree = request.candidate_tree or _fallback_sequence_tree(request)
+        base_trees[request.request_id] = select_sequence_path(
+            tree, base_budgets[request.request_id]
+        )
+    return base_trees
+
+
+def allocate_round_robin_residual(
+    snapshot: PolicySnapshot, *, per_request_budget: int
+) -> StepPlan:
+    """Freeze Dual-Batch, then fill residual roof uniformly across requests."""
+
+    base_trees = _dual_batch_base_trees(snapshot, per_request_budget)
+    states = _states(snapshot, base_trees)
+    remaining = snapshot.roof_candidate_budget - sum(
+        tree.candidate_budget for tree in base_trees.values()
+    )
+    while remaining > 0:
+        added = False
+        for request in snapshot.normal_requests:
+            state = states[request.request_id]
+            eligible = state.eligible(request.max_budget)
+            if not eligible:
+                continue
+            state.add(
+                max(eligible, key=lambda node: (node.path_probability, node.node_id))
+            )
+            remaining -= 1
+            added = True
+            if remaining == 0:
+                break
+        if not added:
+            break
+    return _finish(states, {request_id: 0 for request_id in states}, base_trees)
+
+
+def allocate_probability_residual(
+    snapshot: PolicySnapshot, *, per_request_budget: int
+) -> StepPlan:
+    """Freeze Dual-Batch, then fill residual roof by path probability only."""
+
+    base_trees = _dual_batch_base_trees(snapshot, per_request_budget)
+    states = _states(snapshot, base_trees)
+    remaining = snapshot.roof_candidate_budget - sum(
+        tree.candidate_budget for tree in base_trees.values()
+    )
+    _allocate_frontier(
+        states,
+        remaining,
+        cap=lambda state: state.request.max_budget,
+        enabled=lambda state: bool(state.eligible(state.request.max_budget)),
+        score=lambda state, node: node.path_probability,
+        on_add=lambda state: None,
+    )
+    return _finish(states, {request_id: 0 for request_id in states}, base_trees)
 
 
 def expected_progress_for_plan(

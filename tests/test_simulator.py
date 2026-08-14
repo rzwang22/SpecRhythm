@@ -384,6 +384,30 @@ def test_diagnostic_variants_are_deterministic_and_preserve_base_work():
         )
 
 
+def test_residual_policy_metadata_and_two_dimensional_verify_surface():
+    config = _config()
+    expected = {
+        "residual-round-robin": "residual-round-robin-tree-aware-diagnostic",
+        "residual-probability": "residual-probability-tree-aware-diagnostic",
+        "shaping-residual": "shaping-residual-tree-aware-diagnostic",
+        "feasible-residual": "feasible-residual-tree-aware-diagnostic",
+        "shaping-feasible-residual": (
+            "shaping-feasible-residual-tree-aware-diagnostic"
+        ),
+    }
+    for name, allocator in expected.items():
+        summary = simulate(_workload(count=2), _policy(name, config), config).summary
+        assert summary.allocator == allocator
+        assert summary.base_allocator == "dual-batch-slo-unaware-round-robin"
+        assert summary.residual_selector != "not-applicable"
+        assert summary.root_in_candidate_budget is False
+        assert summary.verify_latency_inputs["request_count_modeled"] is True
+        assert summary.verify_latency_inputs["candidate_node_count_modeled"] is True
+        assert summary.verify_latency_inputs["context_length_modeled"] is False
+        assert summary.verify_latency_inputs["surface"] == "T_verify(B_req, B_cand, C)"
+        assert summary.base_preservation_violations == 0
+
+
 def _tight_loose_pressure_workload():
     return Workload(
         [
