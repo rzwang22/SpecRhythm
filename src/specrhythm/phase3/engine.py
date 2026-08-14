@@ -131,6 +131,8 @@ class TransformersBackend:
                 "Transformers backend requires CUDA; use backend=dry-run for CPU checks"
             )
         self._torch = torch
+        self._closed = False
+        self._owns_process_group = False
         self.model_id = resolve_runtime_path(config.model_path)
         self.tp_size = config.tp_size
         world_size = int(os.environ.get("WORLD_SIZE", "1"))
@@ -143,6 +145,7 @@ class TransformersBackend:
             torch.distributed.init_process_group(
                 "nccl", device_id=torch.device(f"cuda:{local_rank}")
             )
+            self._owns_process_group = True
         device_index = local_rank if self.tp_size > 1 else config.gpu_ids[0]
         torch.cuda.set_device(device_index)
         torch.manual_seed(seed)
@@ -229,8 +232,17 @@ class TransformersBackend:
         )
 
     def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
         del self.model
         self._torch.cuda.empty_cache()
+        if self._owns_process_group:
+            try:
+                if self._torch.distributed.is_initialized():
+                    self._torch.distributed.destroy_process_group()
+            finally:
+                self._owns_process_group = False
 
 
 def create_backend(

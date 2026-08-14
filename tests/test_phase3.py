@@ -9,7 +9,11 @@ import pytest
 from specrhythm.cli import main
 from specrhythm.phase3.benchmark import run_latency_benchmark
 from specrhythm.phase3.config import Phase3Config, load_phase3_config
-from specrhythm.phase3.engine import DryRunBackend, EngineUnavailableError
+from specrhythm.phase3.engine import (
+    DryRunBackend,
+    EngineUnavailableError,
+    TransformersBackend,
+)
 from specrhythm.phase3.probe import probe_gpu_environment
 from specrhythm.phase3.runner import (
     PromptRequest,
@@ -398,6 +402,46 @@ def test_phase3_sources_parse_as_python39():
 def test_latency_benchmark_forbids_dry_run_fallback():
     with pytest.raises(EngineUnavailableError, match="dry-run timing is forbidden"):
         run_latency_benchmark(_config(), ("draft",))
+
+
+def test_transformers_backend_closes_owned_process_group_once():
+    class FakeCuda:
+        def __init__(self):
+            self.empty_cache_calls = 0
+
+        def empty_cache(self):
+            self.empty_cache_calls += 1
+
+    class FakeDistributed:
+        def __init__(self):
+            self.initialized = True
+            self.destroy_calls = 0
+
+        def is_initialized(self):
+            return self.initialized
+
+        def destroy_process_group(self):
+            self.destroy_calls += 1
+            self.initialized = False
+
+    class FakeTorch:
+        def __init__(self):
+            self.cuda = FakeCuda()
+            self.distributed = FakeDistributed()
+
+    backend = TransformersBackend.__new__(TransformersBackend)
+    backend._torch = FakeTorch()
+    backend._closed = False
+    backend._owns_process_group = True
+    backend.model = object()
+
+    backend.close()
+    backend.close()
+
+    assert backend._torch.cuda.empty_cache_calls == 1
+    assert backend._torch.distributed.destroy_calls == 1
+    assert backend._owns_process_group is False
+    assert not hasattr(backend, "model")
 
 
 @pytest.mark.gpu
