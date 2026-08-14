@@ -29,12 +29,24 @@ from specrhythm.phase3.trace import (
 
 ROOT = Path(__file__).parents[1]
 TRACE_CONFIG = ROOT / "configs" / "phase3_trace_1d4v.yaml"
+TRACE_CONFIG_1D2V = ROOT / "configs" / "phase3_trace_1d2v.yaml"
+LATENCY_CONFIG_1D2V = ROOT / "configs" / "phase3_latency_1d2v.yaml"
 PROMPTS = ROOT / "configs" / "phase3-smoke-prompts.jsonl"
 
 
 def _config(**overrides):
     config = load_phase3_config(str(TRACE_CONFIG)).with_overrides(backend="dry-run")
     return config.with_overrides(**overrides)
+
+
+def test_three_gpu_configs_use_draft_tp1_and_target_tp2():
+    for path in (TRACE_CONFIG_1D2V, LATENCY_CONFIG_1D2V):
+        config = load_phase3_config(str(path))
+        assert config.draft.gpu_ids == (0,)
+        assert config.draft.tp_size == 1
+        assert config.target.gpu_ids == (1, 2)
+        assert config.target.tp_size == 2
+        assert config.backend == "transformers"
 
 
 def _record(request_id="r0", cycle_id=0):

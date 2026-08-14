@@ -18,6 +18,15 @@ were real-model records. Transformers 4.56.x is the first correctness backend be
 draft logits, entropy, and top-1/top-2 margin are directly observable. The production vLLM versus
 SGLang decision remains open until these traces and surfaces have been reviewed.
 
+The checked-in topology variants are:
+
+- `phase3_trace_1d4v.yaml` / `phase3_latency_1d4v.yaml`: five GPUs, draft TP=1 and target TP=4.
+- `phase3_trace_1d2v.yaml` / `phase3_latency_1d2v.yaml`: three GPUs, draft TP=1 and target TP=2.
+
+Do not use a 1D4V benchmark config on a three-GPU host. Unlike `phase3-run`,
+`phase3-benchmark` does not accept model/GPU/TP overrides, so the topology-specific latency file
+is mandatory.
+
 ## 1. Fetch the exact remote head
 
 The following resolves the branch once, records that exact commit, and checks it out detached so a
@@ -289,3 +298,55 @@ trace JSONL to Git.
 After these smoke tests, stop and return the environment probe, TP report, validation JSON,
 summary, manifests, and any error logs for review. Do not proceed to Dual-Batch integration from an
 unreviewed smoke result.
+
+## 11. Validated three-GPU A800 path (1D2V)
+
+The observed three-GPU host has NV8 connectivity between GPUs 0, 1, and 2. Activate the existing
+Conda environment and keep the previously created result root:
+
+```bash
+cd /root/autodl-tmp/src/SpecRhythm
+conda activate /root/autodl-tmp/envs/specrhythm-phase3-80d5769
+export SR_DRAFT_MODEL="/root/autodl-tmp/models/Qwen3-0.6B"
+export SR_TARGET_MODEL="/root/autodl-tmp/models/Qwen3-32B"
+export SR_PHASE3_ROOT="/root/autodl-tmp/SpecRhythm-data/results/phase3/bootstrap-20260814T141034Z-80d576912028"
+```
+
+The correctness smoke at commit `80d576912028da2d32cd1d8ba5cb593d10a547ae` passed TP=2 target
+loading, serial trace accounting, and target-only token equivalence. After pulling a later reviewed
+PR #3 head that contains the 1D2V configs, run the small correctness-backend calibration as three
+separate commands:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 specrhythm phase3-benchmark \
+  --config configs/phase3_latency_1d2v.yaml \
+  --operation draft \
+  --operation select \
+  --output "$SR_PHASE3_ROOT/latency-draft-select-tp1.json" \
+  --markdown-output "$SR_PHASE3_ROOT/latency-draft-select-tp1.md" \
+  --environment-metadata "$SR_PHASE3_ROOT/gpu-environment.json" \
+  2>&1 | tee "$SR_PHASE3_ROOT/latency-draft-select-tp1.log"
+
+CUDA_VISIBLE_DEVICES=1,2 torchrun \
+  --standalone \
+  --nproc-per-node=2 \
+  -m specrhythm.cli phase3-benchmark \
+  --config configs/phase3_latency_1d2v.yaml \
+  --operation verify \
+  --output "$SR_PHASE3_ROOT/latency-verify-tp2.json" \
+  --markdown-output "$SR_PHASE3_ROOT/latency-verify-tp2.md" \
+  --environment-metadata "$SR_PHASE3_ROOT/gpu-environment.json" \
+  2>&1 | tee "$SR_PHASE3_ROOT/latency-verify-tp2.log"
+
+unset CUDA_VISIBLE_DEVICES
+specrhythm phase3-benchmark \
+  --config configs/phase3_latency_1d2v.yaml \
+  --operation transfer \
+  --output "$SR_PHASE3_ROOT/latency-transfer-0-to-1.json" \
+  --markdown-output "$SR_PHASE3_ROOT/latency-transfer-0-to-1.md" \
+  --environment-metadata "$SR_PHASE3_ROOT/gpu-environment.json" \
+  2>&1 | tee "$SR_PHASE3_ROOT/latency-transfer-0-to-1.log"
+```
+
+These measurements exercise the Transformers correctness primitives. They are not packed-tree,
+continuous-batching, vLLM/SGLang, Dual-Batch, or end-to-end serving measurements.

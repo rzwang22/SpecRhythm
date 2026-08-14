@@ -169,9 +169,11 @@ a stable contract. vLLM/SGLang integration remains a later engine-prototype step
 
 The real trace keeps draft-side selector features separate from target-side labels, writes one
 immutable file per completed request/cycle, and resumes without replacing completed records. The
-runner supports `draft-only`, `target-only`, and serial draft-then-verify modes. The five-GPU
-serial configuration uses draft GPU 0 at TP=1 and a persistent target worker group on GPUs 1–4 at
-TP=4. There is no Dual-Batch overlap in this revision.
+runner supports `draft-only`, `target-only`, and serial draft-then-verify modes. The reference
+five-GPU configuration uses draft GPU 0 at TP=1 and a persistent target worker group on GPUs 1–4
+at TP=4. A three-GPU fallback uses draft GPU 0 at TP=1 and target GPUs 1–2 at TP=2; it is captured
+in `configs/phase3_trace_1d2v.yaml` and `configs/phase3_latency_1d2v.yaml`. There is no Dual-Batch
+overlap in this revision.
 
 The CUDA microbenchmark API records CUDA-event and synchronized host-wall timing for draft,
 selection, verification, and transfer primitives. The current Transformers verifier recomputes

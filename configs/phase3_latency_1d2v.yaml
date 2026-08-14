@@ -1,0 +1,41 @@
+{
+  "schema_version": "specrhythm.phase3-config.v1",
+  "backend": "transformers",
+  "draft": {
+    "model_path": "${SR_DRAFT_MODEL}",
+    "gpu_ids": [0],
+    "tp_size": 1,
+    "dtype": "bfloat16",
+    "revision": null,
+    "trust_remote_code": false
+  },
+  "target": {
+    "model_path": "${SR_TARGET_MODEL}",
+    "gpu_ids": [1, 2],
+    "tp_size": 2,
+    "dtype": "bfloat16",
+    "revision": null,
+    "trust_remote_code": false
+  },
+  "context_length": 4096,
+  "batch_size": 2,
+  "search_pool_size": 32,
+  "candidate_budget": 8,
+  "candidate_width": 4,
+  "max_new_tokens": 8,
+  "random_seed": 1664,
+  "sampling_configuration": {
+    "do_sample": false,
+    "temperature": 0.0,
+    "top_p": 1.0
+  },
+  "benchmark": {
+    "warmup_iterations": 3,
+    "measured_iterations": 10,
+    "request_batch_sizes": [1, 2],
+    "search_pool_sizes": [8, 16],
+    "verify_candidate_sizes": [4, 8],
+    "context_lengths": [128, 512],
+    "transfer_payload_bytes": [4096, 65536, 1048576]
+  }
+}

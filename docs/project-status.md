@@ -33,7 +33,7 @@ claims.
 | --- | --- | --- | --- |
 | [#1 workload-v0.1](https://github.com/rzwang22/SpecRhythm/pull/1) | merged | strict Mooncake replay, R3 proxy config, validator, manifest, fixture tests and docs | workload plumbing only; proxy payload and illustrative acceptance |
 | [#2 simulator-semantics-v0.2](https://github.com/rzwang22/SpecRhythm/pull/2) | frozen draft; Phase 2 complete, not merged | proposal lifecycle, deterministic tree oracle, tree-aware allocators, base-preserving residual controls, Phase-2 nested search pools and common-snapshot oracle replay, path-aware eager and accounting | pure-Python proxy and oracle upper bounds only; no deployable oracle, measured search cost, GPU integration, or performance claim |
-| [#3 gpu-integration-v0.1](https://github.com/rzwang22/SpecRhythm/pull/3) | draft; Phase 3.0 CPU implementation/readiness review | isolated real-trace schema, immutable checkpoints, GPU/NVIDIA probe, TP validator, Transformers correctness backend, 1D4V serial runner, CUDA benchmark interfaces and server runbook | developed and dry-run tested on a non-NVIDIA Mac; no CUDA result, serving-engine benchmark, Dual-Batch overlap, or speedup claim |
+| [#3 gpu-integration-v0.1](https://github.com/rzwang22/SpecRhythm/pull/3) | draft; Phase 3.0 correctness smoke passed, latency gate pending | isolated real-trace schema, immutable checkpoints, GPU/NVIDIA probe, TP validator, Transformers correctness backend, 1D4V/1D2V serial runners, CUDA benchmark interfaces and server runbook | Mac tests plus user-run 3×A800 1D2V correctness evidence; no serving-engine benchmark, Dual-Batch overlap, or speedup claim |
 
 ## Phase 3.0: GPU readiness and real-trace runner
 
@@ -48,6 +48,16 @@ request/cycle records are immutable and independently validatable, making interr
 safe. The Phase 3A runner implements deterministic draft-only, target-only, and serial
 draft-then-verify collection. A five-GPU coordinator keeps draft TP=1 on GPU 0 and a persistent
 target TP=4 worker group on GPUs 1–4. It does not implement Dual-Batch overlap.
+
+The available server has three NVIDIA A800-SXM4-80GB GPUs with NV8 links between every pair, so
+the reviewed fallback is 1D2V: Qwen3-0.6B on GPU 0 at TP=1 and Qwen3-32B on GPUs 1–2 at TP=2.
+At commit `80d576912028da2d32cd1d8ba5cb593d10a547ae`, a user-run correctness smoke reported Python
+3.9.25, PyTorch 2.7.1+cu128, CUDA runtime 12.8, driver 580.126.09, and NCCL 2.26.2. Both model
+configs support TP=1/2/4 and correctly reject TP=3 without model surgery. The two-request serial
+trace committed 10 accepted candidate tokens plus 6 target-root tokens, and validation reported
+`target_only_semantic_equivalence=true`. These observations validate topology, loading, trace,
+resume, accounting, and greedy token semantics only; `gpu_measurement=false` is intentional, and
+no latency or serving-throughput conclusion follows from this smoke test.
 
 The latency API exposes `T_draft(B_req,N_search,C)`, `T_select(B_req,N_search,B_verify)`,
 `T_verify(B_req,B_cand,C,TP)`, and `T_transfer(payload_bytes)` with separate warmup/measured
