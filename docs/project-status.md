@@ -32,7 +32,29 @@ claims.
 | PR | Status | Scope | Evidence / boundary |
 | --- | --- | --- | --- |
 | [#1 workload-v0.1](https://github.com/rzwang22/SpecRhythm/pull/1) | merged | strict Mooncake replay, R3 proxy config, validator, manifest, fixture tests and docs | workload plumbing only; proxy payload and illustrative acceptance |
-| [#2 simulator-semantics-v0.2](https://github.com/rzwang22/SpecRhythm/pull/2) | draft, Phase 2 oracle-headroom implementation and matrix complete; review pending | proposal lifecycle, deterministic tree oracle, tree-aware allocators, base-preserving residual controls, Phase-2 nested search pools and common-snapshot oracle replay, path-aware eager and accounting | pure-Python proxy and oracle upper bounds only; no deployable oracle, measured search cost, GPU integration, or performance claim |
+| [#2 simulator-semantics-v0.2](https://github.com/rzwang22/SpecRhythm/pull/2) | frozen draft; Phase 2 complete, not merged | proposal lifecycle, deterministic tree oracle, tree-aware allocators, base-preserving residual controls, Phase-2 nested search pools and common-snapshot oracle replay, path-aware eager and accounting | pure-Python proxy and oracle upper bounds only; no deployable oracle, measured search cost, GPU integration, or performance claim |
+| [#3 gpu-integration-v0.1](https://github.com/rzwang22/SpecRhythm/pull/3) | draft; Phase 3.0 CPU implementation/readiness review | isolated real-trace schema, immutable checkpoints, GPU/NVIDIA probe, TP validator, Transformers correctness backend, 1D4V serial runner, CUDA benchmark interfaces and server runbook | developed and dry-run tested on a non-NVIDIA Mac; no CUDA result, serving-engine benchmark, Dual-Batch overlap, or speedup claim |
+
+## Phase 3.0: GPU readiness and real-trace runner
+
+Phase 3.0 is stacked on the frozen PR #2 head and does not modify its simulator algorithms or
+reported results. The default package remains dependency free. An optional GPU extra pins PyTorch
+`>=2.7.1,<2.8` and Transformers `>=4.56.1,<4.57`; Transformers is used as a correctness collector
+because stable per-candidate draft logits, entropy, and margin are required. It is not the final
+serving engine.
+
+The real trace schema separates selector-visible draft features from target-only labels. Completed
+request/cycle records are immutable and independently validatable, making interruption/resume
+safe. The Phase 3A runner implements deterministic draft-only, target-only, and serial
+draft-then-verify collection. A five-GPU coordinator keeps draft TP=1 on GPU 0 and a persistent
+target TP=4 worker group on GPUs 1–4. It does not implement Dual-Batch overlap.
+
+The latency API exposes `T_draft(B_req,N_search,C)`, `T_select(B_req,N_search,B_verify)`,
+`T_verify(B_req,B_cand,C,TP)`, and `T_transfer(payload_bytes)` with separate warmup/measured
+iterations, CUDA-event/host-wall distributions, memory peaks, and explicit root/search/verify
+counts. It has no CPU timing fallback. The current verifier is a full-context correctness path,
+not an optimized packed-tree serving kernel, so any future server output remains calibration data
+rather than a performance claim until engine integration and validation are complete.
 
 ## Phase 1.5: residual selection
 
@@ -222,6 +244,7 @@ compute-waste ratios.
 - `D(B,K,C)`, `V(B,K,C)`, acceptance, confidence, and candidate roof are proxy inputs until GPU
   calibration.
 - R3 proxy lengths are sampled and are not HumanEval, Alpaca, or CNN/DailyMail payloads.
-- No PyTorch, vLLM, SGLang, MineDraft, or remote-GPU runtime is integrated.
+- No vLLM, SGLang, MineDraft, packed-tree verification kernel, or Dual-Batch GPU runtime is
+  integrated. The optional Transformers path is a Phase-3 correctness/calibration backend only.
 - No current result may be cited as evidence of real GPU speedup or full AdaServe/SpecRhythm
   reproduction.

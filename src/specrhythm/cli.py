@@ -5,7 +5,9 @@ from __future__ import annotations
 import argparse
 import gzip
 import json
+import os
 import shlex
+import subprocess
 import sys
 from dataclasses import asdict
 from pathlib import Path
@@ -243,11 +245,307 @@ def build_parser() -> argparse.ArgumentParser:
         "--search-ratio", choices=SEARCH_RATIOS, type=int, required=True
     )
     phase2_simulate.add_argument("--output", required=True)
+
+    gpu_probe = subparsers.add_parser(
+        "gpu-probe", help="write read-only CUDA/NVIDIA environment metadata"
+    )
+    gpu_probe.add_argument("--output")
+    gpu_probe.add_argument(
+        "--allow-unavailable",
+        action="store_true",
+        help="return success after recording explicit no-CUDA errors",
+    )
+
+    tp_check = subparsers.add_parser(
+        "tp-check", help="validate structural and Transformers TP compatibility"
+    )
+    tp_check.add_argument("--model-config", required=True)
+    tp_check.add_argument("--tp-sizes", nargs="+", type=int, default=(1, 2, 3, 4))
+    tp_check.add_argument("--output")
+
+    phase3_run = subparsers.add_parser(
+        "phase3-run",
+        help="collect draft-only, target-only, or serial real-model traces",
+        description=(
+            "Run the isolated Phase-3 correctness collector. dry-run emits no GPU timing; "
+            "Transformers mode is not a serving-engine performance benchmark."
+        ),
+    )
+    phase3_run.add_argument("--config", required=True)
+    phase3_run.add_argument(
+        "--mode", choices=("draft-only", "target-only", "serial"), required=True
+    )
+    phase3_run.add_argument("--input", required=True)
+    phase3_run.add_argument("--output-dir", required=True)
+    phase3_run.add_argument("--resume", action="store_true")
+    phase3_run.add_argument(
+        "--max-cycles",
+        type=int,
+        help="optional interruption-test limit on newly completed cycles",
+    )
+    phase3_run.add_argument(
+        "--environment-metadata",
+        help="optional gpu-probe JSON to bind into the run manifest",
+    )
+    phase3_run.add_argument("--backend", choices=("dry-run", "transformers"))
+    phase3_run.add_argument("--draft-model")
+    phase3_run.add_argument("--target-model")
+    phase3_run.add_argument("--draft-gpus")
+    phase3_run.add_argument("--target-gpus")
+    phase3_run.add_argument("--draft-tp", type=int)
+    phase3_run.add_argument("--target-tp", type=int)
+    phase3_run.add_argument("--dtype", choices=("float16", "bfloat16", "float32"))
+    phase3_run.add_argument("--context-length", type=int)
+    phase3_run.add_argument("--batch-size", type=int)
+    phase3_run.add_argument("--search-pool-size", type=int)
+    phase3_run.add_argument("--candidate-budget", type=int)
+    phase3_run.add_argument("--max-new-tokens", type=int)
+
+    phase3_validate = subparsers.add_parser(
+        "phase3-validate", help="validate durable real-trace checkpoints"
+    )
+    phase3_validate.add_argument("--trace-dir", required=True)
+    phase3_validate.add_argument(
+        "--target-only-dir",
+        help="also require final tokens to equal a target-only reference",
+    )
+    phase3_validate.add_argument("--output")
+
+    phase3_summary = subparsers.add_parser(
+        "phase3-summarize", help="consolidate checkpoints and write a compact summary"
+    )
+    phase3_summary.add_argument("--trace-dir", required=True)
+    phase3_summary.add_argument("--trace-output")
+    phase3_summary.add_argument("--output", required=True)
+
+    phase3_benchmark = subparsers.add_parser(
+        "phase3-benchmark",
+        help="run real-CUDA latency interfaces; there is no dry-run timing fallback",
+    )
+    phase3_benchmark.add_argument("--config", required=True)
+    phase3_benchmark.add_argument(
+        "--operation",
+        action="append",
+        choices=("draft", "select", "verify", "transfer"),
+        required=True,
+    )
+    phase3_benchmark.add_argument("--output", required=True)
+    phase3_benchmark.add_argument("--markdown-output", required=True)
+    phase3_benchmark.add_argument("--environment-metadata")
     return parser
+
+
+def _gpu_ids(value: Optional[str]) -> Optional[tuple[int, ...]]:
+    if value is None:
+        return None
+    try:
+        result = tuple(int(item.strip()) for item in value.split(",") if item.strip())
+    except ValueError as error:
+        raise SystemExit("GPU IDs must be comma-separated integers") from error
+    if not result:
+        raise SystemExit("GPU ID list must not be empty")
+    return result
+
+
+def _current_git_commit() -> Optional[str]:
+    completed = subprocess.run(
+        ["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=False
+    )
+    return completed.stdout.strip() if completed.returncode == 0 else None
+
+
+def _final_tokens(trace_dir: Path) -> dict[str, tuple[int, ...]]:
+    from specrhythm.phase3.trace import TraceStore
+
+    result = {}
+    store = TraceStore(trace_dir)
+    for request_id in {record.request.request_id for record in store.records()}:
+        _, generated, finished = store.resume_state(request_id)
+        if not finished:
+            raise ValueError(f"request {request_id} is incomplete")
+        result[request_id] = generated
+    return result
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.command == "gpu-probe":
+        from specrhythm.phase3.probe import probe_gpu_environment
+
+        report = probe_gpu_environment(repo=Path.cwd())
+        _write_json(report, args.output)
+        return 0 if report["available"] or args.allow_unavailable else 2
+    if args.command == "tp-check":
+        from specrhythm.phase3.tp import load_model_config, validate_tp_compatibility
+
+        try:
+            model_config = load_model_config(args.model_config)
+            report = validate_tp_compatibility(model_config, args.tp_sizes)
+        except ValueError as error:
+            raise SystemExit(f"TP compatibility check failed: {error}") from error
+        _write_json(report, args.output)
+        return 0 if all(row["supported"] for row in report["results"]) else 1
+    if args.command == "phase3-run":
+        from specrhythm.phase3.config import load_phase3_config
+        from specrhythm.phase3.distributed import TensorParallelTargetPool
+        from specrhythm.phase3.runner import (
+            build_run_manifest,
+            load_prompt_requests,
+            run_phase3,
+        )
+
+        try:
+            config = load_phase3_config(args.config)
+            config = config.with_overrides(
+                backend=args.backend,
+                context_length=args.context_length,
+                batch_size=args.batch_size,
+                search_pool_size=args.search_pool_size,
+                candidate_budget=args.candidate_budget,
+                max_new_tokens=args.max_new_tokens,
+            )
+            draft_gpus = _gpu_ids(args.draft_gpus)
+            target_gpus = _gpu_ids(args.target_gpus)
+            config = type(config)(
+                schema_version=config.schema_version,
+                backend=config.backend,
+                draft=config.draft.with_overrides(
+                    model_path=args.draft_model,
+                    gpu_ids=draft_gpus,
+                    tp_size=args.draft_tp,
+                    dtype=args.dtype,
+                ),
+                target=config.target.with_overrides(
+                    model_path=args.target_model,
+                    gpu_ids=target_gpus,
+                    tp_size=args.target_tp,
+                    dtype=args.dtype,
+                ),
+                context_length=config.context_length,
+                batch_size=config.batch_size,
+                search_pool_size=config.search_pool_size,
+                candidate_budget=config.candidate_budget,
+                candidate_width=config.candidate_width,
+                max_new_tokens=config.max_new_tokens,
+                random_seed=config.random_seed,
+                sampling_configuration=config.sampling_configuration,
+                benchmark=config.benchmark,
+            )
+            input_path = Path(args.input).resolve()
+            output_dir = Path(args.output_dir).resolve()
+            requests = load_prompt_requests(input_path)
+            target_pool = None
+            if (
+                config.backend == "transformers"
+                and args.mode == "serial"
+                and config.target.tp_size > 1
+            ):
+                if int(os.environ.get("WORLD_SIZE", "1")) != 1:
+                    raise ValueError(
+                        "five-GPU serial mode is a coordinator command; do not wrap it in torchrun"
+                    )
+                target_pool = TensorParallelTargetPool(
+                    config.target, config.random_seed
+                )
+            try:
+                report = run_phase3(
+                    requests,
+                    config,
+                    mode=args.mode,
+                    output_dir=output_dir,
+                    resume=args.resume,
+                    target_backend=target_pool,
+                    cycle_limit=args.max_cycles,
+                )
+            finally:
+                if target_pool is not None:
+                    target_pool.close()
+        except (FileExistsError, ValueError, RuntimeError) as error:
+            raise SystemExit(f"Phase-3 run failed: {error}") from error
+        if int(os.environ.get("RANK", "0")) == 0:
+            command_argv = list(argv) if argv is not None else sys.argv[1:]
+            manifest = build_run_manifest(
+                config_path=Path(args.config).resolve(),
+                input_path=input_path,
+                output_dir=output_dir,
+                config=config,
+                mode=args.mode,
+                command=shlex.join(["specrhythm", *command_argv]),
+                git_commit=_current_git_commit(),
+                environment_metadata_path=(
+                    Path(args.environment_metadata).resolve()
+                    if args.environment_metadata
+                    else None
+                ),
+                runtime_models=report.get("runtime_models"),
+            )
+            _write_json(report, str(output_dir / "summary.json"))
+            _write_json(manifest, str(output_dir / "manifest.json"))
+            _write_json(report, None)
+        return 0
+    if args.command == "phase3-validate":
+        from specrhythm.phase3.trace import TraceStore
+
+        trace_dir = Path(args.trace_dir).resolve()
+        report = TraceStore(trace_dir).validate()
+        if args.target_only_dir:
+            try:
+                actual = _final_tokens(trace_dir)
+                target = _final_tokens(Path(args.target_only_dir).resolve())
+                equivalent = actual == target
+                report["target_only_semantic_equivalence"] = equivalent
+                if not equivalent:
+                    report["valid"] = False
+                    report["errors"].append(
+                        "final token sequences differ from target-only reference"
+                    )
+            except ValueError as error:
+                report["valid"] = False
+                report["errors"].append(str(error))
+        _write_json(report, args.output)
+        return 0 if report["valid"] else 1
+    if args.command == "phase3-summarize":
+        from specrhythm.phase3.trace import TraceStore, summarize_records
+
+        store = TraceStore(Path(args.trace_dir).resolve())
+        validation = store.validate()
+        if not validation["valid"]:
+            _write_json(validation, args.output)
+            return 1
+        report = summarize_records(store.records())
+        if args.trace_output:
+            report["trace_jsonl_sha256"] = store.write_jsonl(
+                Path(args.trace_output).resolve()
+            )
+        _write_json(report, args.output)
+        return 0
+    if args.command == "phase3-benchmark":
+        from specrhythm.phase3.benchmark import (
+            benchmark_markdown,
+            run_latency_benchmark,
+        )
+        from specrhythm.phase3.config import load_phase3_config
+
+        try:
+            report = run_latency_benchmark(load_phase3_config(args.config), args.operation)
+        except (ValueError, RuntimeError) as error:
+            raise SystemExit(f"Phase-3 benchmark failed: {error}") from error
+        if int(os.environ.get("RANK", "0")) == 0:
+            from specrhythm.phase3.trace import sha256_file
+
+            config_path = Path(args.config).resolve()
+            report["git_commit"] = _current_git_commit()
+            report["config_file"] = config_path.name
+            report["config_sha256"] = sha256_file(config_path)
+            if args.environment_metadata:
+                environment_path = Path(args.environment_metadata).resolve()
+                report["environment_metadata_file"] = environment_path.name
+                report["environment_metadata_sha256"] = sha256_file(environment_path)
+            _write_json(report, args.output)
+            markdown = Path(args.markdown_output)
+            markdown.parent.mkdir(parents=True, exist_ok=True)
+            markdown.write_text(benchmark_markdown(report), encoding="utf-8")
+        return 0
     if args.command == "generate":
         config = load_json(args.config)
         output_path = Path(args.output).resolve()

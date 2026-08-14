@@ -28,3 +28,9 @@ Recommended external layout on the GPU server:
 
 See `docs/workload-design.md` for the complete generate, manifest, validate, and summarize command
 sequence using these paths.
+
+Phase 3 real-model prompts and generated request/cycle traces follow the same rule: keep real
+dataset payloads, model outputs, per-cycle checkpoint JSON, raw logits, and consolidated JSONL
+outside Git under `$SR_GPU_RESULTS/phase3/`. The two tiny prompts in
+`configs/phase3-smoke-prompts.jsonl` are schema/smoke fixtures only, not an evaluation workload.
+See `docs/phase3-gpu-runbook.md` for the resumable trace and manifest workflow.

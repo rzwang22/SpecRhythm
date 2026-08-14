@@ -1,9 +1,10 @@
 # SpecRhythm
 
 SpecRhythm is a pure-Python research harness for testing SLO-aware speculative-decoding
-policies before integrating them into vLLM or SGLang. The initial release contains no GPU,
-PyTorch, vLLM, or SGLang dependency. It is deliberately a control-plane model: measured GPU
-profiles will replace the illustrative latency and acceptance parameters in Phase B.
+policies before integrating them into vLLM or SGLang. The default install remains dependency
+free. Phase 3 adds an isolated, optional PyTorch/Transformers correctness collector and GPU
+calibration interface; it does not change the control-plane simulator or claim serving-engine
+performance.
 
 The repository currently provides:
 
@@ -15,6 +16,8 @@ The repository currently provides:
 - a deterministic proposal-lifecycle simulator with guarded eager promotion;
 - queueing/service/end-to-end latency, goodput, SLO-attainment, and TPOT metrics;
 - tests for budget, prefix, determinism, and accounting invariants.
+- a versioned real-model trace schema, resumable checkpoints, GPU environment probe, conservative
+  TP validator, and CUDA-only latency interfaces.
 
 ## Quick start
 
@@ -87,6 +90,7 @@ configs/                 Reproducible workload and simulator inputs
 docs/phase-a.md          Hypotheses, ablations, and proof gates
 docs/workload-design.md  Dataset construction and validation protocol
 docs/development.md      Mac/GitHub/remote-GPU workflow
+docs/phase3-gpu-runbook.md  Exact Phase-3 server commands and safety boundaries
 src/specrhythm/          Workload, policy, simulation, and CLI code
 tests/                   Unit and integration tests
 ~~~
@@ -155,6 +159,26 @@ specrhythm phase2-simulate --workload /external/r3-3.0x.jsonl \
 All Phase-2 variants are diagnostic only. Ratios above 1 assume fully hidden search and do not
 include a measured large-pool draft latency. See
 [docs/phase2-oracle-headroom.md](docs/phase2-oracle-headroom.md).
+
+## Phase 3 GPU-readiness boundary
+
+Phase 3A uses an optional Transformers `>=4.56.1,<4.57` correctness backend with PyTorch
+`>=2.7.1,<2.8`. This backend was selected because the trace requires draft logits, entropy,
+top-1/top-2 margin, and stable per-node features that serving-engine public APIs do not expose as
+a stable contract. vLLM/SGLang integration remains a later engine-prototype step.
+
+The real trace keeps draft-side selector features separate from target-side labels, writes one
+immutable file per completed request/cycle, and resumes without replacing completed records. The
+runner supports `draft-only`, `target-only`, and serial draft-then-verify modes. The five-GPU
+serial configuration uses draft GPU 0 at TP=1 and a persistent target worker group on GPUs 1–4 at
+TP=4. There is no Dual-Batch overlap in this revision.
+
+The CUDA microbenchmark API records CUDA-event and synchronized host-wall timing for draft,
+selection, verification, and transfer primitives. The current Transformers verifier recomputes
+full contexts and is not a packed-tree serving kernel, so its measurements are calibration inputs,
+not vLLM/SGLang throughput claims. CPU `dry-run` validates schemas and lifecycle only and is
+forbidden from emitting latency results. See
+[docs/phase3-gpu-runbook.md](docs/phase3-gpu-runbook.md) before using a GPU host.
 
 The completed audit contains 3/3 common replays (10,000 corrected-queue snapshots each), 9/9
 references, and all 48 end-to-end cells. A_1× exactly reproduces Residual-Probability at all

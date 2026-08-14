@@ -1,0 +1,2 @@
+{"request_id":"smoke-code","prompt":"Write a Python function that adds two integers.","SLO_class":"40ms","max_new_tokens":8}
+{"request_id":"smoke-chat","prompt":"Explain why deterministic tests matter in one sentence.","SLO_class":"50ms","max_new_tokens":8}

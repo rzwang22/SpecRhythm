@@ -16,6 +16,11 @@ dev = [
   "pytest>=8,<9",
   "ruff>=0.12,<1",
 ]
+gpu = [
+  "PyYAML>=6,<7",
+  "torch>=2.7.1,<2.8",
+  "transformers>=4.56.1,<4.57",
+]
 
 [project.scripts]
 specrhythm = "specrhythm.cli:main"
@@ -27,6 +32,9 @@ where = ["src"]
 addopts = "-q"
 pythonpath = ["src"]
 testpaths = ["tests"]
+markers = [
+  "gpu: requires a real NVIDIA CUDA environment and is skipped on CPU CI",
+]
 
 [tool.ruff]
 extend-exclude = ["tmp"]
