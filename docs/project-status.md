@@ -34,6 +34,30 @@ claims.
 | [#1 workload-v0.1](https://github.com/rzwang22/SpecRhythm/pull/1) | merged | strict Mooncake replay, R3 proxy config, validator, manifest, fixture tests and docs | workload plumbing only; proxy payload and illustrative acceptance |
 | [#2 simulator-semantics-v0.2](https://github.com/rzwang22/SpecRhythm/pull/2) | frozen draft; Phase 2 complete, not merged | proposal lifecycle, deterministic tree oracle, tree-aware allocators, base-preserving residual controls, Phase-2 nested search pools and common-snapshot oracle replay, path-aware eager and accounting | pure-Python proxy and oracle upper bounds only; no deployable oracle, measured search cost, GPU integration, or performance claim |
 | [#3 gpu-integration-v0.1](https://github.com/rzwang22/SpecRhythm/pull/3) | draft; Phase 3B.1 and corrected-20 Phase 3C.2 complete; Phase 3C.3 corrected-100 awaiting server run | hardened multi-rank primitives, corrected R3-real traces, common-prefix replay, request-bootstrap statistics, 2x shell decomposition and diagnostic learned ranker | user-run 3×A800 correctness artifacts plus Mac CPU tests; no packed-tree/serving engine, Dual-Batch, SLO, calibrated latency or speedup claim |
+| #4 vllm-serving-v0.1 | draft; Phase 4A.0 implementation awaiting server bring-up | vLLM v0.25.1 source/API freeze, target-fair 1D2V contracts, stock-engine probe/smokes/validation and server runbook | Mac/CI contract tests only; no vLLM GPU run by the coding agent, disaggregated verification, Dual-Batch, packed tree, eager, SLO or performance claim |
+
+## Phase 4A.0: vLLM freeze and independent-engine bring-up
+
+Phase 4 is stacked on the exact frozen PR #3 head
+`34c7ea9836c2595c8a8aeaeb5680709520edd3d8` and does not modify Phase 3 algorithms or results.
+The serving integration freezes vLLM `v0.25.1` at commit
+`752a3a504485790a2e8491cacbb35c137339ad34` in a separate Python 3.11/PyTorch 2.11.0 environment;
+vLLM is not a dependency of the Python 3.9 simulator package.
+
+The first gate brings up Qwen3-0.6B TP=1 on physical GPU 0 and Qwen3-32B TP=2 on physical GPUs
+1–2 as separate stock V1 offline engines. It validates exact source/install provenance, physical
+placement, every TP rank's local parameters and memory, selected attention backend, repeated
+greedy output and token-level comparison with the frozen HF trajectory on five corrected R3-real
+requests. Startup/prefill/decode/wall timestamps are recorded only for bring-up observability.
+
+The independent adapters freeze future candidate/verification/request-state semantics without
+importing simulator policies or proxy latency. vLLM built-in colocated speculative decoding is
+not `serial-disaggregated` or SpecRhythm `dual-batch`; vLLM DBO is an intra-model-executor
+microbatch overlap and is explicitly disabled. No GPU experiment was run by the Mac coding agent.
+The next gate is review of the user-run 3×A800 artifacts. See
+[phase4-vllm-integration.md](phase4-vllm-integration.md),
+[phase4-vllm-source-audit.md](phase4-vllm-source-audit.md), and
+[phase4-vllm-server-runbook.md](phase4-vllm-server-runbook.md).
 
 ## Phase 3.0: GPU readiness and real-trace runner
 

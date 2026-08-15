@@ -515,6 +515,56 @@ def build_parser() -> argparse.ArgumentParser:
     phase3c_learned.add_argument("--resume", action="store_true")
     phase3c_learned.add_argument("--output", required=True)
     phase3c_learned.add_argument("--markdown-output", required=True)
+
+    phase4_contract = subparsers.add_parser(
+        "phase4-contract-dry-run",
+        help="exercise fake Phase-4 adapter contracts without creating a GPU result",
+    )
+    phase4_contract.add_argument("--output", required=True)
+
+    phase4_probe = subparsers.add_parser(
+        "phase4-probe",
+        help="validate the frozen vLLM environment and three-GPU topology",
+        description=(
+            "Probe the independent Python 3.11/vLLM environment. This command exits "
+            "nonzero without CUDA and never substitutes synthetic GPU metadata."
+        ),
+    )
+    phase4_probe.add_argument("--config", required=True)
+    phase4_probe.add_argument("--vllm-source", required=True)
+    phase4_probe.add_argument("--environment-output", required=True)
+    phase4_probe.add_argument("--topology-output", required=True)
+    phase4_probe.add_argument("--validation-output", required=True)
+
+    phase4_smoke = subparsers.add_parser(
+        "phase4-stock-smoke",
+        help="run a real stock-vLLM draft TP1 or target TP2 bring-up",
+        description=(
+            "Run one independent stock vLLM engine twice on five corrected R3-real "
+            "requests. This is bring-up, not serving-performance evaluation."
+        ),
+    )
+    phase4_smoke.add_argument("--config", required=True)
+    phase4_smoke.add_argument("--role", choices=("draft", "target"), required=True)
+    phase4_smoke.add_argument("--workload", required=True)
+    phase4_smoke.add_argument("--environment", required=True)
+    phase4_smoke.add_argument("--topology", required=True)
+    phase4_smoke.add_argument("--runtime-manifest", required=True)
+    phase4_smoke.add_argument("--frozen-hf-target-dir")
+    phase4_smoke.add_argument("--output", required=True)
+
+    phase4_validate = subparsers.add_parser(
+        "phase4-validate",
+        help="validate Phase-4A.0 stock-vLLM bring-up artifacts",
+    )
+    phase4_validate.add_argument("--config", required=True)
+    phase4_validate.add_argument("--environment", required=True)
+    phase4_validate.add_argument("--topology", required=True)
+    phase4_validate.add_argument("--runtime-manifest", required=True)
+    phase4_validate.add_argument("--draft-smoke", required=True)
+    phase4_validate.add_argument("--target-smoke", required=True)
+    phase4_validate.add_argument("--output", required=True)
+    phase4_validate.add_argument("--markdown-output", required=True)
     return parser
 
 
@@ -563,6 +613,92 @@ def _final_tokens(trace_dir: Path) -> dict[str, tuple[int, ...]]:
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.command == "phase4-contract-dry-run":
+        from specrhythm.phase4.fake import run_fake_contract
+
+        _write_json(run_fake_contract(), args.output)
+        return 0
+    if args.command == "phase4-probe":
+        from specrhythm.phase4.config import load_phase4_config
+        from specrhythm.phase4.manifest import (
+            collect_environment,
+            collect_topology,
+            validate_environment,
+            validate_topology,
+        )
+
+        try:
+            config = load_phase4_config(args.config)
+            environment = collect_environment(Path(args.vllm_source).resolve())
+            topology = collect_topology()
+            environment_validation = validate_environment(environment, config)
+            topology_validation = validate_topology(topology, config)
+            validation = {
+                "schema_version": "specrhythm.phase4-probe-validation.v1",
+                "valid": environment_validation["valid"]
+                and topology_validation["valid"],
+                "environment": environment_validation,
+                "topology": topology_validation,
+                "serving_performance_result": False,
+            }
+        except (FileNotFoundError, ValueError) as error:
+            raise SystemExit(f"Phase-4 probe failed: {error}") from error
+        _write_json(environment, args.environment_output)
+        _write_json(topology, args.topology_output)
+        _write_json(validation, args.validation_output)
+        return 0 if validation["valid"] else 2
+    if args.command == "phase4-stock-smoke":
+        from specrhythm.phase4.config import load_phase4_config
+        from specrhythm.phase4.stock_vllm import run_stock_smoke
+
+        try:
+            report = run_stock_smoke(
+                load_phase4_config(args.config),
+                role=args.role,
+                workload_path=Path(args.workload).resolve(),
+                environment_path=Path(args.environment).resolve(),
+                topology_path=Path(args.topology).resolve(),
+                runtime_manifest_path=Path(args.runtime_manifest).resolve(),
+                git_commit=_current_git_commit() or "unknown",
+                frozen_target_dir=(
+                    Path(args.frozen_hf_target_dir).resolve()
+                    if args.frozen_hf_target_dir
+                    else None
+                ),
+            )
+        except (FileNotFoundError, ImportError, RuntimeError, ValueError) as error:
+            raise SystemExit(f"Phase-4 stock smoke failed: {error}") from error
+        _write_json(report, args.output)
+        return 0
+    if args.command == "phase4-validate":
+        from specrhythm.phase4.config import load_phase4_config
+        from specrhythm.phase4.validation import (
+            validate_artifacts,
+            validation_markdown,
+        )
+
+        try:
+            report = validate_artifacts(
+                load_phase4_config(args.config),
+                environment_path=Path(args.environment).resolve(),
+                topology_path=Path(args.topology).resolve(),
+                runtime_manifest_path=Path(args.runtime_manifest).resolve(),
+                draft_smoke_path=Path(args.draft_smoke).resolve(),
+                target_smoke_path=Path(args.target_smoke).resolve(),
+            )
+        except (FileNotFoundError, json.JSONDecodeError, ValueError) as error:
+            report = {
+                "schema_version": "specrhythm.phase4-validation.v1",
+                "valid": False,
+                "errors": [str(error)],
+                "warnings": [],
+                "serving_performance_result": False,
+            }
+        _write_json(report, args.output)
+        markdown = Path(args.markdown_output)
+        markdown.parent.mkdir(parents=True, exist_ok=True)
+        markdown.write_text(validation_markdown(report), encoding="utf-8")
+        return 0 if report["valid"] else 1
     if args.command == "gpu-probe":
         from specrhythm.phase3.probe import probe_gpu_environment
 

@@ -1,0 +1,5 @@
+# Separate Python 3.11 serving-integration environment only.
+# vLLM v0.25.1 resolves to commit 752a3a504485790a2e8491cacbb35c137339ad34.
+vllm==0.25.1
+torch==2.11.0
+transformers>=5.5.3,<5.6
