@@ -5,7 +5,8 @@ This runbook starts from the frozen Phase-2 head through the stacked
 Phase 3B.1 hardens primitive measurement evidence. Neither is a vLLM/SGLang serving
 implementation, and neither performs Dual-Batch overlap. GPU latency commands have no synthetic
 fallback. Section 12 is the completed three-GPU Phase 3B.1 repeatability protocol; Section 13 is
-the current Phase 3C.1 R3-real pilot. The earlier commands remain as historical bootstrap examples.
+the completed Phase 3C.1 protocol; Section 14 is the current Phase 3C.2 coverage/multi-round
+pilot. Earlier commands remain historical bootstrap examples.
 
 ## Repository audit at the Phase-2 boundary
 
@@ -745,7 +746,7 @@ assert manifest["task_counts"] == {"code": 60, "chat": 20, "summarization": 20}
 assert validation["valid"], validation["errors"]
 assert validation["forest_records"] == validation["target_records"] == validation["labeled_records"] == 100
 assert diagnosis["request_count"] == 100
-assert diagnosis["evidence_scope"] == "100-request-pilot-schema-and-selector-signal-only"
+assert diagnosis["evidence_scope"] == "100-request-coverage-and-selector-signal-only"
 print("Phase 3C.1 100-request pilot PASS")
 PY
 
@@ -755,3 +756,161 @@ cat "$SR_PHASE3C_RUN/selector-diagnosis.md"
 Return the workload manifest, all stage summaries, validation JSON, selector diagnosis JSON/MD,
 and error logs if any. Stop there. Do not interpret the pilot as a GPU speedup or proceed to
 packed-tree, serving-engine, Dual-Batch, Eager, SLO or simulator work without review.
+
+## 14. Phase 3C.2 resummary and multi-round pilot
+
+Phase 3C.2 does not benchmark GPU performance. The first command group reads the immutable
+Phase 3C.1 100-request artifacts and writes new v2 summary files only. The old ShareGPT prompts
+did not use the Qwen chat template, so the resulting chat rows remain legacy diagnostics and must
+not be mixed with the corrected pilot.
+
+### Group 1: resummarize the existing 100-request trace
+
+```bash
+conda activate /root/autodl-tmp/envs/specrhythm-phase3-80d5769
+set -euo pipefail
+cd /root/autodl-tmp/src/SpecRhythm
+
+git fetch origin codex/gpu-integration-v0.1
+export SR_PHASE3C2_COMMIT="$(git rev-parse FETCH_HEAD)"
+git switch --detach "$SR_PHASE3C2_COMMIT"
+test "$(git rev-parse HEAD)" = "$SR_PHASE3C2_COMMIT"
+test -z "$(git status --short)"
+python -m pip install -e '.[dev,gpu]'
+
+export SR_PHASE3C1_COMMIT="dab001c52df481fd35577b49ddcc77e79edbfce9"
+export SR_PHASE3C_OLD100="/root/autodl-tmp/SpecRhythm-data/results/phase3c/$SR_PHASE3C1_COMMIT/pilot-100"
+test -f "$SR_PHASE3C_OLD100/workload-manifest.json"
+test -d "$SR_PHASE3C_OLD100/draft/requests"
+test -d "$SR_PHASE3C_OLD100/target/requests"
+test -d "$SR_PHASE3C_OLD100/labeled/requests"
+test -d "$SR_PHASE3C_OLD100/selectors/requests"
+
+specrhythm phase3c-resummary \
+  --draft-dir "$SR_PHASE3C_OLD100/draft" \
+  --target-dir "$SR_PHASE3C_OLD100/target" \
+  --labeled-dir "$SR_PHASE3C_OLD100/labeled" \
+  --selector-dir "$SR_PHASE3C_OLD100/selectors" \
+  --workload-manifest "$SR_PHASE3C_OLD100/workload-manifest.json" \
+  --source-trace-commit "$SR_PHASE3C1_COMMIT" \
+  --output "$SR_PHASE3C_OLD100/selector-diagnosis-v2.json" \
+  --markdown-output "$SR_PHASE3C_OLD100/selector-diagnosis-v2.md"
+
+python - "$SR_PHASE3C_OLD100" "$SR_PHASE3C1_COMMIT" <<'PY'
+import json
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+report = json.load(open(root / "selector-diagnosis-v2.json"))
+assert report["source_trace_commit"] == sys.argv[2]
+assert report["summary_schema_version"] == "specrhythm.phase3c-selector-diagnosis.v2"
+assert report["coverage_definition_version"] == "specrhythm.target-coverage.v2"
+assert report["coverage_semantics_audit"]["nested_target_path_recall_monotonic"]
+assert report["source_trace_sha256"]["combined"]
+assert "legacy v1 workload" in report["source_workload_manifest"]["chat_trace_compatibility"]
+assert report["gpu_performance_result"] is False
+print("Phase 3C.1 immutable-artifact v2 resummary PASS")
+PY
+
+cat "$SR_PHASE3C_OLD100/selector-diagnosis-v2.md"
+```
+
+If the earlier pilot directory used a timestamp rather than the commit layout, change only
+`SR_PHASE3C_OLD100` to that existing directory. Do not copy or rename its raw subdirectories.
+
+### Group 2: corrected 20-request multi-round common-prefix pilot
+
+The following creates a new directory and a new workload because ShareGPT rendering changed. It
+freezes each target trajectory once on target TP=2, then builds one draft forest per target prefix
+on draft GPU 0. The CPU replay never invokes either model.
+
+```bash
+conda activate /root/autodl-tmp/envs/specrhythm-phase3-80d5769
+set -euo pipefail
+cd /root/autodl-tmp/src/SpecRhythm
+
+export SR_DRAFT_MODEL="/root/autodl-tmp/models/Qwen3-0.6B"
+export SR_TARGET_MODEL="/root/autodl-tmp/models/Qwen3-32B"
+export SR_MOONCAKE_TRACE="/root/autodl-tmp/SpecRhythm-data/raw/Mooncake/FAST25-release/traces/conversation_trace.jsonl"
+export SR_HUMANEVAL_JSONL="/root/autodl-tmp/SpecRhythm-data/raw/public/HumanEval/HumanEval.jsonl.gz"
+export SR_SHAREGPT_JSONL="/root/autodl-tmp/SpecRhythm-data/raw/public/ShareGPT/sharegpt.jsonl"
+export SR_CNNDM_JSONL="/root/autodl-tmp/SpecRhythm-data/raw/public/CNN-DailyMail/cnn_dailymail-test.jsonl"
+export SR_PHASE3C2_COMMIT="$(git rev-parse HEAD)"
+export SR_PHASE3C2_RUN="/root/autodl-tmp/SpecRhythm-data/results/phase3c/$SR_PHASE3C2_COMMIT/multiround-20"
+
+test -f "$SR_DRAFT_MODEL/config.json"
+test -f "$SR_TARGET_MODEL/config.json"
+test -f "$SR_MOONCAKE_TRACE"
+test -f "$SR_HUMANEVAL_JSONL"
+test -f "$SR_SHAREGPT_JSONL"
+test -f "$SR_CNNDM_JSONL"
+mkdir -p "$SR_PHASE3C2_RUN"
+
+python -m pytest -q
+python -m ruff check .
+git diff --check
+
+specrhythm phase3c-workload-build \
+  --config configs/phase3c_r3_real_1d2v.yaml \
+  --request-count 20 \
+  --output "$SR_PHASE3C2_RUN/workload.jsonl" \
+  --manifest "$SR_PHASE3C2_RUN/workload-manifest.json"
+
+env -u CUDA_VISIBLE_DEVICES specrhythm phase3c-target-trajectory \
+  --config configs/phase3c_r3_real_1d2v.yaml \
+  --workload "$SR_PHASE3C2_RUN/workload.jsonl" \
+  --output-dir "$SR_PHASE3C2_RUN/target" \
+  --resume
+
+CUDA_VISIBLE_DEVICES=0 specrhythm phase3c-multiround-snapshots \
+  --config configs/phase3c_r3_real_1d2v.yaml \
+  --workload "$SR_PHASE3C2_RUN/workload.jsonl" \
+  --target-dir "$SR_PHASE3C2_RUN/target" \
+  --output-dir "$SR_PHASE3C2_RUN/common-prefix-snapshots" \
+  --resume
+
+specrhythm phase3c-multiround-replay \
+  --workload "$SR_PHASE3C2_RUN/workload.jsonl" \
+  --target-dir "$SR_PHASE3C2_RUN/target" \
+  --snapshot-dir "$SR_PHASE3C2_RUN/common-prefix-snapshots" \
+  --output-dir "$SR_PHASE3C2_RUN/sequential-replay" \
+  --resume
+
+specrhythm phase3c-multiround-summary \
+  --snapshot-dir "$SR_PHASE3C2_RUN/common-prefix-snapshots" \
+  --sequential-dir "$SR_PHASE3C2_RUN/sequential-replay" \
+  --source-trace-commit "$SR_PHASE3C2_COMMIT" \
+  --output "$SR_PHASE3C2_RUN/multiround-summary.json" \
+  --markdown-output "$SR_PHASE3C2_RUN/multiround-summary.md"
+
+python - "$SR_PHASE3C2_RUN" "$SR_PHASE3C2_COMMIT" <<'PY'
+import json
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+manifest = json.load(open(root / "workload-manifest.json"))
+summary = json.load(open(root / "multiround-summary.json"))
+assert manifest["task_counts"] == {"code": 12, "chat": 4, "summarization": 4}
+assert manifest["schema_version"] == "specrhythm.r3-real-workload-manifest.v2"
+assert manifest["prompt_rendering_audit"]["chat"]["chat_template_applied"]
+assert manifest["prompt_rendering_audit"]["chat"]["enable_thinking"] is False
+assert summary["source_trace_commit"] == sys.argv[2]
+assert summary["request_count"] == 20
+assert 20 <= summary["snapshot_count"] <= 320
+assert summary["target_trajectory_generated_once"]
+assert summary["common_snapshot_shared_by_all_selectors"]
+assert summary["final_target_sequence_match"]
+assert summary["gpu_performance_result"] is False
+assert summary["reports_goodput_slo_or_speedup"] is False
+print("Phase 3C.2 multi-round common-prefix pilot PASS")
+PY
+
+cat "$SR_PHASE3C2_RUN/multiround-summary.md"
+```
+
+Return the v2 resummary JSON/Markdown, corrected workload manifest, target and snapshot stage
+summaries, sequential stage summary, multi-round JSON/Markdown, and any error logs. Stop after
+these two groups. Do not begin packed-tree verification, serving-engine integration, Dual-Batch,
+Eager, SLO evaluation or simulator calibration.

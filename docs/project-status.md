@@ -33,7 +33,7 @@ claims.
 | --- | --- | --- | --- |
 | [#1 workload-v0.1](https://github.com/rzwang22/SpecRhythm/pull/1) | merged | strict Mooncake replay, R3 proxy config, validator, manifest, fixture tests and docs | workload plumbing only; proxy payload and illustrative acceptance |
 | [#2 simulator-semantics-v0.2](https://github.com/rzwang22/SpecRhythm/pull/2) | frozen draft; Phase 2 complete, not merged | proposal lifecycle, deterministic tree oracle, tree-aware allocators, base-preserving residual controls, Phase-2 nested search pools and common-snapshot oracle replay, path-aware eager and accounting | pure-Python proxy and oracle upper bounds only; no deployable oracle, measured search cost, GPU integration, or performance claim |
-| [#3 gpu-integration-v0.1](https://github.com/rzwang22/SpecRhythm/pull/3) | draft; Phase 3B.1 passed, Phase 3C.1 code ready for GPU pilot | hardened multi-rank primitive evidence plus deterministic R3-real workload, shared real candidate forest, immutable target labels and offline selector diagnosis | Phase 3B.1 user-run 3×A800 validation plus Phase 3C.1 Mac CPU tests; no Phase 3C GPU pilot yet, packed-tree/serving engine, Dual-Batch, SLO or speedup claim |
+| [#3 gpu-integration-v0.1](https://github.com/rzwang22/SpecRhythm/pull/3) | draft; Phase 3B.1 and user-run Phase 3C.1 pilot complete; Phase 3C.2 awaiting server run | hardened multi-rank primitive evidence, R3-real traces, coverage migration, shell/paired/headroom diagnosis and multi-round common-prefix replay | user-run 3×A800 correctness artifacts plus Mac CPU tests; no packed-tree/serving engine, Dual-Batch, SLO, calibrated latency or speedup claim |
 
 ## Phase 3.0: GPU readiness and real-trace runner
 
@@ -97,7 +97,7 @@ synthetic top-k primitive was about 0.03 ms; large-payload peer copies were stab
 validation passed. These are repeatability observations for `hf_correctness` primitives, not a
 serving latency surface or a performance claim.
 
-## Phase 3C.1: R3-real selector learnability pilot
+## Phase 3C.1–3C.2: real selector diagnosis
 
 Phase 3C.1 adds an isolated, resumable pipeline without changing the simulator. It builds a fixed
 100-request public-text pilot with a 60/20/20 code/chat/summarization mixture, binds the first 100
@@ -117,11 +117,33 @@ budget. Reports cover pool/selected target-path coverage, candidate efficiency, 
 depth/probability/entropy calibration, sibling hits and pool robustness. Stable request-level
 train/validation/test splits prevent candidate-node leakage.
 
-The Mac agent has run only CPU fixtures and dry-runs. The next gate is first the 3/1/1 five-request
-smoke, then the 60/20/20 100-request pilot on the user's 3×A800 host. Until those artifacts are
-reviewed, Phase 3C.1 has no empirical Qwen coverage or selector-learnability result. Packed-tree,
-vLLM/SGLang, Dual-Batch, Eager, SLO evaluation and simulator calibration remain explicitly out of
-scope. See [phase3-real-trace.md](phase3-real-trace.md) for the frozen schema and formulas.
+The user completed and validated the 60/20/20 real Qwen3 pilot. At budget four,
+Residual-Probability accepted 1.92 tokens/proposal at all three pools; the within-request oracle
+accepted 2.23/2.30/2.30 at 1x/2x/4x. These are selector-signal observations, not latency or system
+performance. The old `target_path_pool_coverage` fell as the nested pool expanded because it used
+each pool's own realized maximum depth as its denominator. It was not density and did not have a
+fixed recall denominator.
+
+Phase 3C.2 preserves that legacy field and adds fixed-denominator monotonic target-path recall,
+target-node density, selected precision/recall, K=4/8/16 horizon coverage, first-missing depth,
+16/16/32-node shell decomposition and selection-set stability. Per-task and overall reports now
+use request-level stratified bootstrap intervals and paired oracle/Residual-Probability
+comparisons. Headroom separates generator coverage, selector regret and budget limits; zero oracle
+expansion gain is explicitly not identifiable.
+
+The prompt audit also found that Phase 3C.1 ShareGPT chat prompts were raw first-user text without
+the Qwen chat template. Those 20 old chat traces remain legacy diagnostics and cannot be pooled
+with corrected data. The v2 builder applies the Qwen tokenizer chat template with
+`enable_thinking=false`, retains native HumanEval completion prefixes and the explicit
+CNN/DailyMail summarization instruction, and records deidentified rendering/tokenizer metadata.
+
+The new 20-request (12/4/4) multi-round mode freezes each at-most-16-token target once, creates one
+shared forest at every target-prefix position, and replays every selector sequentially over those
+same snapshots. Immutable checkpoint/resume and final-token equality are enforced. The Mac agent
+implemented and tested this path without running a GPU model. The next gate is the immutable
+100-request v2 resummary and corrected 20-request server pilot, followed by artifact review.
+Packed-tree, vLLM/SGLang, Dual-Batch, Eager, SLO evaluation and simulator calibration remain out of
+scope. See [phase3-real-trace.md](phase3-real-trace.md) for definitions and boundaries.
 
 ## Phase 1.5: residual selection
 

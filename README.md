@@ -186,12 +186,14 @@ correctness-backend primitive measurement, not a vLLM/SGLang throughput claim. C
 schemas and the selector-stage contract but never emit synthetic GPU latency. See
 [docs/phase3-gpu-runbook.md](docs/phase3-gpu-runbook.md) before using a GPU host.
 
-Phase 3C.1 adds `configs/phase3c_r3_real_1d2v.yaml` for a three-GPU R3-real pilot. Public prompts,
-Mooncake arrivals, Qwen token IDs, candidate forests and target trajectories stay outside Git.
+Phase 3C.1/3C.2 use `configs/phase3c_r3_real_1d2v.yaml` for a three-GPU R3-real
+selector pilot. Public prompts, Mooncake arrivals, Qwen token IDs, candidate forests and target
+trajectories stay outside Git.
 The pipeline is split into workload build, draft forest, target trajectory, label join, selector
 replay, validation and summary commands so every expensive stage can resume independently.
-Its output diagnoses target-path coverage and target-blind selector regret against a
-within-request oracle; it never reports goodput, SLO attainment or GPU speedup. See
+Its output diagnoses fixed-denominator target-path recall, pool density, shell utilization,
+multi-round acceptance and target-blind selector regret against a within-request oracle; it never
+reports goodput, SLO attainment or GPU speedup. See
 [docs/phase3-real-trace.md](docs/phase3-real-trace.md) for its evidence boundary.
 
 The completed audit contains 3/3 common replays (10,000 corrected-queue snapshots each), 9/9

@@ -15,7 +15,11 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Optional, Protocol, TextIO
 
 from specrhythm.phase3.engine import DryRunBackend
-from specrhythm.phase3.phase3c_config import Phase3CConfig, PublicDatasetConfig
+from specrhythm.phase3.phase3c_config import (
+    Phase3CConfig,
+    PublicDatasetConfig,
+    load_frozen_pool_dimensions,
+)
 from specrhythm.phase3.trace import sha256_file
 from specrhythm.workload import apportion_counts, select_arrival_replay
 
@@ -51,13 +55,40 @@ class TransformersPromptTokenizer:
             "special_tokens_map": self.tokenizer.special_tokens_map,
         }
         self.tokenizer_fingerprint = hashlib.sha256(
-            json.dumps(
-                payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False
-            ).encode()
+            json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
         ).hexdigest()
+        self.tokenizer_metadata = {
+            "tokenizer_class": type(self.tokenizer).__name__,
+            "special_tokens_map": self.tokenizer.special_tokens_map,
+            "model_max_length": self.tokenizer.model_max_length,
+            "truncation_side": self.tokenizer.truncation_side,
+            "padding_side": self.tokenizer.padding_side,
+            "chat_template_sha256": (
+                hashlib.sha256(self.tokenizer.chat_template.encode()).hexdigest()
+                if self.tokenizer.chat_template
+                else None
+            ),
+        }
 
     def encode(self, prompt: str) -> list[int]:
         return list(self.tokenizer.encode(prompt, add_special_tokens=True))
+
+    def render_chat(self, user_text: str) -> str:
+        try:
+            rendered = self.tokenizer.apply_chat_template(
+                [{"role": "user", "content": user_text}],
+                tokenize=False,
+                add_generation_prompt=True,
+                enable_thinking=False,
+            )
+        except TypeError as error:
+            raise ValueError(
+                "tokenizer chat template does not expose Qwen3 enable_thinking; "
+                "do not create a mixed-semantics chat trace"
+            ) from error
+        if not isinstance(rendered, str) or not rendered:
+            raise ValueError("Qwen chat template returned an empty prompt")
+        return rendered
 
 
 @dataclass(frozen=True)
@@ -145,6 +176,67 @@ class _SourcePrompt:
     record_id: str
     raw_text: str
     prompt_text: str
+
+
+def _render_prompt(
+    task: str, item: _SourcePrompt, tokenizer: PromptTokenizer
+) -> tuple[str, dict[str, Any]]:
+    if task == "chat":
+        renderer = getattr(tokenizer, "render_chat", None)
+        if callable(renderer):
+            prompt = str(renderer(item.prompt_text))
+            template = "tokenizer.apply_chat_template"
+        else:
+            # Dependency-free dry-run/fixture equivalent. Real Transformers runs always
+            # use the model tokenizer's own template above.
+            prompt = f"<|im_start|>user\n{item.prompt_text}<|im_end|>\n<|im_start|>assistant\n"
+            template = "dependency-free-qwen-chat-template-dry-run-only"
+        return prompt, {
+            "source_fields": "first conversations/messages entry with human/user/prompter role",
+            "instruction": "first user turn, no synthetic assistant content",
+            "chat_template": template,
+            "chat_template_applied": True,
+            "add_generation_prompt": True,
+            "enable_thinking": False,
+            "deidentified_example": (
+                "<|im_start|>user\\n<USER_TEXT_REDACTED><|im_end|>\\n<|im_start|>assistant\\n"
+            ),
+        }
+    if task == "code":
+        return item.prompt_text, {
+            "source_fields": "HumanEval prompt (or configured code adapter equivalent)",
+            "instruction": "native code-completion prefix; no added instruction",
+            "chat_template": None,
+            "chat_template_applied": False,
+            "add_generation_prompt": False,
+            "enable_thinking": False,
+            "deidentified_example": "<PUBLIC_CODE_COMPLETION_PREFIX_REDACTED>",
+        }
+    return item.prompt_text, {
+        "source_fields": "CNN/DailyMail article (or configured summarization document field)",
+        "instruction": "Summarize the following document:",
+        "chat_template": None,
+        "chat_template_applied": False,
+        "add_generation_prompt": False,
+        "enable_thinking": False,
+        "deidentified_example": ("Summarize the following document:\\n\\n<DOCUMENT_REDACTED>"),
+    }
+
+
+def _tokenizer_audit(tokenizer: PromptTokenizer, context_length: int) -> dict[str, Any]:
+    configured = getattr(tokenizer, "tokenizer_metadata", {})
+    return {
+        "model_id": Path(tokenizer.model_id).name,
+        "fingerprint": tokenizer.tokenizer_fingerprint,
+        "special_tokens": configured.get("special_tokens_map", "dry-run/fixture tokenizer"),
+        "tokenizer_class": configured.get("tokenizer_class", type(tokenizer).__name__),
+        "tokenizer_model_max_length": configured.get("model_max_length"),
+        "truncation_side": configured.get("truncation_side", "not applied"),
+        "padding_side": configured.get("padding_side", "not applied"),
+        "chat_template_sha256": configured.get("chat_template_sha256"),
+        "workload_maximum_context_length": context_length,
+        "truncation_policy": "no truncation; reject and sample next record",
+    }
 
 
 def _open_text(path: Path) -> TextIO:
@@ -350,10 +442,11 @@ def build_r3_real_workload(
     owns_tokenizer = tokenizer is None
     tokenizer = tokenizer or create_workload_tokenizer(config)
     requests = []
+    prompt_audits: dict[str, dict[str, Any]] = {}
+    candidate_depth = int(load_frozen_pool_dimensions(config)["candidate_depth"])
+    context_reserve = config.workload.maximum_new_tokens - 1 + candidate_depth
     try:
-        for index, (task, arrival) in enumerate(
-            zip(assignments, replay.arrival_times_ms[:count])
-        ):
+        for index, (task, arrival) in enumerate(zip(assignments, replay.arrival_times_ms[:count])):
             source = source_by_task[task]
             while True:
                 if cursors[task] >= len(sampled[task]):
@@ -363,18 +456,25 @@ def build_r3_real_workload(
                     )
                 item = sampled[task][cursors[task]]
                 cursors[task] += 1
-                token_ids = tuple(tokenizer.encode(item.prompt_text))
-                if (
-                    len(token_ids) + config.workload.maximum_new_tokens
-                    <= config.runtime.context_length
-                ):
+                prompt_text, prompt_audit = _render_prompt(task, item, tokenizer)
+                prompt_audit = {
+                    **prompt_audit,
+                    "dataset": source.dataset,
+                    "adapter": source.adapter,
+                }
+                token_ids = tuple(tokenizer.encode(prompt_text))
+                if len(token_ids) + context_reserve <= config.runtime.context_length:
                     break
                 context_rejections[task] += 1
+            prompt_audits.setdefault(task, prompt_audit)
             raw_hash = hashlib.sha256(item.raw_text.encode()).hexdigest()
-            request_id = "r3-" + hashlib.sha256(
-                f"{config.runtime.random_seed}\0{task}\0{source.dataset}\0"
-                f"{item.record_id}\0{raw_hash}".encode()
-            ).hexdigest()[:24]
+            request_id = (
+                "r3-"
+                + hashlib.sha256(
+                    f"{config.runtime.random_seed}\0{task}\0{source.dataset}\0"
+                    f"{item.record_id}\0{raw_hash}".encode()
+                ).hexdigest()[:24]
+            )
             requests.append(
                 R3RealRequest(
                     request_id=request_id,
@@ -384,7 +484,7 @@ def build_r3_real_workload(
                     source_split=source.split,
                     source_license_or_url=source.source_license_or_url,
                     raw_text_sha256=raw_hash,
-                    prompt_text=item.prompt_text,
+                    prompt_text=prompt_text,
                     prompt_token_ids=token_ids,
                     prompt_length=len(token_ids),
                     tokenizer_fingerprint=tokenizer.tokenizer_fingerprint,
@@ -418,7 +518,7 @@ def build_r3_real_workload(
             }
         )
     manifest = {
-        "schema_version": "specrhythm.r3-real-workload-manifest.v1",
+        "schema_version": "specrhythm.r3-real-workload-manifest.v2",
         "workload_family": "R3-real-pilot",
         "evidence_scope": "schema-and-selector-signal-pilot-only",
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -438,9 +538,19 @@ def build_r3_real_workload(
         "tokenizer_config_sha256": (
             sha256_file(tokenizer_config) if tokenizer_config.is_file() else None
         ),
+        "tokenizer_metadata": _tokenizer_audit(tokenizer, config.runtime.context_length),
+        "prompt_rendering_audit": {task: prompt_audits[task] for task in TASK_CLASSES},
+        "chat_trace_compatibility": (
+            "Qwen chat template applied with enable_thinking=false; incompatible with "
+            "Phase-3C.1 legacy raw-first-user chat traces"
+        ),
         "config_file": config.path.name,
         "config_sha256": sha256_file(config.path),
         "prompt_lengths_are_proxy": False,
+        "context_reserve_tokens": context_reserve,
+        "context_reserve_semantics": (
+            "maximum_new_tokens-1 frozen target prefix plus candidate_depth draft path"
+        ),
         "sources": sources,
         "output_file": output_path.name,
         "output_workload_sha256": workload_sha,

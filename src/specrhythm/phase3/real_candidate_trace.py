@@ -342,10 +342,14 @@ class LabeledTraceRecord:
         by_id = {node.runtime_features.stable_node_id: node for node in self.nodes}
         if len(by_id) != len(self.nodes):
             raise ValueError("labeled candidate IDs must be unique")
+        previous: set[str] = set()
         for ratio in ("1x", "2x", "4x"):
             pool = set(self.pool_node_ids[ratio])
+            if not previous.issubset(pool):
+                raise ValueError("labeled candidate pools must remain nested")
             if not set(self.target_path_node_ids_by_pool[ratio]).issubset(pool):
                 raise ValueError("target path node is outside its candidate pool")
+            previous = pool
         if self.selected_verify_nodes:
             raise ValueError("label join must not preselect verification nodes")
 
@@ -512,6 +516,8 @@ def generate_real_candidate_forest(
     workload_sha256: str,
     pool_dimensions: Mapping[str, Any],
     model_revision: str,
+    context_token_ids: Optional[tuple[int, ...]] = None,
+    cycle_id: int = 0,
 ) -> CandidateForestRecord:
     width = int(pool_dimensions["candidate_width"])
     maximum_depth = int(pool_dimensions["candidate_depth"])
@@ -521,18 +527,17 @@ def generate_real_candidate_forest(
     heapq.heappush(frontier, (-1.0, 0, "", root))
     nodes: list[RuntimeCandidateNode] = []
     forward_count = 0
+    context = context_token_ids if context_token_ids is not None else request.prompt_token_ids
     while frontier and len(nodes) < maximum_nodes:
         _, _, _, state = heapq.heappop(frontier)
-        distribution = backend.next_token(
-            list(request.prompt_token_ids + state.path_tokens), width
-        )
+        distribution = backend.next_token(list(context + state.path_tokens), width)
         forward_count += 1
         for sibling_rank, token in enumerate(distribution.ranked_tokens[:width]):
             if len(nodes) >= maximum_nodes:
                 break
             depth = state.depth + 1
             node_id = stable_node_id(
-                request.request_id, 0, state.parent_id, token.token_id, sibling_rank
+                request.request_id, cycle_id, state.parent_id, token.token_id, sibling_rank
             )
             probability = max(token.probability, 1e-300)
             path_probability = state.probability * token.probability
@@ -582,7 +587,7 @@ def generate_real_candidate_forest(
     return CandidateForestRecord(
         request_id=request.request_id,
         workload_sha256=workload_sha256,
-        prompt_length=request.prompt_length,
+        prompt_length=len(context),
         draft_model=backend.model_id,
         draft_model_revision=model_revision,
         tokenizer_fingerprint=backend.tokenizer_fingerprint,
@@ -906,6 +911,11 @@ def run_label_join_stage(
         )
         written += int(output.write(request.request_id, record))
     records = output.records()
+    missing_full = sum(bool(record.missing_target_depths_by_pool["1x"]) for record in records)
+    missing_k4 = sum(
+        any(depth <= 4 for depth in record.missing_target_depths_by_pool["1x"])
+        for record in records
+    )
     return {
         "schema_version": "specrhythm.phase3c-stage-summary.v1",
         "stage": "label-join",
@@ -913,8 +923,11 @@ def run_label_join_stage(
         "completed_records": len(records),
         "runtime_target_feature_isolation": True,
         "target_trajectory_regenerated": False,
-        "requests_with_missing_1x_target_coverage": sum(
-            bool(record.missing_target_depths_by_pool["1x"]) for record in records
+        "requests_with_missing_1x_target_coverage": missing_full,
+        "requests_with_missing_full_1x_eligible_target_path": missing_full,
+        "requests_with_missing_1x_verification_horizon_k4": missing_k4,
+        "missing_coverage_interpretation": (
+            "full eligible-path missing is not a first-round failure rate; use the K=4 count"
         ),
     }
 

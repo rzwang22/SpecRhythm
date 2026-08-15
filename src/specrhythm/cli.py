@@ -433,8 +433,56 @@ def build_parser() -> argparse.ArgumentParser:
     )
     phase3c_summary.add_argument("--labeled-dir", required=True)
     phase3c_summary.add_argument("--selector-dir", required=True)
+    phase3c_summary.add_argument("--source-trace-commit")
+    phase3c_summary.add_argument("--workload-manifest")
+    phase3c_summary.add_argument("--draft-dir")
+    phase3c_summary.add_argument("--target-dir")
     phase3c_summary.add_argument("--output", required=True)
     phase3c_summary.add_argument("--markdown-output", required=True)
+
+    phase3c_resummary = subparsers.add_parser(
+        "phase3c-resummary",
+        help="migrate existing immutable Phase-3C raw artifacts to the v2 coverage summary",
+    )
+    phase3c_resummary.add_argument("--labeled-dir", required=True)
+    phase3c_resummary.add_argument("--selector-dir", required=True)
+    phase3c_resummary.add_argument("--draft-dir", required=True)
+    phase3c_resummary.add_argument("--target-dir", required=True)
+    phase3c_resummary.add_argument("--source-trace-commit", required=True)
+    phase3c_resummary.add_argument("--workload-manifest")
+    phase3c_resummary.add_argument("--output", required=True)
+    phase3c_resummary.add_argument("--markdown-output", required=True)
+
+    phase3c_snapshots = subparsers.add_parser(
+        "phase3c-multiround-snapshots",
+        help="build selector-independent forests at every frozen target-prefix position",
+    )
+    phase3c_snapshots.add_argument("--config", required=True)
+    phase3c_snapshots.add_argument("--workload", required=True)
+    phase3c_snapshots.add_argument("--target-dir", required=True)
+    phase3c_snapshots.add_argument("--output-dir", required=True)
+    phase3c_snapshots.add_argument("--resume", action="store_true")
+    phase3c_snapshots.add_argument("--backend", choices=("dry-run", "transformers"))
+
+    phase3c_sequential = subparsers.add_parser(
+        "phase3c-multiround-replay",
+        help="offline sequential selector replay over immutable common-prefix snapshots",
+    )
+    phase3c_sequential.add_argument("--workload", required=True)
+    phase3c_sequential.add_argument("--target-dir", required=True)
+    phase3c_sequential.add_argument("--snapshot-dir", required=True)
+    phase3c_sequential.add_argument("--output-dir", required=True)
+    phase3c_sequential.add_argument("--resume", action="store_true")
+
+    phase3c_multi_summary = subparsers.add_parser(
+        "phase3c-multiround-summary",
+        help="summarize multi-round selector accounting and headroom without performance claims",
+    )
+    phase3c_multi_summary.add_argument("--snapshot-dir", required=True)
+    phase3c_multi_summary.add_argument("--sequential-dir", required=True)
+    phase3c_multi_summary.add_argument("--source-trace-commit", required=True)
+    phase3c_multi_summary.add_argument("--output", required=True)
+    phase3c_multi_summary.add_argument("--markdown-output", required=True)
     return parser
 
 
@@ -820,7 +868,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             }
         _write_json(report, args.output)
         return 0 if report["valid"] else 1
-    if args.command == "phase3c-summary":
+    if args.command in {"phase3c-summary", "phase3c-resummary"}:
         from specrhythm.phase3.benchmark import atomic_write_json, atomic_write_text
         from specrhythm.phase3.selector_diagnosis import (
             diagnosis_markdown,
@@ -831,11 +879,72 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             report = summarize_selector_diagnosis(
                 labeled_dir=Path(args.labeled_dir).resolve(),
                 selector_dir=Path(args.selector_dir).resolve(),
+                source_trace_commit=args.source_trace_commit,
+                workload_manifest_path=(
+                    Path(args.workload_manifest).resolve() if args.workload_manifest else None
+                ),
+                draft_dir=Path(args.draft_dir).resolve() if args.draft_dir else None,
+                target_dir=Path(args.target_dir).resolve() if args.target_dir else None,
             )
         except (FileNotFoundError, ValueError) as error:
             raise SystemExit(f"Phase-3C summary failed: {error}") from error
         atomic_write_json(Path(args.output).resolve(), report)
         atomic_write_text(Path(args.markdown_output).resolve(), diagnosis_markdown(report))
+        return 0
+    if args.command == "phase3c-multiround-snapshots":
+        from specrhythm.phase3.multiround import run_common_prefix_snapshot_stage
+        from specrhythm.phase3.r3_workload import load_r3_workload
+
+        try:
+            output_dir = Path(args.output_dir).resolve()
+            report = run_common_prefix_snapshot_stage(
+                load_r3_workload(Path(args.workload).resolve()),
+                _phase3c_config(args.config, args.backend),
+                workload_path=Path(args.workload).resolve(),
+                target_dir=Path(args.target_dir).resolve(),
+                output_dir=output_dir,
+                resume=args.resume,
+            )
+        except (FileExistsError, FileNotFoundError, ValueError, RuntimeError) as error:
+            raise SystemExit(f"Phase-3C multi-round snapshot stage failed: {error}") from error
+        _write_json(report, str(output_dir / "stage-summary.json"))
+        _write_json(report, None)
+        return 0
+    if args.command == "phase3c-multiround-replay":
+        from specrhythm.phase3.multiround import run_sequential_replay_stage
+        from specrhythm.phase3.r3_workload import load_r3_workload
+
+        try:
+            output_dir = Path(args.output_dir).resolve()
+            report = run_sequential_replay_stage(
+                load_r3_workload(Path(args.workload).resolve()),
+                target_dir=Path(args.target_dir).resolve(),
+                snapshot_dir=Path(args.snapshot_dir).resolve(),
+                output_dir=output_dir,
+                resume=args.resume,
+            )
+        except (FileExistsError, FileNotFoundError, ValueError) as error:
+            raise SystemExit(f"Phase-3C multi-round replay failed: {error}") from error
+        _write_json(report, str(output_dir / "stage-summary.json"))
+        _write_json(report, None)
+        return 0
+    if args.command == "phase3c-multiround-summary":
+        from specrhythm.phase3.benchmark import atomic_write_json, atomic_write_text
+        from specrhythm.phase3.multiround import (
+            multiround_markdown,
+            summarize_multiround,
+        )
+
+        try:
+            report = summarize_multiround(
+                snapshot_dir=Path(args.snapshot_dir).resolve(),
+                sequential_dir=Path(args.sequential_dir).resolve(),
+                source_trace_commit=args.source_trace_commit,
+            )
+        except (FileNotFoundError, ValueError) as error:
+            raise SystemExit(f"Phase-3C multi-round summary failed: {error}") from error
+        atomic_write_json(Path(args.output).resolve(), report)
+        atomic_write_text(Path(args.markdown_output).resolve(), multiround_markdown(report))
         return 0
     if args.command == "generate":
         config = load_json(args.config)

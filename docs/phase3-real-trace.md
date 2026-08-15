@@ -1,99 +1,111 @@
-# Phase 3C.1: R3-real pilot and selector diagnosis
+# Phase 3C.2: coverage audit and multi-round common-prefix traces
 
-Phase 3C.1 asks one narrow question: when Qwen3-0.6B builds a real candidate forest for prompts
-tokenized by the shared Qwen3 tokenizer, do target-blind draft features contain enough signal to
-approach a within-request Qwen3-32B oracle at a fixed verification budget? It does not measure
-serving latency, goodput, SLO attainment, or speedup.
+Phase 3C asks whether draft-only Qwen3 features contain useful signal for selecting a fixed budget
+of candidate nodes against one frozen Qwen3 target trajectory. It is a correctness and selector
+diagnosis pipeline. It does not implement packed-tree verification, a serving engine, Dual-Batch,
+Eager, SLO scheduling, GPU performance evaluation, learned selection, or simulator calibration.
 
-## Workload contract
+## Evidence and prompt boundary
 
-The fixed pilot contains 100 requests: 60 code, 20 chat, and 20 summarization. The five-request
-smoke uses deterministic largest-remainder apportionment and therefore contains 3/1/1. Public
-text and Mooncake timing are deliberately independent:
+The completed Phase 3C.1 pilot contains 100 requests (60 HumanEval code, 20 ShareGPT chat and 20
+CNN/DailyMail summarization), a Qwen3-0.6B draft, a Qwen3-32B target, a four-node verification
+budget, and nested 16/32/64-node pools. Its raw forests, target trajectories, labels and selector
+checkpoints remain immutable. They may be re-summarized without another model run.
 
-- HumanEval or MBPP supplies code prompts;
-- ShareGPT or OpenAssistant JSONL supplies chat prompts;
-- CNN/DailyMail, XSum, or GovReport JSONL supplies source documents;
-- the first N valid chronological Mooncake arrivals are rebased to zero in milliseconds and bound to the
-  deterministically shuffled 6:2:2 task sequence;
-- the configured Qwen3 tokenizer produces the stored token IDs and exact prompt length.
+The prompt audit found one incompatibility: the Phase 3C.1 ShareGPT adapter used the first user
+turn as raw text and did not apply the Qwen chat template. Phase 3C.2 applies the configured
+tokenizer's `apply_chat_template` with `add_generation_prompt=true` and
+`enable_thinking=false`. Therefore the old 20 chat requests are legacy diagnostic evidence and
+must not be pooled with corrected traces. HumanEval remains its native code-completion `prompt`
+without a synthetic instruction. CNN/DailyMail retains the explicit `Summarize the following
+document:` instruction.
 
-There is no handwritten fallback. A missing source file, insufficient valid source records,
-duplicate source ID, malformed JSONL, unresolved path, or insufficient Mooncake arrivals is a hard
-error. SLO classes 40/50/150 ms remain request metadata for code/chat/summarization; Phase 3C.1
-never reads them for selection or evaluation.
+The v2 workload manifest records, for each task, source fields, instruction semantics, chat-template
+use, thinking mode, special-token metadata, truncation direction, maximum context and one
+deidentified rendering example. Overlength records are rejected and replaced; text is never
+silently truncated. Public text, rendered prompts, token IDs, model outputs and reports remain
+outside Git.
 
-The workload JSONL is byte deterministic for a fixed config, seed, tokenizer and inputs. Its
-manifest records portable source filenames, source and arrival SHA256 values, the tokenizer
-fingerprint, exact mixture, seed, time scale and output SHA256. The creation timestamp and command
-are provenance fields in the manifest and do not enter the workload bytes.
+## Corrected coverage vocabulary
 
-## Frozen candidate-pool definition
+All nested pools share one eligible denominator:
 
-`configs/phase3c_r3_real_1d2v.yaml` derives its dimensions from the checked-in Phase-2
-`configs/simulator.json`; it does not define a second ratio convention. The frozen width is 2,
-depth is 8 and speculative verification budget is 4. Therefore the 1× base contains
-`width × depth = 16` non-root nodes, while 2× and 4× contain 32 and 64 nodes.
+```text
+eligible target nodes = min(frozen target length, shared 4x forest depth)
+target_path_recall = target nodes present in pool / eligible target nodes
+target_node_density = target nodes present in pool / pool nodes
+selected_target_precision = selected target nodes / selected nodes
+selected_target_recall = selected target nodes / eligible target nodes
+```
 
-For each request, the draft stage performs best-first prefix expansion once until the shared 4×
-forest is complete. The 1× and 2× pools are exact prefixes of that materialization order. Every
-parent precedes its children, so all three pools are prefix closed; the same node retains the same
-stable ID at every ratio. The record separates `search_pool_nodes`, the initially empty
-`selected_verify_nodes`, and target-path nodes populated only by the later label join.
+`target_path_recall` is monotonic for nested pools. The report also records
+`full_target_trajectory_covered`, `first_missing_target_depth`, the first missing depth inside the
+four-node verification horizon, and target recall at K=4, 8 and 16.
 
-This is a slow correctness collector. Each expanded parent invokes one full-context draft forward,
-and records `kv_cache_reuse=false`, the actual forward count, generation semantics and model
-revision. Search cost is not hidden or converted into a latency claim.
+The v1 field `target_path_pool_coverage` is retained unchanged for schema migration. It divided
+target nodes by `min(target length, that pool's own maximum realized depth)`. It was neither
+density nor a fixed-denominator recall, so it could decrease when a larger pool reached a deeper
+level. The v2 report labels that legacy definition explicitly instead of silently changing it.
 
-## Immutable target and labels
+Likewise, “88 of 100 requests missing full 1x coverage” would mean that some target depth in the
+entire (up to 16-token) trajectory is absent. It does not mean 88 requests fail in the first
+four-token proposal. The report separately counts missing full trajectories and missing K=4
+horizons.
 
-The target stage greedily generates one continuation per request, independently of every pool
-ratio. It records token IDs, token log probabilities, EOS position, model revision and forward
-count. Its per-request checkpoint is immutable: `--resume` reuses matching completed records and
-never overwrites them.
+## Pool shells and selection stability
 
-The CPU label join reconstructs each candidate path and adds four target-only fields:
-`on_target_path`, `target_prefix_match`, `accepted_if_selected`, and
-`committed_if_selected`. Missing target depths are explicit for every ratio. In particular, 1×
-coverage is observed data and is never assumed to be 100 percent.
+Every request uses one best-first, prefix-closed 4x forest. Its materialization order defines:
 
-Serialized nodes contain two separate objects: `runtime_features` and `target_only_labels`.
-Target-blind selectors accept only the `RuntimeCandidateNode` type. Passing a labeled node or a
-runtime mapping containing a target field raises `TargetFeatureLeakageError`; the oracle is the
-only selector with a labeled-node interface.
+```text
+1x base  = nodes [0, 16)
+2x shell = nodes [16, 32)
+4x shell = nodes [32, 64)
+```
 
-## Frozen selector baselines
+Per request and shell, the report stores node and target-node counts, density, minimum/maximum
+target depth, budget-four reachability, prefix-enabling nodes, oracle-selected shell nodes and
+per-target-blind-selector shell selections/hits. Thus an oracle gain from 1x to 2x can be traced to
+specific added nodes; a zero 2x-to-4x gain means no additional prefix-closed budget-four target
+continuation was usable on those snapshots, not necessarily that the 4x shell contained no target
+labels.
 
-Every selector sees the same request, forest, pool and per-request budget of four non-root nodes.
-Selection is deterministic, prefix closed and cannot exceed the budget.
+For each target-blind selector, 1x→2x, 2x→4x and 1x→4x comparisons report exact selected-set match,
+Jaccard, displaced budget, new-shell selections and target hits. This distinguishes identical
+Residual-Probability selections from changed selections with coincidentally equal accepted-token
+outcomes or aggregate cancellation.
 
-| Selector | Available information |
-| --- | --- |
-| `residual-probability` | descending path probability |
-| `local-probability` | descending local token probability |
-| `depth-normalized-log-path` | descending `log_path_probability / depth` |
-| `round-robin-branch-coverage` | depth, sibling rank, branch rank and deterministic ties |
-| `entropy-margin-heuristic` | `log_path + 0.25 × margin - 0.10 × cumulative_entropy/depth` |
-| `within-request-target-oracle` | target labels; diagnostic ceiling only |
+## Request-level statistics and headroom
 
-The entropy/margin coefficients are frozen before the GPU pilot. They must not be tuned on pilot
-test rows. Requests receive a stable 70/15/15 diagnostic-train/validation/test split by hashing
-their request IDs; candidates inherit their request split and are never randomly split by node.
+Code, chat, summarization and all-request rows are reported separately for every pool and selector.
+Accepted/committed tokens, coverage and gap metrics include mean, median, P25/P75, P90, population
+standard deviation and a deterministic request-bootstrap 95% interval. The all-request bootstrap
+preserves task strata. Candidate nodes are never treated as independent samples. Each row also
+contains win/tie/loss versus Residual-Probability, paired delta versus the within-request oracle,
+and absolute/relative oracle gaps.
 
-## Outputs and interpretation
+Headroom is separated into generator coverage (oracle gain from pool expansion), selector regret
+(budget-four oracle minus target-blind selection), budget constraint (unbudgeted contiguous target
+path minus budget-four oracle), and expansion utilization. A zero oracle expansion gain produces
+`null` and `identifiable=false`, never a fabricated zero. Cases are named explicitly: no useful
+target nodes, useful nodes blocked by budget, budget-reachable nodes missed by the selector, or a
+realized selector gain.
 
-The diagnosis reports target-path pool and selected coverage, accepted and committed tokens per
-proposal, accepted/verified, oracle regret and gap recovery, selected-node precision/recall,
-first-error depth, prefix-closure overhead and search/verified node counts. It also emits
-depth/probability and depth/entropy calibration, sibling-rank hit rate, selected-versus-unselected
-calibration, depth-level task metrics and pool-expansion robustness.
+## Multi-round common-prefix contract
 
-The decisive comparison is every target-blind selector against the within-request oracle on the
-same immutable target. The 100-request pilot is for schema, leakage, coverage and learnability
-signal diagnosis only. It is too small for a final test conclusion and has no packed-tree
-verification, serving-engine execution, Dual-Batch overlap, Eager, SLO scheduling or simulator
-calibration.
+The corrected pilot uses 20 requests (12/4/4) and freezes at most 16 greedy target tokens once per
+request. For every target prefix before EOS/limit, the draft stage creates exactly one common
+snapshot. It records request/task, prefix position, context length, remaining target tokens, full
+target hash, forest hash, nested-pool hashes, target continuation and budget. Stable node IDs
+include the prefix position. All selectors consume the same serialized snapshot; no selector can
+regenerate a forest or target.
 
-All public data, prompt text, model continuations, checkpoints and reports belong outside Git under
-`$SR_PHASE3C_ROOT`. The exact three-GPU commands are in
-[phase3-gpu-runbook.md](phase3-gpu-runbook.md#13-phase-3c1-r3-real-pilot-on-three-a800-gpus).
+Sequential replay starts at prefix zero, selects four prefix-closed nodes, accepts the longest
+matching draft prefix, commits those tokens plus a target correction/bonus when necessary, and
+advances along the frozen target. It reports rounds, accepted/committed/verified tokens, total
+verified nodes, oracle regret and first-versus-later-round acceptance. Every final committed token
+sequence must equal the immutable target-only trajectory. Checkpoints are one atomic file per
+snapshot/request and `--resume` never replaces a differing record.
+
+This remains full-context Transformers correctness collection with `kv_cache_reuse=false`. No
+latency, goodput, SLO attainment or speedup may be inferred from it. Exact server commands are in
+[phase3-gpu-runbook.md](phase3-gpu-runbook.md#14-phase-3c2-resummary-and-multi-round-pilot).
