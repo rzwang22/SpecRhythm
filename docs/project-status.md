@@ -1,6 +1,6 @@
 # SpecRhythm project status
 
-Last updated: 2026-08-14
+Last updated: 2026-08-15
 
 Maintenance rule: every code-changing PR updates this file with its scope, status, evidence,
 known limitations, and next gate before that PR is considered complete.
@@ -32,7 +32,130 @@ claims.
 | PR | Status | Scope | Evidence / boundary |
 | --- | --- | --- | --- |
 | [#1 workload-v0.1](https://github.com/rzwang22/SpecRhythm/pull/1) | merged | strict Mooncake replay, R3 proxy config, validator, manifest, fixture tests and docs | workload plumbing only; proxy payload and illustrative acceptance |
-| [#2 simulator-semantics-v0.2](https://github.com/rzwang22/SpecRhythm/pull/2) | draft, Phase 2 oracle-headroom implementation and matrix complete; review pending | proposal lifecycle, deterministic tree oracle, tree-aware allocators, base-preserving residual controls, Phase-2 nested search pools and common-snapshot oracle replay, path-aware eager and accounting | pure-Python proxy and oracle upper bounds only; no deployable oracle, measured search cost, GPU integration, or performance claim |
+| [#2 simulator-semantics-v0.2](https://github.com/rzwang22/SpecRhythm/pull/2) | frozen draft; Phase 2 complete, not merged | proposal lifecycle, deterministic tree oracle, tree-aware allocators, base-preserving residual controls, Phase-2 nested search pools and common-snapshot oracle replay, path-aware eager and accounting | pure-Python proxy and oracle upper bounds only; no deployable oracle, measured search cost, GPU integration, or performance claim |
+| [#3 gpu-integration-v0.1](https://github.com/rzwang22/SpecRhythm/pull/3) | draft; Phase 3B.1 and corrected-20 Phase 3C.2 complete; Phase 3C.3 corrected-100 awaiting server run | hardened multi-rank primitives, corrected R3-real traces, common-prefix replay, request-bootstrap statistics, 2x shell decomposition and diagnostic learned ranker | user-run 3×A800 correctness artifacts plus Mac CPU tests; no packed-tree/serving engine, Dual-Batch, SLO, calibrated latency or speedup claim |
+
+## Phase 3.0: GPU readiness and real-trace runner
+
+Phase 3.0 is stacked on the frozen PR #2 head and does not modify its simulator algorithms or
+reported results. The default package remains dependency free. An optional GPU extra pins PyTorch
+`>=2.7.1,<2.8` and Transformers `>=4.56.1,<4.57`; Transformers is used as a correctness collector
+because stable per-candidate draft logits, entropy, and margin are required. It is not the final
+serving engine.
+
+The real trace schema separates selector-visible draft features from target-only labels. Completed
+request/cycle records are immutable and independently validatable, making interruption/resume
+safe. The Phase 3A runner implements deterministic draft-only, target-only, and serial
+draft-then-verify collection. A five-GPU coordinator keeps draft TP=1 on GPU 0 and a persistent
+target TP=4 worker group on GPUs 1–4. It does not implement Dual-Batch overlap.
+
+The available server has three NVIDIA A800-SXM4-80GB GPUs with NV8 links between every pair, so
+the reviewed fallback is 1D2V: Qwen3-0.6B on GPU 0 at TP=1 and Qwen3-32B on GPUs 1–2 at TP=2.
+At commit `80d576912028da2d32cd1d8ba5cb593d10a547ae`, a user-run correctness smoke reported Python
+3.9.25, PyTorch 2.7.1+cu128, CUDA runtime 12.8, driver 580.126.09, and NCCL 2.26.2. Both model
+configs support TP=1/2/4 and correctly reject TP=3 without model surgery. The two-request serial
+trace committed 10 accepted candidate tokens plus 6 target-root tokens, and validation reported
+`target_only_semantic_equivalence=true`. These observations validate topology, loading, trace,
+resume, accounting, and greedy token semantics only; `gpu_measurement=false` is intentional, and
+no latency or serving-throughput conclusion follows from this smoke test.
+
+The first user-run primitive smoke exposed a real evidence gap: the TP=2 JSON reported about
+34 GB for rank 0 and zero for rank 1 because each process could only observe its own allocator,
+while the rank-0 writer never gathered rank-1 state. Two verify runs were also produced by
+different commits and therefore are not repeat runs of one implementation. Those v1 files remain
+smoke provenance only; their numerical values are not accepted as a latency surface or a
+performance result.
+
+Phase 3B.1 replaces that format with a strict v2 schema. Each TP rank now retains its logical and
+physical GPU identity, UUID, local parameter count/bytes and device placement, allocated/reserved
+memory, forward shapes/checksum, and all CUDA/host samples. Distributed barriers and CUDA
+synchronization surround each iteration; rank 0 gathers every rank, and the global sample for an
+iteration is the maximum participating-rank latency. Missing ranks, zero model state/memory,
+missing samples, device mismatch, invalid statistics, or non-max aggregation fail validation.
+Only rank 0 atomically publishes the report.
+
+The hardened statistics retain every sample and report mean, standard deviation, CV, min,
+P50/P90/P95/P99/max and flagged outliers, with defaults of five warmups and thirty measured
+iterations. Before/after hardware snapshots record observed clocks, temperature, power, P-state,
+ECC, memory, PCIe, topology and peer-access state without attempting clock control. Repeated-run
+comparison requires an identical commit, config checksum, model revisions, GPU model, TP layout,
+backend and operation semantics; raw samples are never pooled across incompatible runs.
+
+All v2 measurements are explicitly `backend=hf_correctness`, `serving_engine=false`,
+`kv_cache_reuse=false`, `packed_tree_verification=false`, and
+`simulator_latency_surface_compatible=false`. Draft remains serial greedy full-context replay;
+verify remains serial full-context replay for `B_cand+1` target forwards. Selector timing still
+labels the existing kernel as synthetic `torch.topk`; a dependency-free five-stage selector
+interface exists without fake timings. Transfer now covers both draft↔target-leader directions,
+the target-leader→TP-peer path when present, and payloads from 4 KiB to 256 MiB, but remains a bare
+device-copy primitive rather than complete Draft→Verify transport.
+
+No NVIDIA GPU was available to the Mac agent that implemented Phase 3B.1. The user subsequently
+completed the same-commit three-run A800 validation: TP=2 verify run-to-run CV was about
+0.9%–1.3% with maximum reported variation 3.04%; draft variation was about 6.7%–8.0%; the
+synthetic top-k primitive was about 0.03 ms; large-payload peer copies were stable; and every v2
+validation passed. These are repeatability observations for `hf_correctness` primitives, not a
+serving latency surface or a performance claim.
+
+## Phase 3C.1–3C.3: real selector diagnosis
+
+Phase 3C.1 adds an isolated, resumable pipeline without changing the simulator. It builds a fixed
+100-request public-text pilot with a 60/20/20 code/chat/summarization mixture, binds the first 100
+chronological Mooncake arrivals, and stores token IDs and lengths from the actual configured Qwen3
+tokenizer. Missing datasets are fatal and no prompts are synthesized as fallback. The 40/50/150 ms
+classes remain metadata only.
+
+The draft stage uses Qwen3-0.6B TP=1 to build one shared real 4× forest per request; 1× and 2× are
+strict prefix-closed subsets. Node counts 16/32/64 and verification budget 4 are derived from the
+frozen Phase-2 width/depth/speculative-budget configuration. The target stage uses Qwen3-32B TP=2
+to generate one immutable greedy continuation per request, independent of ratio. Both remain
+full-context Transformers correctness paths with `kv_cache_reuse=false`.
+
+Label join keeps draft runtime features and target-only labels in separate objects. Five
+target-blind selectors and a within-request target oracle replay the same forest, target and fixed
+budget. Reports cover pool/selected target-path coverage, candidate efficiency, oracle regret,
+depth/probability/entropy calibration, sibling hits and pool robustness. Stable request-level
+train/validation/test splits prevent candidate-node leakage.
+
+The user completed and validated the 60/20/20 real Qwen3 pilot. At budget four,
+Residual-Probability accepted 1.92 tokens/proposal at all three pools; the within-request oracle
+accepted 2.23/2.30/2.30 at 1x/2x/4x. These are selector-signal observations, not latency or system
+performance. The old `target_path_pool_coverage` fell as the nested pool expanded because it used
+each pool's own realized maximum depth as its denominator. It was not density and did not have a
+fixed recall denominator.
+
+Phase 3C.2 preserves that legacy field and adds fixed-denominator monotonic target-path recall,
+target-node density, selected precision/recall, K=4/8/16 horizon coverage, first-missing depth,
+16/16/32-node shell decomposition and selection-set stability. Per-task and overall reports now
+use request-level stratified bootstrap intervals and paired oracle/Residual-Probability
+comparisons. Headroom separates generator coverage, selector regret and budget limits; zero oracle
+expansion gain is explicitly not identifiable.
+
+The prompt audit also found that Phase 3C.1 ShareGPT chat prompts were raw first-user text without
+the Qwen chat template. Those 20 old chat traces remain legacy diagnostics and cannot be pooled
+with corrected data. The v2 builder applies the Qwen tokenizer chat template with
+`enable_thinking=false`, retains native HumanEval completion prefixes and the explicit
+CNN/DailyMail summarization instruction, and records deidentified rendering/tokenizer metadata.
+
+The corrected 20-request (12/4/4) multi-round mode freezes each at-most-16-token target once, creates one
+shared forest at every target-prefix position, and replays every selector sequentially over those
+same snapshots. Immutable checkpoint/resume and final-token equality are enforced. The Mac agent
+implemented and tested this path without running a GPU model. The user then completed the
+corrected-20 server run: Residual-Probability stayed at 2.407 accepted/proposal across pools,
+Entropy-Margin reached 2.421, and the Oracle rose from 2.680 at 1x to 2.877 at 2x with no further
+4x gain. These are token-efficiency observations only.
+
+Phase 3C.3 promotes the corrected run to 100 requests (60/20/20), adds a strict cross-artifact
+validator, request-stratified bootstrap intervals and paired deltas, and restricts formal analysis
+to 1x/2x. It decomposes the 2x shell into generator coverage, budget/prefix reachability and
+ranking failure. A diagnostic linear `learned-shell-ranker` uses fixed runtime draft features,
+70/15/15 task-stratified request splits, immutable model/replay provenance and a predeclared
+held-out A/B gate. Target labels are available only during offline training; inference rejects
+labeled nodes. The Mac agent implemented and CPU-tested this path but did not run the corrected
+100-request Qwen trace. That server run and artifact review are the next gate.
+
+Packed-tree, vLLM/SGLang, Dual-Batch, Eager, SLO evaluation and simulator calibration remain out of
+scope. See [phase3-real-trace.md](phase3-real-trace.md) for definitions and boundaries.
 
 ## Phase 1.5: residual selection
 
@@ -222,6 +345,7 @@ compute-waste ratios.
 - `D(B,K,C)`, `V(B,K,C)`, acceptance, confidence, and candidate roof are proxy inputs until GPU
   calibration.
 - R3 proxy lengths are sampled and are not HumanEval, Alpaca, or CNN/DailyMail payloads.
-- No PyTorch, vLLM, SGLang, MineDraft, or remote-GPU runtime is integrated.
+- No vLLM, SGLang, MineDraft, packed-tree verification kernel, or Dual-Batch GPU runtime is
+  integrated. The optional Transformers path is a Phase-3 correctness/calibration backend only.
 - No current result may be cited as evidence of real GPU speedup or full AdaServe/SpecRhythm
   reproduction.

@@ -1,0 +1,6 @@
+{"task_id":"HumanEval/0","prompt":"def add(a, b):\n    \"\"\"Return a + b.\"\"\"\n"}
+{"task_id":"HumanEval/1","prompt":"def square(x):\n    \"\"\"Return x squared.\"\"\"\n"}
+{"task_id":"HumanEval/2","prompt":"def is_even(x):\n    \"\"\"Return whether x is even.\"\"\"\n"}
+{"task_id":"HumanEval/3","prompt":"def first(xs):\n    \"\"\"Return the first element.\"\"\"\n"}
+{"task_id":"HumanEval/4","prompt":"def clamp(x, low, high):\n    \"\"\"Clamp x to a range.\"\"\"\n"}
+{"task_id":"HumanEval/5","prompt":"def reverse_text(text):\n    \"\"\"Reverse text.\"\"\"\n"}

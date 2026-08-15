@@ -6,7 +6,7 @@ profiling and engine experiments.
 ## Local loop
 
 ~~~bash
-git switch -c agent/<short-topic>
+git switch -c codex/<short-topic>
 python -m pytest
 ruff check .
 git add <explicit paths>
@@ -36,3 +36,7 @@ that records commit SHA, environment, engine version, model revisions, command, 
 
 Never edit the same branch independently on both machines. Create a remote-only branch for urgent
 server fixes, push it, and merge or cherry-pick it locally through review.
+
+For Phase 3, use the exact detached-commit, environment-probe, TP-check, external-result, resume,
+and manifest commands in [phase3-gpu-runbook.md](phase3-gpu-runbook.md). GPU-only tests must remain
+explicitly marked and skipped in the Mac/CPU suite; a CPU dry-run is never a latency result.

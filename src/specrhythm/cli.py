@@ -5,7 +5,9 @@ from __future__ import annotations
 import argparse
 import gzip
 import json
+import os
 import shlex
+import subprocess
 import sys
 from dataclasses import asdict
 from pathlib import Path
@@ -243,11 +245,804 @@ def build_parser() -> argparse.ArgumentParser:
         "--search-ratio", choices=SEARCH_RATIOS, type=int, required=True
     )
     phase2_simulate.add_argument("--output", required=True)
+
+    gpu_probe = subparsers.add_parser(
+        "gpu-probe", help="write read-only CUDA/NVIDIA environment metadata"
+    )
+    gpu_probe.add_argument("--output")
+    gpu_probe.add_argument(
+        "--allow-unavailable",
+        action="store_true",
+        help="return success after recording explicit no-CUDA errors",
+    )
+
+    tp_check = subparsers.add_parser(
+        "tp-check", help="validate structural and Transformers TP compatibility"
+    )
+    tp_check.add_argument("--model-config", required=True)
+    tp_check.add_argument("--tp-sizes", nargs="+", type=int, default=(1, 2, 3, 4))
+    tp_check.add_argument("--output")
+
+    phase3_run = subparsers.add_parser(
+        "phase3-run",
+        help="collect draft-only, target-only, or serial real-model traces",
+        description=(
+            "Run the isolated Phase-3 correctness collector. dry-run emits no GPU timing; "
+            "Transformers mode is not a serving-engine performance benchmark."
+        ),
+    )
+    phase3_run.add_argument("--config", required=True)
+    phase3_run.add_argument(
+        "--mode", choices=("draft-only", "target-only", "serial"), required=True
+    )
+    phase3_run.add_argument("--input", required=True)
+    phase3_run.add_argument("--output-dir", required=True)
+    phase3_run.add_argument("--resume", action="store_true")
+    phase3_run.add_argument(
+        "--max-cycles",
+        type=int,
+        help="optional interruption-test limit on newly completed cycles",
+    )
+    phase3_run.add_argument(
+        "--environment-metadata",
+        help="optional gpu-probe JSON to bind into the run manifest",
+    )
+    phase3_run.add_argument("--backend", choices=("dry-run", "transformers"))
+    phase3_run.add_argument("--draft-model")
+    phase3_run.add_argument("--target-model")
+    phase3_run.add_argument("--draft-gpus")
+    phase3_run.add_argument("--target-gpus")
+    phase3_run.add_argument("--draft-tp", type=int)
+    phase3_run.add_argument("--target-tp", type=int)
+    phase3_run.add_argument("--dtype", choices=("float16", "bfloat16", "float32"))
+    phase3_run.add_argument("--context-length", type=int)
+    phase3_run.add_argument("--batch-size", type=int)
+    phase3_run.add_argument("--search-pool-size", type=int)
+    phase3_run.add_argument("--candidate-budget", type=int)
+    phase3_run.add_argument("--max-new-tokens", type=int)
+
+    phase3_validate = subparsers.add_parser(
+        "phase3-validate", help="validate durable real-trace checkpoints"
+    )
+    phase3_validate.add_argument("--trace-dir", required=True)
+    phase3_validate.add_argument(
+        "--target-only-dir",
+        help="also require final tokens to equal a target-only reference",
+    )
+    phase3_validate.add_argument("--output")
+
+    phase3_summary = subparsers.add_parser(
+        "phase3-summarize", help="consolidate checkpoints and write a compact summary"
+    )
+    phase3_summary.add_argument("--trace-dir", required=True)
+    phase3_summary.add_argument("--trace-output")
+    phase3_summary.add_argument("--output", required=True)
+
+    phase3_benchmark = subparsers.add_parser(
+        "phase3-benchmark",
+        help=(
+            "measure hf_correctness primitives with real CUDA; not a serving engine or "
+            "simulator surface"
+        ),
+        description=(
+            "Collect Phase-3B.1 correctness-backend primitive latency with strict per-rank "
+            "evidence. Verification is serial full-context replay without KV-cache reuse or "
+            "packed-tree execution. There is no dry-run timing fallback."
+        ),
+    )
+    phase3_benchmark.add_argument("--config", required=True)
+    phase3_benchmark.add_argument(
+        "--operation",
+        action="append",
+        choices=("draft", "select", "verify", "transfer"),
+        required=True,
+    )
+    phase3_benchmark.add_argument("--output", required=True)
+    phase3_benchmark.add_argument("--markdown-output", required=True)
+    phase3_benchmark.add_argument("--environment-metadata")
+
+    phase3_benchmark_validate = subparsers.add_parser(
+        "phase3-benchmark-validate",
+        help="strictly validate a Phase-3B.1 primitive-latency report",
+    )
+    phase3_benchmark_validate.add_argument("--input", required=True)
+    phase3_benchmark_validate.add_argument("--output", required=True)
+
+    phase3_benchmark_compare = subparsers.add_parser(
+        "phase3-benchmark-compare",
+        help="compare repeated same-commit, same-semantics Phase-3B.1 runs",
+    )
+    phase3_benchmark_compare.add_argument(
+        "--input", action="append", required=True, help="repeat for each run JSON"
+    )
+    phase3_benchmark_compare.add_argument("--output", required=True)
+    phase3_benchmark_compare.add_argument("--markdown-output", required=True)
+
+    phase3_selector_dry_run = subparsers.add_parser(
+        "phase3-selector-dry-run",
+        help="exercise the real-selector stage contract without recording fake latency",
+    )
+    phase3_selector_dry_run.add_argument("--request-count", type=int, default=2)
+    phase3_selector_dry_run.add_argument("--search-pool-size", type=int, default=16)
+    phase3_selector_dry_run.add_argument("--candidate-budget", type=int, default=8)
+    phase3_selector_dry_run.add_argument("--output", required=True)
+
+    phase3c_workload = subparsers.add_parser(
+        "phase3c-workload-build",
+        help="build deterministic R3-real public-text requests with real tokenizer lengths",
+    )
+    phase3c_workload.add_argument("--config", required=True)
+    phase3c_workload.add_argument("--output", required=True)
+    phase3c_workload.add_argument("--manifest", required=True)
+    phase3c_workload.add_argument("--request-count", type=int)
+    phase3c_workload.add_argument("--backend", choices=("dry-run", "transformers"))
+
+    phase3c_draft = subparsers.add_parser(
+        "phase3c-draft-forest",
+        help="generate one shared nested 1x/2x/4x correctness candidate forest",
+    )
+    phase3c_draft.add_argument("--config", required=True)
+    phase3c_draft.add_argument("--workload", required=True)
+    phase3c_draft.add_argument("--output-dir", required=True)
+    phase3c_draft.add_argument("--resume", action="store_true")
+    phase3c_draft.add_argument("--backend", choices=("dry-run", "transformers"))
+
+    phase3c_target = subparsers.add_parser(
+        "phase3c-target-trajectory",
+        help="generate one immutable greedy target trajectory per R3-real request",
+    )
+    phase3c_target.add_argument("--config", required=True)
+    phase3c_target.add_argument("--workload", required=True)
+    phase3c_target.add_argument("--output-dir", required=True)
+    phase3c_target.add_argument("--resume", action="store_true")
+    phase3c_target.add_argument("--backend", choices=("dry-run", "transformers"))
+
+    phase3c_join = subparsers.add_parser(
+        "phase3c-label-join",
+        help="join immutable draft-side features with target-only evaluation labels",
+    )
+    phase3c_join.add_argument("--workload", required=True)
+    phase3c_join.add_argument("--forest-dir", required=True)
+    phase3c_join.add_argument("--target-dir", required=True)
+    phase3c_join.add_argument("--output-dir", required=True)
+    phase3c_join.add_argument("--resume", action="store_true")
+
+    phase3c_replay = subparsers.add_parser(
+        "phase3c-selector-replay",
+        help="replay fixed-budget target-blind selectors and a within-request oracle",
+    )
+    phase3c_replay.add_argument("--config", required=True)
+    phase3c_replay.add_argument("--labeled-dir", required=True)
+    phase3c_replay.add_argument("--output-dir", required=True)
+    phase3c_replay.add_argument("--resume", action="store_true")
+
+    phase3c_validate = subparsers.add_parser(
+        "phase3c-validate",
+        help="validate Phase-3C forest, target, label, and token semantics",
+    )
+    phase3c_validate.add_argument("--workload", required=True)
+    phase3c_validate.add_argument("--forest-dir", required=True)
+    phase3c_validate.add_argument("--target-dir", required=True)
+    phase3c_validate.add_argument("--labeled-dir", required=True)
+    phase3c_validate.add_argument("--selector-dir", required=True)
+    phase3c_validate.add_argument("--output", required=True)
+
+    phase3c_summary = subparsers.add_parser(
+        "phase3c-summary",
+        help="summarize selector learnability without latency, SLO, or speedup claims",
+    )
+    phase3c_summary.add_argument("--labeled-dir", required=True)
+    phase3c_summary.add_argument("--selector-dir", required=True)
+    phase3c_summary.add_argument("--source-trace-commit")
+    phase3c_summary.add_argument("--workload-manifest")
+    phase3c_summary.add_argument("--draft-dir")
+    phase3c_summary.add_argument("--target-dir")
+    phase3c_summary.add_argument("--output", required=True)
+    phase3c_summary.add_argument("--markdown-output", required=True)
+
+    phase3c_resummary = subparsers.add_parser(
+        "phase3c-resummary",
+        help="migrate existing immutable Phase-3C raw artifacts to the v2 coverage summary",
+    )
+    phase3c_resummary.add_argument("--labeled-dir", required=True)
+    phase3c_resummary.add_argument("--selector-dir", required=True)
+    phase3c_resummary.add_argument("--draft-dir", required=True)
+    phase3c_resummary.add_argument("--target-dir", required=True)
+    phase3c_resummary.add_argument("--source-trace-commit", required=True)
+    phase3c_resummary.add_argument("--workload-manifest")
+    phase3c_resummary.add_argument("--output", required=True)
+    phase3c_resummary.add_argument("--markdown-output", required=True)
+
+    phase3c_snapshots = subparsers.add_parser(
+        "phase3c-multiround-snapshots",
+        help="build selector-independent forests at every frozen target-prefix position",
+    )
+    phase3c_snapshots.add_argument("--config", required=True)
+    phase3c_snapshots.add_argument("--workload", required=True)
+    phase3c_snapshots.add_argument("--target-dir", required=True)
+    phase3c_snapshots.add_argument("--output-dir", required=True)
+    phase3c_snapshots.add_argument("--resume", action="store_true")
+    phase3c_snapshots.add_argument("--backend", choices=("dry-run", "transformers"))
+
+    phase3c_sequential = subparsers.add_parser(
+        "phase3c-multiround-replay",
+        help="offline sequential selector replay over immutable common-prefix snapshots",
+    )
+    phase3c_sequential.add_argument("--workload", required=True)
+    phase3c_sequential.add_argument("--target-dir", required=True)
+    phase3c_sequential.add_argument("--snapshot-dir", required=True)
+    phase3c_sequential.add_argument("--output-dir", required=True)
+    phase3c_sequential.add_argument("--resume", action="store_true")
+
+    phase3c_multi_summary = subparsers.add_parser(
+        "phase3c-multiround-summary",
+        help="summarize multi-round selector accounting and headroom without performance claims",
+    )
+    phase3c_multi_summary.add_argument("--snapshot-dir", required=True)
+    phase3c_multi_summary.add_argument("--sequential-dir", required=True)
+    phase3c_multi_summary.add_argument("--source-trace-commit", required=True)
+    phase3c_multi_summary.add_argument("--output", required=True)
+    phase3c_multi_summary.add_argument("--markdown-output", required=True)
+
+    phase3c_multi_validate = subparsers.add_parser(
+        "phase3c-multiround-validate",
+        help="validate corrected workload, immutable targets, snapshots, and replay",
+    )
+    phase3c_multi_validate.add_argument("--workload", required=True)
+    phase3c_multi_validate.add_argument("--workload-manifest", required=True)
+    phase3c_multi_validate.add_argument("--target-dir", required=True)
+    phase3c_multi_validate.add_argument("--snapshot-dir", required=True)
+    phase3c_multi_validate.add_argument("--sequential-dir", required=True)
+    phase3c_multi_validate.add_argument(
+        "--expected-request-count", type=int, default=100
+    )
+    phase3c_multi_validate.add_argument("--output", required=True)
+
+    phase3c_learned = subparsers.add_parser(
+        "phase3c-learned-pilot",
+        help=(
+            "train and replay the diagnostic runtime-feature-only 2x shell ranker; "
+            "does not report GPU performance"
+        ),
+    )
+    phase3c_learned.add_argument("--workload", required=True)
+    phase3c_learned.add_argument("--target-dir", required=True)
+    phase3c_learned.add_argument("--snapshot-dir", required=True)
+    phase3c_learned.add_argument("--sequential-dir", required=True)
+    phase3c_learned.add_argument("--output-dir", required=True)
+    phase3c_learned.add_argument("--source-trace-commit", required=True)
+    phase3c_learned.add_argument("--seed", type=int, default=1664)
+    phase3c_learned.add_argument("--resume", action="store_true")
+    phase3c_learned.add_argument("--output", required=True)
+    phase3c_learned.add_argument("--markdown-output", required=True)
     return parser
+
+
+def _gpu_ids(value: Optional[str]) -> Optional[tuple[int, ...]]:
+    if value is None:
+        return None
+    try:
+        result = tuple(int(item.strip()) for item in value.split(",") if item.strip())
+    except ValueError as error:
+        raise SystemExit("GPU IDs must be comma-separated integers") from error
+    if not result:
+        raise SystemExit("GPU ID list must not be empty")
+    return result
+
+
+def _current_git_commit() -> Optional[str]:
+    completed = subprocess.run(
+        ["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=False
+    )
+    return completed.stdout.strip() if completed.returncode == 0 else None
+
+
+def _phase3c_config(path: str, backend: Optional[str] = None) -> Any:
+    from dataclasses import replace
+
+    from specrhythm.phase3.phase3c_config import load_phase3c_config
+
+    config = load_phase3c_config(path)
+    if backend is not None:
+        config = replace(config, runtime=config.runtime.with_overrides(backend=backend))
+    return config
+
+
+def _final_tokens(trace_dir: Path) -> dict[str, tuple[int, ...]]:
+    from specrhythm.phase3.trace import TraceStore
+
+    result = {}
+    store = TraceStore(trace_dir)
+    for request_id in {record.request.request_id for record in store.records()}:
+        _, generated, finished = store.resume_state(request_id)
+        if not finished:
+            raise ValueError(f"request {request_id} is incomplete")
+        result[request_id] = generated
+    return result
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.command == "gpu-probe":
+        from specrhythm.phase3.probe import probe_gpu_environment
+
+        report = probe_gpu_environment(repo=Path.cwd())
+        _write_json(report, args.output)
+        return 0 if report["available"] or args.allow_unavailable else 2
+    if args.command == "tp-check":
+        from specrhythm.phase3.tp import load_model_config, validate_tp_compatibility
+
+        try:
+            model_config = load_model_config(args.model_config)
+            report = validate_tp_compatibility(model_config, args.tp_sizes)
+        except ValueError as error:
+            raise SystemExit(f"TP compatibility check failed: {error}") from error
+        _write_json(report, args.output)
+        return 0 if all(row["supported"] for row in report["results"]) else 1
+    if args.command == "phase3-run":
+        from specrhythm.phase3.config import load_phase3_config
+        from specrhythm.phase3.distributed import TensorParallelTargetPool
+        from specrhythm.phase3.runner import (
+            build_run_manifest,
+            load_prompt_requests,
+            run_phase3,
+        )
+
+        try:
+            config = load_phase3_config(args.config)
+            config = config.with_overrides(
+                backend=args.backend,
+                context_length=args.context_length,
+                batch_size=args.batch_size,
+                search_pool_size=args.search_pool_size,
+                candidate_budget=args.candidate_budget,
+                max_new_tokens=args.max_new_tokens,
+            )
+            draft_gpus = _gpu_ids(args.draft_gpus)
+            target_gpus = _gpu_ids(args.target_gpus)
+            config = type(config)(
+                schema_version=config.schema_version,
+                backend=config.backend,
+                draft=config.draft.with_overrides(
+                    model_path=args.draft_model,
+                    gpu_ids=draft_gpus,
+                    tp_size=args.draft_tp,
+                    dtype=args.dtype,
+                ),
+                target=config.target.with_overrides(
+                    model_path=args.target_model,
+                    gpu_ids=target_gpus,
+                    tp_size=args.target_tp,
+                    dtype=args.dtype,
+                ),
+                context_length=config.context_length,
+                batch_size=config.batch_size,
+                search_pool_size=config.search_pool_size,
+                candidate_budget=config.candidate_budget,
+                candidate_width=config.candidate_width,
+                max_new_tokens=config.max_new_tokens,
+                random_seed=config.random_seed,
+                sampling_configuration=config.sampling_configuration,
+                benchmark=config.benchmark,
+            )
+            input_path = Path(args.input).resolve()
+            output_dir = Path(args.output_dir).resolve()
+            requests = load_prompt_requests(input_path)
+            target_pool = None
+            if (
+                config.backend == "transformers"
+                and args.mode == "serial"
+                and config.target.tp_size > 1
+            ):
+                if int(os.environ.get("WORLD_SIZE", "1")) != 1:
+                    raise ValueError(
+                        "five-GPU serial mode is a coordinator command; do not wrap it in torchrun"
+                    )
+                target_pool = TensorParallelTargetPool(
+                    config.target, config.random_seed
+                )
+            try:
+                report = run_phase3(
+                    requests,
+                    config,
+                    mode=args.mode,
+                    output_dir=output_dir,
+                    resume=args.resume,
+                    target_backend=target_pool,
+                    cycle_limit=args.max_cycles,
+                )
+            finally:
+                if target_pool is not None:
+                    target_pool.close()
+        except (FileExistsError, ValueError, RuntimeError) as error:
+            raise SystemExit(f"Phase-3 run failed: {error}") from error
+        if int(os.environ.get("RANK", "0")) == 0:
+            command_argv = list(argv) if argv is not None else sys.argv[1:]
+            manifest = build_run_manifest(
+                config_path=Path(args.config).resolve(),
+                input_path=input_path,
+                output_dir=output_dir,
+                config=config,
+                mode=args.mode,
+                command=shlex.join(["specrhythm", *command_argv]),
+                git_commit=_current_git_commit(),
+                environment_metadata_path=(
+                    Path(args.environment_metadata).resolve()
+                    if args.environment_metadata
+                    else None
+                ),
+                runtime_models=report.get("runtime_models"),
+            )
+            _write_json(report, str(output_dir / "summary.json"))
+            _write_json(manifest, str(output_dir / "manifest.json"))
+            _write_json(report, None)
+        return 0
+    if args.command == "phase3-validate":
+        from specrhythm.phase3.trace import TraceStore
+
+        trace_dir = Path(args.trace_dir).resolve()
+        report = TraceStore(trace_dir).validate()
+        if args.target_only_dir:
+            try:
+                actual = _final_tokens(trace_dir)
+                target = _final_tokens(Path(args.target_only_dir).resolve())
+                equivalent = actual == target
+                report["target_only_semantic_equivalence"] = equivalent
+                if not equivalent:
+                    report["valid"] = False
+                    report["errors"].append(
+                        "final token sequences differ from target-only reference"
+                    )
+            except ValueError as error:
+                report["valid"] = False
+                report["errors"].append(str(error))
+        _write_json(report, args.output)
+        return 0 if report["valid"] else 1
+    if args.command == "phase3-summarize":
+        from specrhythm.phase3.trace import TraceStore, summarize_records
+
+        store = TraceStore(Path(args.trace_dir).resolve())
+        validation = store.validate()
+        if not validation["valid"]:
+            _write_json(validation, args.output)
+            return 1
+        report = summarize_records(store.records())
+        if args.trace_output:
+            report["trace_jsonl_sha256"] = store.write_jsonl(
+                Path(args.trace_output).resolve()
+            )
+        _write_json(report, args.output)
+        return 0
+    if args.command == "phase3-benchmark":
+        from specrhythm.phase3.benchmark import (
+            atomic_write_json,
+            atomic_write_text,
+            benchmark_markdown,
+            run_latency_benchmark,
+        )
+        from specrhythm.phase3.benchmark_validation import validate_benchmark_report
+        from specrhythm.phase3.config import load_phase3_config
+
+        try:
+            report = run_latency_benchmark(load_phase3_config(args.config), args.operation)
+        except (ValueError, RuntimeError) as error:
+            raise SystemExit(f"Phase-3 benchmark failed: {error}") from error
+        if int(os.environ.get("RANK", "0")) == 0:
+            from specrhythm.phase3.trace import sha256_file
+
+            config_path = Path(args.config).resolve()
+            report["git_commit"] = _current_git_commit()
+            report["config_file"] = config_path.name
+            report["config_sha256"] = sha256_file(config_path)
+            if args.environment_metadata:
+                environment_path = Path(args.environment_metadata).resolve()
+                report["environment_metadata_file"] = environment_path.name
+                report["environment_metadata_sha256"] = sha256_file(environment_path)
+            report["validation"] = validate_benchmark_report(report)
+            atomic_write_json(Path(args.output).resolve(), report)
+            atomic_write_text(
+                Path(args.markdown_output).resolve(), benchmark_markdown(report)
+            )
+        return 0 if report["validation"]["valid"] else 1
+    if args.command == "phase3-benchmark-validate":
+        from specrhythm.phase3.benchmark import atomic_write_json
+        from specrhythm.phase3.benchmark_validation import validate_benchmark_report
+
+        try:
+            report = json.loads(Path(args.input).read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            raise SystemExit(f"Phase-3 benchmark validation failed: {error}") from error
+        validation = validate_benchmark_report(report)
+        atomic_write_json(Path(args.output).resolve(), validation)
+        return 0 if validation["valid"] else 1
+    if args.command == "phase3-benchmark-compare":
+        from specrhythm.phase3.benchmark import atomic_write_json, atomic_write_text
+        from specrhythm.phase3.benchmark_validation import (
+            compare_benchmark_reports,
+            comparison_markdown,
+        )
+
+        paths = [Path(value).resolve() for value in args.input]
+        try:
+            reports = [json.loads(path.read_text(encoding="utf-8")) for path in paths]
+        except (OSError, json.JSONDecodeError) as error:
+            raise SystemExit(f"Phase-3 benchmark comparison failed: {error}") from error
+        comparison = compare_benchmark_reports(
+            reports, [f"{path.parent.name}/{path.name}" for path in paths]
+        )
+        atomic_write_json(Path(args.output).resolve(), comparison)
+        atomic_write_text(
+            Path(args.markdown_output).resolve(), comparison_markdown(comparison)
+        )
+        return 0 if comparison["valid"] else 1
+    if args.command == "phase3-selector-dry-run":
+        from specrhythm.phase3.benchmark import atomic_write_json
+        from specrhythm.phase3.selector_benchmark import run_selector_dry_run
+
+        try:
+            report = run_selector_dry_run(
+                request_count=args.request_count,
+                search_pool_size=args.search_pool_size,
+                candidate_budget=args.candidate_budget,
+            )
+        except ValueError as error:
+            raise SystemExit(f"Phase-3 selector dry-run failed: {error}") from error
+        atomic_write_json(Path(args.output).resolve(), report)
+        return 0
+    if args.command == "phase3c-workload-build":
+        from specrhythm.phase3.r3_workload import build_r3_real_workload
+
+        try:
+            command_argv = list(argv) if argv is not None else sys.argv[1:]
+            manifest = build_r3_real_workload(
+                _phase3c_config(args.config, args.backend),
+                output_path=Path(args.output).resolve(),
+                manifest_path=Path(args.manifest).resolve(),
+                command=shlex.join(["specrhythm", *command_argv]),
+                request_count=args.request_count,
+                git_commit=_current_git_commit(),
+            )
+        except (FileNotFoundError, ValueError, RuntimeError) as error:
+            raise SystemExit(f"Phase-3C workload build failed: {error}") from error
+        _write_json(manifest, None)
+        return 0
+    if args.command in {"phase3c-draft-forest", "phase3c-target-trajectory"}:
+        from specrhythm.phase3.r3_workload import load_r3_workload
+        from specrhythm.phase3.real_candidate_trace import (
+            run_draft_forest_stage,
+            run_target_trajectory_stage,
+        )
+
+        try:
+            config = _phase3c_config(args.config, args.backend)
+            workload_path = Path(args.workload).resolve()
+            requests = load_r3_workload(workload_path)
+            output_dir = Path(args.output_dir).resolve()
+            if args.command == "phase3c-draft-forest":
+                report = run_draft_forest_stage(
+                    requests,
+                    config,
+                    workload_path=workload_path,
+                    output_dir=output_dir,
+                    resume=args.resume,
+                )
+            else:
+                report = run_target_trajectory_stage(
+                    requests,
+                    config,
+                    workload_path=workload_path,
+                    output_dir=output_dir,
+                    resume=args.resume,
+                )
+        except (FileExistsError, FileNotFoundError, ValueError, RuntimeError) as error:
+            raise SystemExit(f"Phase-3C model stage failed: {error}") from error
+        _write_json(report, str(output_dir / "stage-summary.json"))
+        _write_json(report, None)
+        return 0
+    if args.command == "phase3c-label-join":
+        from specrhythm.phase3.r3_workload import load_r3_workload
+        from specrhythm.phase3.real_candidate_trace import run_label_join_stage
+
+        try:
+            report = run_label_join_stage(
+                load_r3_workload(Path(args.workload).resolve()),
+                forest_dir=Path(args.forest_dir).resolve(),
+                target_dir=Path(args.target_dir).resolve(),
+                output_dir=Path(args.output_dir).resolve(),
+                resume=args.resume,
+            )
+        except (FileExistsError, FileNotFoundError, ValueError) as error:
+            raise SystemExit(f"Phase-3C label join failed: {error}") from error
+        _write_json(report, str(Path(args.output_dir).resolve() / "stage-summary.json"))
+        _write_json(report, None)
+        return 0
+    if args.command == "phase3c-selector-replay":
+        from specrhythm.phase3.selector_diagnosis import run_selector_replay_stage
+
+        try:
+            output_dir = Path(args.output_dir).resolve()
+            report = run_selector_replay_stage(
+                _phase3c_config(args.config),
+                labeled_dir=Path(args.labeled_dir).resolve(),
+                output_dir=output_dir,
+                resume=args.resume,
+            )
+        except (FileExistsError, FileNotFoundError, ValueError) as error:
+            raise SystemExit(f"Phase-3C selector replay failed: {error}") from error
+        _write_json(report, str(output_dir / "stage-summary.json"))
+        _write_json(report, None)
+        return 0
+    if args.command == "phase3c-validate":
+        from specrhythm.phase3.r3_workload import load_r3_workload
+        from specrhythm.phase3.real_candidate_trace import validate_phase3c_artifacts
+        from specrhythm.phase3.selector_diagnosis import validate_selector_artifacts
+
+        try:
+            report = validate_phase3c_artifacts(
+                load_r3_workload(Path(args.workload).resolve()),
+                forest_dir=Path(args.forest_dir).resolve(),
+                target_dir=Path(args.target_dir).resolve(),
+                labeled_dir=Path(args.labeled_dir).resolve(),
+            )
+            selector_validation = validate_selector_artifacts(
+                labeled_dir=Path(args.labeled_dir).resolve(),
+                selector_dir=Path(args.selector_dir).resolve(),
+            )
+            report["selector_validation"] = selector_validation
+            if not selector_validation["valid"]:
+                report["valid"] = False
+                report["errors"].extend(selector_validation["errors"])
+        except (FileNotFoundError, KeyError, TypeError, ValueError) as error:
+            report = {
+                "schema_version": "specrhythm.phase3c-validation.v1",
+                "valid": False,
+                "errors": [str(error)],
+            }
+        _write_json(report, args.output)
+        return 0 if report["valid"] else 1
+    if args.command in {"phase3c-summary", "phase3c-resummary"}:
+        from specrhythm.phase3.benchmark import atomic_write_json, atomic_write_text
+        from specrhythm.phase3.selector_diagnosis import (
+            diagnosis_markdown,
+            summarize_selector_diagnosis,
+        )
+
+        try:
+            report = summarize_selector_diagnosis(
+                labeled_dir=Path(args.labeled_dir).resolve(),
+                selector_dir=Path(args.selector_dir).resolve(),
+                source_trace_commit=args.source_trace_commit,
+                workload_manifest_path=(
+                    Path(args.workload_manifest).resolve() if args.workload_manifest else None
+                ),
+                draft_dir=Path(args.draft_dir).resolve() if args.draft_dir else None,
+                target_dir=Path(args.target_dir).resolve() if args.target_dir else None,
+            )
+        except (FileNotFoundError, ValueError) as error:
+            raise SystemExit(f"Phase-3C summary failed: {error}") from error
+        atomic_write_json(Path(args.output).resolve(), report)
+        atomic_write_text(Path(args.markdown_output).resolve(), diagnosis_markdown(report))
+        return 0
+    if args.command == "phase3c-multiround-snapshots":
+        from specrhythm.phase3.multiround import run_common_prefix_snapshot_stage
+        from specrhythm.phase3.r3_workload import load_r3_workload
+
+        try:
+            output_dir = Path(args.output_dir).resolve()
+            report = run_common_prefix_snapshot_stage(
+                load_r3_workload(Path(args.workload).resolve()),
+                _phase3c_config(args.config, args.backend),
+                workload_path=Path(args.workload).resolve(),
+                target_dir=Path(args.target_dir).resolve(),
+                output_dir=output_dir,
+                resume=args.resume,
+            )
+        except (FileExistsError, FileNotFoundError, ValueError, RuntimeError) as error:
+            raise SystemExit(f"Phase-3C multi-round snapshot stage failed: {error}") from error
+        _write_json(report, str(output_dir / "stage-summary.json"))
+        _write_json(report, None)
+        return 0
+    if args.command == "phase3c-multiround-replay":
+        from specrhythm.phase3.multiround import run_sequential_replay_stage
+        from specrhythm.phase3.r3_workload import load_r3_workload
+
+        try:
+            output_dir = Path(args.output_dir).resolve()
+            report = run_sequential_replay_stage(
+                load_r3_workload(Path(args.workload).resolve()),
+                target_dir=Path(args.target_dir).resolve(),
+                snapshot_dir=Path(args.snapshot_dir).resolve(),
+                output_dir=output_dir,
+                resume=args.resume,
+            )
+        except (FileExistsError, FileNotFoundError, ValueError) as error:
+            raise SystemExit(f"Phase-3C multi-round replay failed: {error}") from error
+        _write_json(report, str(output_dir / "stage-summary.json"))
+        _write_json(report, None)
+        return 0
+    if args.command == "phase3c-multiround-summary":
+        from specrhythm.phase3.benchmark import atomic_write_json, atomic_write_text
+        from specrhythm.phase3.multiround import (
+            multiround_markdown,
+            summarize_multiround,
+        )
+
+        try:
+            report = summarize_multiround(
+                snapshot_dir=Path(args.snapshot_dir).resolve(),
+                sequential_dir=Path(args.sequential_dir).resolve(),
+                source_trace_commit=args.source_trace_commit,
+            )
+        except (FileNotFoundError, ValueError) as error:
+            raise SystemExit(f"Phase-3C multi-round summary failed: {error}") from error
+        atomic_write_json(Path(args.output).resolve(), report)
+        atomic_write_text(Path(args.markdown_output).resolve(), multiround_markdown(report))
+        return 0
+    if args.command == "phase3c-multiround-validate":
+        from specrhythm.phase3.multiround import validate_multiround_artifacts
+        from specrhythm.phase3.r3_workload import load_r3_workload
+
+        try:
+            workload_path = Path(args.workload).resolve()
+            report = validate_multiround_artifacts(
+                load_r3_workload(workload_path),
+                workload_path=workload_path,
+                workload_manifest_path=Path(args.workload_manifest).resolve(),
+                target_dir=Path(args.target_dir).resolve(),
+                snapshot_dir=Path(args.snapshot_dir).resolve(),
+                sequential_dir=Path(args.sequential_dir).resolve(),
+                expected_request_count=args.expected_request_count,
+            )
+        except (FileNotFoundError, KeyError, TypeError, ValueError) as error:
+            report = {
+                "schema_version": "specrhythm.phase3c-multiround-validation.v1",
+                "valid": False,
+                "errors": [str(error)],
+                "gpu_performance_result": False,
+            }
+        _write_json(report, args.output)
+        return 0 if report["valid"] else 1
+    if args.command == "phase3c-learned-pilot":
+        from specrhythm.phase3.benchmark import atomic_write_json, atomic_write_text
+        from specrhythm.phase3.learned_selector import (
+            learned_pilot_markdown,
+            run_learned_selector_pilot,
+        )
+        from specrhythm.phase3.r3_workload import load_r3_workload
+
+        try:
+            workload_path = Path(args.workload).resolve()
+            output_dir = Path(args.output_dir).resolve()
+            report = run_learned_selector_pilot(
+                load_r3_workload(workload_path),
+                workload_path=workload_path,
+                target_dir=Path(args.target_dir).resolve(),
+                snapshot_dir=Path(args.snapshot_dir).resolve(),
+                sequential_dir=Path(args.sequential_dir).resolve(),
+                output_dir=output_dir,
+                resume=args.resume,
+                seed=args.seed,
+                source_trace_commit=args.source_trace_commit,
+            )
+        except (FileExistsError, FileNotFoundError, KeyError, TypeError, ValueError) as error:
+            raise SystemExit(f"Phase-3C learned selector pilot failed: {error}") from error
+        stage_summary = {
+            "schema_version": "specrhythm.phase3c-stage-summary.v3",
+            "stage": "diagnostic-learned-shell-ranker",
+            "request_count": report["request_count"],
+            "snapshot_count": report["snapshot_count"],
+            "new_learned_replay_records": report["new_learned_replay_records"],
+            "split_counts": report["split_counts"],
+            "decision": report["decision"]["outcome"],
+            "runtime_features_only_at_inference": True,
+            "gpu_performance_result": False,
+        }
+        atomic_write_json(output_dir / "stage-summary.json", stage_summary)
+        atomic_write_json(Path(args.output).resolve(), report)
+        atomic_write_text(
+            Path(args.markdown_output).resolve(), learned_pilot_markdown(report)
+        )
+        return 0
     if args.command == "generate":
         config = load_json(args.config)
         output_path = Path(args.output).resolve()

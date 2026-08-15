@@ -19,3 +19,11 @@ data/manifests/
 results/*
 !data/README.md
 !results/README.md
+
+# Phase-3 models and machine traces must remain outside Git.
+models/
+phase3-results/
+*.safetensors
+*.pt
+*.pth
+*.onnx

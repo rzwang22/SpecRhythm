@@ -1,9 +1,10 @@
 # SpecRhythm
 
 SpecRhythm is a pure-Python research harness for testing SLO-aware speculative-decoding
-policies before integrating them into vLLM or SGLang. The initial release contains no GPU,
-PyTorch, vLLM, or SGLang dependency. It is deliberately a control-plane model: measured GPU
-profiles will replace the illustrative latency and acceptance parameters in Phase B.
+policies before integrating them into vLLM or SGLang. The default install remains dependency
+free. Phase 3 adds an isolated, optional PyTorch/Transformers correctness collector and GPU
+calibration interface; it does not change the control-plane simulator or claim serving-engine
+performance.
 
 The repository currently provides:
 
@@ -15,6 +16,10 @@ The repository currently provides:
 - a deterministic proposal-lifecycle simulator with guarded eager promotion;
 - queueing/service/end-to-end latency, goodput, SLO-attainment, and TPOT metrics;
 - tests for budget, prefix, determinism, and accounting invariants.
+- a versioned real-model trace schema, resumable checkpoints, GPU environment probe, conservative
+  TP validator, and CUDA-only latency interfaces.
+- a deterministic R3-real public-text pilot builder, nested real candidate-forest checkpoints,
+  immutable target labels, and fixed-budget offline selector diagnosis.
 
 ## Quick start
 
@@ -87,6 +92,7 @@ configs/                 Reproducible workload and simulator inputs
 docs/phase-a.md          Hypotheses, ablations, and proof gates
 docs/workload-design.md  Dataset construction and validation protocol
 docs/development.md      Mac/GitHub/remote-GPU workflow
+docs/phase3-gpu-runbook.md  Exact Phase-3 server commands and safety boundaries
 src/specrhythm/          Workload, policy, simulation, and CLI code
 tests/                   Unit and integration tests
 ~~~
@@ -155,6 +161,40 @@ specrhythm phase2-simulate --workload /external/r3-3.0x.jsonl \
 All Phase-2 variants are diagnostic only. Ratios above 1 assume fully hidden search and do not
 include a measured large-pool draft latency. See
 [docs/phase2-oracle-headroom.md](docs/phase2-oracle-headroom.md).
+
+## Phase 3 GPU-readiness boundary
+
+Phase 3A uses an optional Transformers `>=4.56.1,<4.57` correctness backend with PyTorch
+`>=2.7.1,<2.8`. This backend was selected because the trace requires draft logits, entropy,
+top-1/top-2 margin, and stable per-node features that serving-engine public APIs do not expose as
+a stable contract. vLLM/SGLang integration remains a later engine-prototype step.
+
+The real trace keeps draft-side selector features separate from target-side labels, writes one
+immutable file per completed request/cycle, and resumes without replacing completed records. The
+runner supports `draft-only`, `target-only`, and serial draft-then-verify modes. The reference
+five-GPU configuration uses draft GPU 0 at TP=1 and a persistent target worker group on GPUs 1–4
+at TP=4. A three-GPU fallback uses draft GPU 0 at TP=1 and target GPUs 1–2 at TP=2; it is captured
+in `configs/phase3_trace_1d2v.yaml` and `configs/phase3_latency_1d2v.yaml`. There is no Dual-Batch
+overlap in this revision.
+
+The Phase 3B.1 CUDA microbenchmark records raw per-rank CUDA-event and synchronized host-wall
+samples, model/device/memory/forward evidence, max-rank critical-path latency, observed hardware
+state, bidirectional bare-copy metadata, strict validation, and same-commit repeated-run
+comparisons. The current Transformers verifier recomputes full contexts without KV-cache reuse and
+is not a packed-tree serving kernel. Every report forbids simulator-surface use and is a
+correctness-backend primitive measurement, not a vLLM/SGLang throughput claim. CPU dry-runs test
+schemas and the selector-stage contract but never emit synthetic GPU latency. See
+[docs/phase3-gpu-runbook.md](docs/phase3-gpu-runbook.md) before using a GPU host.
+
+Phase 3C.1/3C.2 use `configs/phase3c_r3_real_1d2v.yaml` for a three-GPU R3-real
+selector pilot. Public prompts, Mooncake arrivals, Qwen token IDs, candidate forests and target
+trajectories stay outside Git.
+The pipeline is split into workload build, draft forest, target trajectory, label join, selector
+replay, validation and summary commands so every expensive stage can resume independently.
+Its output diagnoses fixed-denominator target-path recall, pool density, shell utilization,
+multi-round acceptance and target-blind selector regret against a within-request oracle; it never
+reports goodput, SLO attainment or GPU speedup. See
+[docs/phase3-real-trace.md](docs/phase3-real-trace.md) for its evidence boundary.
 
 The completed audit contains 3/3 common replays (10,000 corrected-queue snapshots each), 9/9
 references, and all 48 end-to-end cells. A_1× exactly reproduces Residual-Probability at all

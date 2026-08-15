@@ -34,3 +34,10 @@ matrix cells. Machine outputs remain outside Git; only the aggregate tables in
 
 These reports remain local because their latency, acceptance, confidence, and roof inputs are
 proxy parameters. They are not GPU benchmark artifacts.
+
+Phase 3 real traces, environment probes, consolidated JSONL, raw logits, and latency JSON must
+also stay outside Git, normally under `$SR_GPU_RESULTS/phase3/`. The trace store writes immutable
+per-cycle checkpoints plus compact summary/manifest files. Only small reviewed calibration
+profiles may later be promoted, and only after their environment, model revisions, commit,
+commands, and checksums have been audited. A `dry-run` artifact is schema/lifecycle evidence, not
+a GPU result.

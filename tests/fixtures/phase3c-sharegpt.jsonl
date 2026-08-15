@@ -1,0 +1,2 @@
+{"id":"chat-0","conversations":[{"from":"human","value":"Explain prefix closure."},{"from":"gpt","value":"It preserves ancestors."}]}
+{"id":"chat-1","conversations":[{"from":"human","value":"Why use deterministic seeds?"},{"from":"gpt","value":"For reproducibility."}]}
