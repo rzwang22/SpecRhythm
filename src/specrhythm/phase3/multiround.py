@@ -1,4 +1,4 @@
-"""Phase-3C.2 common-prefix snapshots and sequential offline selector replay."""
+"""Phase-3C common-prefix snapshots and corrected multi-round diagnostics."""
 
 from __future__ import annotations
 
@@ -29,6 +29,7 @@ from specrhythm.phase3.selector_diagnosis import (
     _evaluate_selection,
     select_target_blind,
     select_within_request_oracle,
+    stratified_bootstrap_ci,
 )
 from specrhythm.phase3.trace import sha256_file
 
@@ -43,8 +44,12 @@ def _canonical_sha(value: Mapping[str, Any]) -> str:
 
 def _directory_sha(path: Path) -> str:
     digest = hashlib.sha256()
-    for item in sorted(candidate for candidate in path.rglob("*.json") if candidate.is_file()):
-        digest.update(item.relative_to(path).as_posix().encode())
+    # Stage summaries are mutable resume-status views. Provenance binds only the immutable
+    # per-request checkpoints so rerunning with --resume cannot change the trace identity.
+    records_root = path / "requests"
+    root = records_root if records_root.is_dir() else path
+    for item in sorted(candidate for candidate in root.rglob("*.json") if candidate.is_file()):
+        digest.update(item.relative_to(root).as_posix().encode())
         digest.update(b"\0")
         digest.update(item.read_bytes())
         digest.update(b"\0")
@@ -554,9 +559,330 @@ def multiround_headroom(
     return {"per_snapshot": request_rows, "aggregate": aggregates}
 
 
+def _request_statistics(
+    rows: list[dict[str, Any]], field: str, *, seed: int
+) -> dict[str, Any]:
+    observed = [row for row in rows if row.get(field) is not None]
+    values = [float(row[field]) for row in observed]
+    return {
+        "requests": len(rows),
+        "observations": len(values),
+        "mean": statistics.fmean(values) if values else None,
+        "request_bootstrap_95_ci": (
+            stratified_bootstrap_ci(observed, field, seed=seed)
+            if values
+            else [None, None]
+        ),
+        "bootstrap_unit": "request",
+        "bootstrap_stratified_by_task": True,
+    }
+
+
+def _paired_multiround_deltas(
+    sequential: list[Mapping[str, Any]], *, seed: int = 1664
+) -> list[dict[str, Any]]:
+    comparisons = (
+        (
+            "entropy-margin-minus-residual-probability-1x",
+            ("1x", "entropy-margin-heuristic"),
+            ("1x", "residual-probability"),
+        ),
+        (
+            "entropy-margin-minus-residual-probability-2x",
+            ("2x", "entropy-margin-heuristic"),
+            ("2x", "residual-probability"),
+        ),
+        (
+            "oracle-1x-minus-residual-probability-1x",
+            ("1x", ORACLE_SELECTOR),
+            ("1x", "residual-probability"),
+        ),
+        (
+            "oracle-2x-minus-residual-probability-2x",
+            ("2x", ORACLE_SELECTOR),
+            ("2x", "residual-probability"),
+        ),
+        (
+            "oracle-2x-minus-oracle-1x",
+            ("2x", ORACLE_SELECTOR),
+            ("1x", ORACLE_SELECTOR),
+        ),
+        (
+            "oracle-4x-minus-oracle-2x-diagnostic-only",
+            ("4x", ORACLE_SELECTOR),
+            ("2x", ORACLE_SELECTOR),
+        ),
+    )
+    output = []
+    tasks = sorted({str(record["task_class"]) for record in sequential}) + ["all"]
+    for comparison_index, (name, left_key, right_key) in enumerate(comparisons):
+        paired = []
+        for record in sequential:
+            by_key = {
+                (str(row["pool_ratio"]), str(row["selector"])): row
+                for row in record["results"]
+            }
+            paired.append(
+                {
+                    "request_id": record["request_id"],
+                    "task_class": record["task_class"],
+                    "accepted_tokens_per_proposal_delta": (
+                        float(by_key[left_key]["accepted_tokens_per_proposal"])
+                        - float(by_key[right_key]["accepted_tokens_per_proposal"])
+                    ),
+                }
+            )
+        for task_index, task in enumerate(tasks):
+            values = [
+                row for row in paired if task == "all" or row["task_class"] == task
+            ]
+            output.append(
+                {
+                    "comparison": name,
+                    "task_class": task,
+                    "metric": "accepted_tokens_per_proposal",
+                    **_request_statistics(
+                        values,
+                        "accepted_tokens_per_proposal_delta",
+                        seed=seed + comparison_index * 101 + task_index,
+                    ),
+                }
+            )
+    return output
+
+
+def validate_multiround_artifacts(
+    requests: Iterable[R3RealRequest],
+    *,
+    workload_path: Path,
+    workload_manifest_path: Path,
+    target_dir: Path,
+    snapshot_dir: Path,
+    sequential_dir: Path,
+    expected_request_count: int,
+) -> dict[str, Any]:
+    request_list = list(requests)
+    errors: list[str] = []
+    checks = {
+        "corrected_prompt_manifest": True,
+        "target_trajectory_immutable": True,
+        "common_prefix_snapshot_shared": True,
+        "nested_prefix_closed_pools": True,
+        "final_committed_sequence_equals_target": True,
+        "candidate_token_root_accounting": True,
+    }
+
+    def fail(check: str, message: str) -> None:
+        checks[check] = False
+        errors.append(message)
+
+    try:
+        manifest = json.loads(workload_manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        manifest = {}
+        fail("corrected_prompt_manifest", f"invalid workload manifest: {error}")
+    expected_counts = (
+        {"code": 60, "chat": 20, "summarization": 20}
+        if expected_request_count == 100
+        else None
+    )
+    if len(request_list) != expected_request_count:
+        fail(
+            "corrected_prompt_manifest",
+            f"workload has {len(request_list)} requests; expected {expected_request_count}"
+        )
+    request_ids = {request.request_id for request in request_list}
+    if len(request_ids) != len(request_list):
+        fail("corrected_prompt_manifest", "workload request IDs are duplicated")
+    if manifest.get("schema_version") != "specrhythm.r3-real-workload-manifest.v2":
+        fail(
+            "corrected_prompt_manifest",
+            "corrected workload requires the v2 prompt-audit manifest",
+        )
+    if manifest.get("request_count") != expected_request_count:
+        fail("corrected_prompt_manifest", "manifest request_count differs")
+    if expected_counts is not None and manifest.get("task_counts") != expected_counts:
+        fail("corrected_prompt_manifest", "corrected 100-request mixture must be 60/20/20")
+    actual_counts = {
+        task: sum(request.task_class == task for request in request_list)
+        for task in ("code", "chat", "summarization")
+    }
+    if expected_counts is not None and actual_counts != expected_counts:
+        fail("corrected_prompt_manifest", "workload task mixture is not 60/20/20")
+    try:
+        workload_sha = sha256_file(workload_path)
+    except OSError as error:
+        workload_sha = None
+        fail("corrected_prompt_manifest", f"cannot hash workload: {error}")
+    if manifest.get("output_workload_sha256") != workload_sha:
+        fail("corrected_prompt_manifest", "workload checksum differs from manifest")
+    chat_audit = manifest.get("prompt_rendering_audit", {}).get("chat", {})
+    if (
+        chat_audit.get("chat_template_applied") is not True
+        or chat_audit.get("enable_thinking") is not False
+    ):
+        fail(
+            "corrected_prompt_manifest",
+            "ShareGPT must use the Qwen chat template with thinking disabled",
+        )
+
+    try:
+        targets = {record.request_id: record for record in target_store(target_dir).records()}
+        snapshots = snapshot_store(snapshot_dir).records()
+        sequential = {
+            str(record["request_id"]): record
+            for record in sequential_store(sequential_dir).records()
+        }
+    except (KeyError, TypeError, ValueError) as error:
+        targets = {}
+        snapshots = []
+        sequential = {}
+        for check in checks:
+            if check != "corrected_prompt_manifest":
+                checks[check] = False
+        errors.append(f"invalid multi-round artifact: {error}")
+    if set(targets) != request_ids:
+        fail("target_trajectory_immutable", "target request set differs from workload")
+    if set(sequential) != request_ids:
+        fail(
+            "final_committed_sequence_equals_target",
+            "sequential request set differs from workload",
+        )
+    by_request: dict[str, dict[int, Mapping[str, Any]]] = defaultdict(dict)
+    for snapshot in snapshots:
+        request_id = str(snapshot["request_id"])
+        if request_id not in request_ids:
+            fail(
+                "common_prefix_snapshot_shared",
+                f"snapshot has foreign request ID {request_id}",
+            )
+        prefix = int(snapshot["prefix_position"])
+        if prefix in by_request[request_id]:
+            fail(
+                "common_prefix_snapshot_shared",
+                f"duplicate snapshot {request_id}@{prefix}",
+            )
+        by_request[request_id][prefix] = snapshot
+        try:
+            labeled = LabeledTraceRecord.from_dict(snapshot["labeled_trace"])
+            for ratio in POOL_ORDER:
+                pool = set(labeled.pool_node_ids[ratio])
+                by_id = {
+                    node.runtime_features.stable_node_id: node.runtime_features
+                    for node in labeled.nodes
+                }
+                for node_id in pool:
+                    parent = by_id[node_id].parent_id
+                    if parent is not None and parent not in pool:
+                        raise ValueError(f"{ratio} pool is not prefix closed")
+                for selector in SELECTOR_ORDER:
+                    selection = _selection_for(
+                        labeled,
+                        ratio,
+                        selector,
+                        int(snapshot["verification_budget"]),
+                    )
+                    accounting = _evaluate_selection(
+                        labeled, ratio, selector, selection
+                    )["candidate_accounting"]
+                    if (
+                        accounting["selected_verify_nodes"]
+                        != len(selection.selected_node_ids)
+                        or accounting["accepted_candidate_tokens"]
+                        > accounting["selected_verify_nodes"]
+                        or accounting["committed_target_root_tokens"] not in {0, 1}
+                    ):
+                        raise ValueError("candidate/token/root accounting differs")
+        except (AssertionError, KeyError, TypeError, ValueError) as error:
+            fail(
+                "nested_prefix_closed_pools",
+                f"{request_id}@{prefix}: invalid candidate pools: {error}",
+            )
+            checks["candidate_token_root_accounting"] = False
+    for request_id in request_ids:
+        target = targets.get(request_id)
+        if target is None:
+            continue
+        expected_prefixes = set(range(target.target_path_length))
+        if set(by_request.get(request_id, {})) != expected_prefixes:
+            fail(
+                "common_prefix_snapshot_shared",
+                f"{request_id}: common-prefix snapshot positions differ",
+            )
+        target_sha = _canonical_sha(target.to_dict())
+        for snapshot in by_request.get(request_id, {}).values():
+            if snapshot["target_trajectory_sha256"] != target_sha:
+                fail(
+                    "target_trajectory_immutable",
+                    f"{request_id}: snapshot target identity differs",
+                )
+            if snapshot.get("common_snapshot_shared_by_all_selectors") is not True:
+                fail(
+                    "common_prefix_snapshot_shared",
+                    f"{request_id}: common snapshot sharing flag is false",
+                )
+        result = sequential.get(request_id)
+        if result is None:
+            continue
+        if result.get("target_trajectory_sha256") != target_sha:
+            fail(
+                "target_trajectory_immutable",
+                f"{request_id}: sequential target identity differs",
+            )
+        if result.get("target_token_ids") != list(target.target_token_ids):
+            fail(
+                "final_committed_sequence_equals_target",
+                f"{request_id}: sequential frozen target tokens differ",
+            )
+        for row in result.get("results", ()):
+            if row.get("final_committed_target_token_ids") != list(
+                target.target_token_ids
+            ):
+                fail(
+                    "final_committed_sequence_equals_target",
+                    f"{request_id}: {row.get('selector')} final sequence differs",
+                )
+            rounds = row.get("rounds", ())
+            if (
+                sum(round_row["accepted_tokens"] for round_row in rounds)
+                != row.get("accepted_tokens")
+                or sum(round_row["committed_tokens"] for round_row in rounds)
+                != row.get("committed_tokens")
+                or sum(round_row["verified_nodes"] for round_row in rounds)
+                != row.get("verified_nodes")
+            ):
+                fail(
+                    "candidate_token_root_accounting",
+                    f"{request_id}: sequential token accounting differs",
+                )
+            for round_row in rounds:
+                prefix = int(round_row["prefix_position"])
+                snapshot = by_request.get(request_id, {}).get(prefix)
+                if snapshot is None or round_row["forest_sha256"] != snapshot["forest_sha256"]:
+                    fail(
+                        "common_prefix_snapshot_shared",
+                        f"{request_id}@{prefix}: replay forest differs from common snapshot",
+                    )
+    return {
+        "schema_version": "specrhythm.phase3c-multiround-validation.v1",
+        "valid": not errors,
+        "errors": errors,
+        "request_count": len(request_list),
+        "target_records": len(targets),
+        "snapshot_records": len(snapshots),
+        "sequential_records": len(sequential),
+        "checks": checks,
+        "gpu_performance_result": False,
+    }
+
+
 def summarize_multiround(
     *, snapshot_dir: Path, sequential_dir: Path, source_trace_commit: str
 ) -> dict[str, Any]:
+    if len(source_trace_commit) != 40 or any(
+        character not in "0123456789abcdef" for character in source_trace_commit.lower()
+    ):
+        raise ValueError("source_trace_commit must be a full 40-character Git SHA")
     snapshots = snapshot_store(snapshot_dir).records()
     sequential = sequential_store(sequential_dir).records()
     if not snapshots or not sequential:
@@ -575,8 +901,15 @@ def summarize_multiround(
             raise ValueError("common-prefix snapshot positions are incomplete")
     result_rows = [row for record in sequential for row in record["results"]]
     aggregate = []
+    snapshot_counts = defaultdict(int)
+    task_by_request = {
+        str(record["request_id"]): str(record["task_class"])
+        for record in sequential
+    }
+    for snapshot in snapshots:
+        snapshot_counts[task_by_request[str(snapshot["request_id"])]] += 1
     for task in sorted({str(record["task_class"]) for record in sequential}) + ["all"]:
-        for ratio in POOL_ORDER:
+        for ratio in ("1x", "2x"):
             for selector in SELECTOR_ORDER:
                 values = [
                     row
@@ -585,12 +918,57 @@ def summarize_multiround(
                     for row in record["results"]
                     if row["pool_ratio"] == ratio and row["selector"] == selector
                 ]
+                request_rows = [
+                    {
+                        "request_id": record["request_id"],
+                        "task_class": record["task_class"],
+                        "proposal_rounds_per_request": row["proposal_rounds"],
+                        "accepted_tokens_per_proposal": row[
+                            "accepted_tokens_per_proposal"
+                        ],
+                        "committed_tokens_per_proposal": row[
+                            "committed_tokens_per_proposal"
+                        ],
+                        "total_verified_nodes_per_request": row["verified_nodes"],
+                        "first_round_acceptance": row["first_round_acceptance"],
+                        "later_round_acceptance": row["later_round_acceptance"],
+                        "oracle_regret_per_request": row[
+                            "oracle_regret_per_request"
+                        ],
+                    }
+                    for record in sequential
+                    if (task == "all" or record["task_class"] == task)
+                    for row in record["results"]
+                    if row["pool_ratio"] == ratio and row["selector"] == selector
+                ]
+                metric_fields = (
+                    "proposal_rounds_per_request",
+                    "accepted_tokens_per_proposal",
+                    "committed_tokens_per_proposal",
+                    "total_verified_nodes_per_request",
+                    "first_round_acceptance",
+                    "later_round_acceptance",
+                    "oracle_regret_per_request",
+                )
+                stats = {
+                    field: _request_statistics(
+                        request_rows,
+                        field,
+                        seed=1664 + metric_index,
+                    )
+                    for metric_index, field in enumerate(metric_fields)
+                }
                 aggregate.append(
                     {
                         "task_class": task,
                         "pool_ratio": ratio,
                         "selector": selector,
                         "requests": len(values),
+                        "snapshots": (
+                            sum(snapshot_counts.values())
+                            if task == "all"
+                            else snapshot_counts[task]
+                        ),
                         "proposal_rounds_per_request": statistics.fmean(
                             row["proposal_rounds"] for row in values
                         ),
@@ -621,10 +999,51 @@ def summarize_multiround(
                             if any(row["later_round_acceptance"] is not None for row in values)
                             else None
                         ),
+                        "statistics": stats,
                     }
                 )
+    diagnostic_4x_oracle = []
+    for task_index, task in enumerate(
+        sorted({str(record["task_class"]) for record in sequential}) + ["all"]
+    ):
+        rows = [
+            {
+                "request_id": record["request_id"],
+                "task_class": record["task_class"],
+                "accepted_tokens_per_proposal": row["accepted_tokens_per_proposal"],
+            }
+            for record in sequential
+            if task == "all" or record["task_class"] == task
+            for row in record["results"]
+            if row["pool_ratio"] == "4x" and row["selector"] == ORACLE_SELECTOR
+        ]
+        diagnostic_4x_oracle.append(
+            {
+                "task_class": task,
+                "pool_ratio": "4x",
+                "selector": ORACLE_SELECTOR,
+                **_request_statistics(
+                    rows,
+                    "accepted_tokens_per_proposal",
+                    seed=2164 + task_index,
+                ),
+            }
+        )
+    headroom = multiround_headroom(snapshots)
+    headroom = {
+        "per_snapshot": [
+            row
+            for row in headroom["per_snapshot"]
+            if row["pool_ratio"] in {"1x", "2x"}
+        ],
+        "aggregate": [
+            row
+            for row in headroom["aggregate"]
+            if row["pool_ratio"] in {"1x", "2x"}
+        ],
+    }
     return {
-        "schema_version": "specrhythm.phase3c-multiround-summary.v1",
+        "schema_version": "specrhythm.phase3c-multiround-summary.v2",
         "source_trace_commit": source_trace_commit,
         "source_trace_sha256": {
             "common_prefix_snapshots": _directory_sha(snapshot_dir),
@@ -639,14 +1058,25 @@ def summarize_multiround(
         ),
         "gpu_performance_result": False,
         "reports_goodput_slo_or_speedup": False,
+        "formal_pool_ratios": ["1x", "2x"],
+        "formal_selectors": list(SELECTOR_ORDER),
+        "pool_4x_scope": "within-request-target-oracle diagnostic only",
+        "confidence_interval_unit": "request",
+        "confidence_interval_stratification": [
+            "code",
+            "chat",
+            "summarization",
+        ],
         "aggregate_metrics": aggregate,
-        "headroom_decomposition": multiround_headroom(snapshots),
+        "diagnostic_4x_oracle": diagnostic_4x_oracle,
+        "paired_request_level_deltas": _paired_multiround_deltas(sequential),
+        "headroom_decomposition": headroom,
     }
 
 
 def multiround_markdown(report: Mapping[str, Any]) -> str:
     lines = [
-        "# Phase 3C.2 multi-round common-prefix pilot",
+        "# Phase 3C.3 corrected multi-round selector diagnosis",
         "",
         (
             "Selector signal and token-accounting evidence only; no GPU latency, "
@@ -654,7 +1084,7 @@ def multiround_markdown(report: Mapping[str, Any]) -> str:
         ),
         "",
         (
-            "| Task | Pool | Selector | Rounds/request | Accepted/proposal | "
+            "| Task | Pool | Selector | Rounds/request | Accepted/proposal [95% CI] | "
             "Committed/proposal | Verified/request | Oracle regret/request | First | Later |"
         ),
         "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
@@ -662,13 +1092,41 @@ def multiround_markdown(report: Mapping[str, Any]) -> str:
     for row in report["aggregate_metrics"]:
         later = row["later_round_acceptance"]
         later_text = f"{later:.3f}" if later is not None else "n/a"
+        accepted_ci = row["statistics"]["accepted_tokens_per_proposal"][
+            "request_bootstrap_95_ci"
+        ]
         lines.append(
             f"| {row['task_class']} | {row['pool_ratio']} | {row['selector']} | "
             f"{row['proposal_rounds_per_request']:.3f} | "
-            f"{row['accepted_tokens_per_proposal']:.3f} | "
+            f"{row['accepted_tokens_per_proposal']:.3f} "
+            f"[{accepted_ci[0]:.3f}, {accepted_ci[1]:.3f}] | "
             f"{row['committed_tokens_per_proposal']:.3f} | "
             f"{row['total_verified_nodes_per_request']:.3f} | "
             f"{row['oracle_regret_per_request']:.3f} | "
             f"{row['first_round_acceptance']:.3f} | {later_text} |"
         )
+    lines.extend(
+        [
+            "",
+            "## Paired request-level deltas",
+            "",
+            "| Comparison | Task | Mean [95% CI] |",
+            "| --- | --- | ---: |",
+        ]
+    )
+    for row in report["paired_request_level_deltas"]:
+        ci = row["request_bootstrap_95_ci"]
+        lines.append(
+            f"| {row['comparison']} | {row['task_class']} | {row['mean']:.4f} "
+            f"[{ci[0]:.4f}, {ci[1]:.4f}] |"
+        )
+    lines.extend(
+        [
+            "",
+            (
+                "The 4x pool is used only for the paired within-request Oracle 4x−2x "
+                "diagnostic; no 4x target-blind result is treated as formal evidence."
+            ),
+        ]
+    )
     return "\n".join(lines) + "\n"

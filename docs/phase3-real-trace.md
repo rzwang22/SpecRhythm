@@ -1,13 +1,15 @@
-# Phase 3C.2: coverage audit and multi-round common-prefix traces
+# Phase 3C.3: corrected multi-round validation and 2x shell learnability
 
 Phase 3C asks whether draft-only Qwen3 features contain useful signal for selecting a fixed budget
 of candidate nodes against one frozen Qwen3 target trajectory. It is a correctness and selector
 diagnosis pipeline. It does not implement packed-tree verification, a serving engine, Dual-Batch,
-Eager, SLO scheduling, GPU performance evaluation, learned selection, or simulator calibration.
+Eager, SLO scheduling, GPU performance evaluation, or simulator calibration. Phase 3C.3 adds one
+small learned selector as an offline diagnostic; it is not a serving-system mechanism or a new
+default.
 
 ## Evidence and prompt boundary
 
-The completed Phase 3C.1 pilot contains 100 requests (60 HumanEval code, 20 ShareGPT chat and 20
+The legacy Phase 3C.1 pilot contains 100 requests (60 HumanEval code, 20 ShareGPT chat and 20
 CNN/DailyMail summarization), a Qwen3-0.6B draft, a Qwen3-32B target, a four-node verification
 budget, and nested 16/32/64-node pools. Its raw forests, target trajectories, labels and selector
 checkpoints remain immutable. They may be re-summarized without another model run.
@@ -15,8 +17,9 @@ checkpoints remain immutable. They may be re-summarized without another model ru
 The prompt audit found one incompatibility: the Phase 3C.1 ShareGPT adapter used the first user
 turn as raw text and did not apply the Qwen chat template. Phase 3C.2 applies the configured
 tokenizer's `apply_chat_template` with `add_generation_prompt=true` and
-`enable_thinking=false`. Therefore the old 20 chat requests are legacy diagnostic evidence and
-must not be pooled with corrected traces. HumanEval remains its native code-completion `prompt`
+`enable_thinking=false`. Therefore the old 100-request trace is legacy diagnostic evidence and
+must not be presented or pooled as the corrected Phase 3C result. HumanEval remains its native
+code-completion `prompt`
 without a synthetic instruction. CNN/DailyMail retains the explicit `Summarize the following
 document:` instruction.
 
@@ -90,10 +93,11 @@ path minus budget-four oracle), and expansion utilization. A zero oracle expansi
 target nodes, useful nodes blocked by budget, budget-reachable nodes missed by the selector, or a
 realized selector gain.
 
-## Multi-round common-prefix contract
+## Corrected multi-round common-prefix contract
 
-The corrected pilot uses 20 requests (12/4/4) and freezes at most 16 greedy target tokens once per
-request. For every target prefix before EOS/limit, the draft stage creates exactly one common
+The completed corrected smoke uses 20 requests (12/4/4); the formal server run uses 100 requests
+(60/20/20). Each freezes at most 16 greedy target tokens once per request. For every target prefix
+before EOS/limit, the draft stage creates exactly one common
 snapshot. It records request/task, prefix position, context length, remaining target tokens, full
 target hash, forest hash, nested-pool hashes, target continuation and budget. Stable node IDs
 include the prefix position. All selectors consume the same serialized snapshot; no selector can
@@ -108,4 +112,72 @@ snapshot/request and `--resume` never replaces a differing record.
 
 This remains full-context Transformers correctness collection with `kv_cache_reuse=false`. No
 latency, goodput, SLO attainment or speedup may be inferred from it. Exact server commands are in
-[phase3-gpu-runbook.md](phase3-gpu-runbook.md#14-phase-3c2-resummary-and-multi-round-pilot).
+[phase3-gpu-runbook.md](phase3-gpu-runbook.md#15-phase-3c3-corrected-100-request-multi-round-and-learned-pilot).
+
+## Phase 3C.2 corrected-20 observation
+
+The user-run corrected 20-request trace passed target immutability, common-snapshot, nested-pool,
+prefix-closure, final-token equality and candidate/root accounting checks. Residual-Probability
+accepted 2.407 candidates/proposal at 1x, 2x and 4x; Entropy-Margin accepted 2.421. The
+within-request target Oracle accepted 2.680 at 1x and 2.877 at both 2x and 4x. These values support
+the narrower hypothesis that the 2x-minus-1x shell contains sparse useful nodes which the frozen
+target-blind selectors usually miss, while 4x adds no visible Oracle headroom in this small pilot.
+They are token-efficiency diagnostics, not speedup or GPU-performance measurements.
+
+## Formal Phase 3C.3 statistics
+
+The corrected 100-request report treats requests, not snapshots or candidate nodes, as the
+sampling unit. For every task and overall, it reports request and snapshot counts, proposal
+rounds/request, accepted and committed tokens/proposal, verified candidates/request, first- and
+later-round acceptance, and Oracle regret/request. Deterministic 95% bootstrap intervals resample
+requests while preserving code/chat/summarization strata. Paired request-level deltas cover
+Entropy-Margin minus Residual-Probability, Oracle-minus-Residual at 1x and 2x, Oracle 2x-minus-1x,
+and the diagnostic Oracle 4x-minus-2x comparison.
+
+Formal selector evidence is limited to the five frozen target-blind selectors plus the
+within-request target Oracle at 1x and 2x. The 4x pool is retained only for the Oracle 4x-minus-2x
+diagnostic; target-blind 4x rows are not promoted as formal evidence, and no 8x trace is created.
+The Oracle reads target outcomes and is an upper bound, never a deployable selector.
+
+## 2x shell opportunity and feature separation
+
+Every common snapshot is decomposed into its 1x base and 2x-minus-1x shell. The report keeps base
+and shell node counts, target-path nodes, budget-four reachability, selector selections and
+accepted progress separately. The four flags have distinct meanings:
+
+- `shell_target_present`: generator coverage exists somewhere in the shell;
+- `shell_target_budget_reachable`: a shell target node has depth at most four and can be reached
+  with its prefix;
+- `oracle_uses_shell`: the budget-four Oracle actually spends verification budget in the shell;
+- `oracle_shell_gain_positive`: Oracle 2x accepted progress exceeds Oracle 1x progress.
+
+This prevents pool coverage, budget/prefix-closure reachability and ranking failure from being
+collapsed into one ambiguous coverage number. Residual-Probability and Entropy-Margin shell
+selection recall and gains conditioned on each opportunity flag are reported by task and overall.
+
+The offline feature dataset serializes `runtime_features` and `target_only_labels` as separate
+objects. Runtime fields include draft probabilities/log-probabilities, depth, sibling rank,
+parent probability, entropy/margin, branching factor, configured remaining generation budget,
+prefix/round progress, task indicators and base/shell membership. Target path membership, Oracle
+selection and Oracle shell-gain contribution remain labels only. AUROC, AUPRC, precision@4,
+recall@4, NDCG@4 and positive prevalence are reported on the held-out request split for all
+budget-reachable nodes, reachable 2x shell nodes and Oracle-opportunity snapshots.
+
+## Diagnostic learned-shell-ranker and decision gate
+
+`learned-shell-ranker` is a deterministic, balanced linear logistic model trained with fixed
+hyperparameters. Request IDs are split 70/15/15 into task-stratified train/validation/test sets;
+rounds from one request never cross splits. Validation and test data do not choose features,
+thresholds or hyperparameters. Training may read the offline target-path label, but inference is
+typed to accept `RuntimeCandidateNode` only and rejects labeled nodes. Greedy selection remains
+budget-four and prefix closed. The split, feature list, coefficients, training-set hash, model
+hash, source hashes and immutable replay checkpoints are retained in the artifact manifest.
+
+Held-out comparisons report Residual-Probability, Entropy-Margin, the learned ranker and the
+within-request Oracle. Oracle gap recovery is defined only for requests with a positive Oracle
+minus Residual denominator. The A/B rule is frozen before server evaluation: Outcome A requires
+an overall paired improvement and gap-recovery interval with lower bound above zero, plus no
+represented task whose paired-delta interval falls below zero. Outcome A only recommends a later
+2x Overdraft-and-Prune packed-tree prototype. Otherwise Outcome B keeps 1x
+Residual-Probability and proceeds only to a Dual-Batch/overlap baseline. Neither outcome changes
+the current selector automatically.

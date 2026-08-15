@@ -483,6 +483,38 @@ def build_parser() -> argparse.ArgumentParser:
     phase3c_multi_summary.add_argument("--source-trace-commit", required=True)
     phase3c_multi_summary.add_argument("--output", required=True)
     phase3c_multi_summary.add_argument("--markdown-output", required=True)
+
+    phase3c_multi_validate = subparsers.add_parser(
+        "phase3c-multiround-validate",
+        help="validate corrected workload, immutable targets, snapshots, and replay",
+    )
+    phase3c_multi_validate.add_argument("--workload", required=True)
+    phase3c_multi_validate.add_argument("--workload-manifest", required=True)
+    phase3c_multi_validate.add_argument("--target-dir", required=True)
+    phase3c_multi_validate.add_argument("--snapshot-dir", required=True)
+    phase3c_multi_validate.add_argument("--sequential-dir", required=True)
+    phase3c_multi_validate.add_argument(
+        "--expected-request-count", type=int, default=100
+    )
+    phase3c_multi_validate.add_argument("--output", required=True)
+
+    phase3c_learned = subparsers.add_parser(
+        "phase3c-learned-pilot",
+        help=(
+            "train and replay the diagnostic runtime-feature-only 2x shell ranker; "
+            "does not report GPU performance"
+        ),
+    )
+    phase3c_learned.add_argument("--workload", required=True)
+    phase3c_learned.add_argument("--target-dir", required=True)
+    phase3c_learned.add_argument("--snapshot-dir", required=True)
+    phase3c_learned.add_argument("--sequential-dir", required=True)
+    phase3c_learned.add_argument("--output-dir", required=True)
+    phase3c_learned.add_argument("--source-trace-commit", required=True)
+    phase3c_learned.add_argument("--seed", type=int, default=1664)
+    phase3c_learned.add_argument("--resume", action="store_true")
+    phase3c_learned.add_argument("--output", required=True)
+    phase3c_learned.add_argument("--markdown-output", required=True)
     return parser
 
 
@@ -945,6 +977,71 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             raise SystemExit(f"Phase-3C multi-round summary failed: {error}") from error
         atomic_write_json(Path(args.output).resolve(), report)
         atomic_write_text(Path(args.markdown_output).resolve(), multiround_markdown(report))
+        return 0
+    if args.command == "phase3c-multiround-validate":
+        from specrhythm.phase3.multiround import validate_multiround_artifacts
+        from specrhythm.phase3.r3_workload import load_r3_workload
+
+        try:
+            workload_path = Path(args.workload).resolve()
+            report = validate_multiround_artifacts(
+                load_r3_workload(workload_path),
+                workload_path=workload_path,
+                workload_manifest_path=Path(args.workload_manifest).resolve(),
+                target_dir=Path(args.target_dir).resolve(),
+                snapshot_dir=Path(args.snapshot_dir).resolve(),
+                sequential_dir=Path(args.sequential_dir).resolve(),
+                expected_request_count=args.expected_request_count,
+            )
+        except (FileNotFoundError, KeyError, TypeError, ValueError) as error:
+            report = {
+                "schema_version": "specrhythm.phase3c-multiround-validation.v1",
+                "valid": False,
+                "errors": [str(error)],
+                "gpu_performance_result": False,
+            }
+        _write_json(report, args.output)
+        return 0 if report["valid"] else 1
+    if args.command == "phase3c-learned-pilot":
+        from specrhythm.phase3.benchmark import atomic_write_json, atomic_write_text
+        from specrhythm.phase3.learned_selector import (
+            learned_pilot_markdown,
+            run_learned_selector_pilot,
+        )
+        from specrhythm.phase3.r3_workload import load_r3_workload
+
+        try:
+            workload_path = Path(args.workload).resolve()
+            output_dir = Path(args.output_dir).resolve()
+            report = run_learned_selector_pilot(
+                load_r3_workload(workload_path),
+                workload_path=workload_path,
+                target_dir=Path(args.target_dir).resolve(),
+                snapshot_dir=Path(args.snapshot_dir).resolve(),
+                sequential_dir=Path(args.sequential_dir).resolve(),
+                output_dir=output_dir,
+                resume=args.resume,
+                seed=args.seed,
+                source_trace_commit=args.source_trace_commit,
+            )
+        except (FileExistsError, FileNotFoundError, KeyError, TypeError, ValueError) as error:
+            raise SystemExit(f"Phase-3C learned selector pilot failed: {error}") from error
+        stage_summary = {
+            "schema_version": "specrhythm.phase3c-stage-summary.v3",
+            "stage": "diagnostic-learned-shell-ranker",
+            "request_count": report["request_count"],
+            "snapshot_count": report["snapshot_count"],
+            "new_learned_replay_records": report["new_learned_replay_records"],
+            "split_counts": report["split_counts"],
+            "decision": report["decision"]["outcome"],
+            "runtime_features_only_at_inference": True,
+            "gpu_performance_result": False,
+        }
+        atomic_write_json(output_dir / "stage-summary.json", stage_summary)
+        atomic_write_json(Path(args.output).resolve(), report)
+        atomic_write_text(
+            Path(args.markdown_output).resolve(), learned_pilot_markdown(report)
+        )
         return 0
     if args.command == "generate":
         config = load_json(args.config)

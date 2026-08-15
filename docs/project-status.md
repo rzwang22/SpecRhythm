@@ -33,7 +33,7 @@ claims.
 | --- | --- | --- | --- |
 | [#1 workload-v0.1](https://github.com/rzwang22/SpecRhythm/pull/1) | merged | strict Mooncake replay, R3 proxy config, validator, manifest, fixture tests and docs | workload plumbing only; proxy payload and illustrative acceptance |
 | [#2 simulator-semantics-v0.2](https://github.com/rzwang22/SpecRhythm/pull/2) | frozen draft; Phase 2 complete, not merged | proposal lifecycle, deterministic tree oracle, tree-aware allocators, base-preserving residual controls, Phase-2 nested search pools and common-snapshot oracle replay, path-aware eager and accounting | pure-Python proxy and oracle upper bounds only; no deployable oracle, measured search cost, GPU integration, or performance claim |
-| [#3 gpu-integration-v0.1](https://github.com/rzwang22/SpecRhythm/pull/3) | draft; Phase 3B.1 and user-run Phase 3C.1 pilot complete; Phase 3C.2 awaiting server run | hardened multi-rank primitive evidence, R3-real traces, coverage migration, shell/paired/headroom diagnosis and multi-round common-prefix replay | user-run 3×A800 correctness artifacts plus Mac CPU tests; no packed-tree/serving engine, Dual-Batch, SLO, calibrated latency or speedup claim |
+| [#3 gpu-integration-v0.1](https://github.com/rzwang22/SpecRhythm/pull/3) | draft; Phase 3B.1 and corrected-20 Phase 3C.2 complete; Phase 3C.3 corrected-100 awaiting server run | hardened multi-rank primitives, corrected R3-real traces, common-prefix replay, request-bootstrap statistics, 2x shell decomposition and diagnostic learned ranker | user-run 3×A800 correctness artifacts plus Mac CPU tests; no packed-tree/serving engine, Dual-Batch, SLO, calibrated latency or speedup claim |
 
 ## Phase 3.0: GPU readiness and real-trace runner
 
@@ -97,7 +97,7 @@ synthetic top-k primitive was about 0.03 ms; large-payload peer copies were stab
 validation passed. These are repeatability observations for `hf_correctness` primitives, not a
 serving latency surface or a performance claim.
 
-## Phase 3C.1–3C.2: real selector diagnosis
+## Phase 3C.1–3C.3: real selector diagnosis
 
 Phase 3C.1 adds an isolated, resumable pipeline without changing the simulator. It builds a fixed
 100-request public-text pilot with a 60/20/20 code/chat/summarization mixture, binds the first 100
@@ -137,11 +137,23 @@ with corrected data. The v2 builder applies the Qwen tokenizer chat template wit
 `enable_thinking=false`, retains native HumanEval completion prefixes and the explicit
 CNN/DailyMail summarization instruction, and records deidentified rendering/tokenizer metadata.
 
-The new 20-request (12/4/4) multi-round mode freezes each at-most-16-token target once, creates one
+The corrected 20-request (12/4/4) multi-round mode freezes each at-most-16-token target once, creates one
 shared forest at every target-prefix position, and replays every selector sequentially over those
 same snapshots. Immutable checkpoint/resume and final-token equality are enforced. The Mac agent
-implemented and tested this path without running a GPU model. The next gate is the immutable
-100-request v2 resummary and corrected 20-request server pilot, followed by artifact review.
+implemented and tested this path without running a GPU model. The user then completed the
+corrected-20 server run: Residual-Probability stayed at 2.407 accepted/proposal across pools,
+Entropy-Margin reached 2.421, and the Oracle rose from 2.680 at 1x to 2.877 at 2x with no further
+4x gain. These are token-efficiency observations only.
+
+Phase 3C.3 promotes the corrected run to 100 requests (60/20/20), adds a strict cross-artifact
+validator, request-stratified bootstrap intervals and paired deltas, and restricts formal analysis
+to 1x/2x. It decomposes the 2x shell into generator coverage, budget/prefix reachability and
+ranking failure. A diagnostic linear `learned-shell-ranker` uses fixed runtime draft features,
+70/15/15 task-stratified request splits, immutable model/replay provenance and a predeclared
+held-out A/B gate. Target labels are available only during offline training; inference rejects
+labeled nodes. The Mac agent implemented and CPU-tested this path but did not run the corrected
+100-request Qwen trace. That server run and artifact review are the next gate.
+
 Packed-tree, vLLM/SGLang, Dual-Batch, Eager, SLO evaluation and simulator calibration remain out of
 scope. See [phase3-real-trace.md](phase3-real-trace.md) for definitions and boundaries.
 

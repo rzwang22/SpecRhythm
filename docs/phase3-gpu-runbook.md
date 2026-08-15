@@ -5,8 +5,9 @@ This runbook starts from the frozen Phase-2 head through the stacked
 Phase 3B.1 hardens primitive measurement evidence. Neither is a vLLM/SGLang serving
 implementation, and neither performs Dual-Batch overlap. GPU latency commands have no synthetic
 fallback. Section 12 is the completed three-GPU Phase 3B.1 repeatability protocol; Section 13 is
-the completed Phase 3C.1 protocol; Section 14 is the current Phase 3C.2 coverage/multi-round
-pilot. Earlier commands remain historical bootstrap examples.
+the completed Phase 3C.1 protocol; Section 14 is the completed corrected-20 Phase 3C.2 pilot;
+Section 15 is the current corrected-100 Phase 3C.3 protocol. Earlier commands remain historical
+bootstrap examples.
 
 ## Repository audit at the Phase-2 boundary
 
@@ -914,3 +915,191 @@ Return the v2 resummary JSON/Markdown, corrected workload manifest, target and s
 summaries, sequential stage summary, multi-round JSON/Markdown, and any error logs. Stop after
 these two groups. Do not begin packed-tree verification, serving-engine integration, Dual-Batch,
 Eager, SLO evaluation or simulator calibration.
+
+## 15. Phase 3C.3 corrected 100-request multi-round and learned pilot
+
+This is the only formal corrected-100 Phase 3C protocol. Do not copy artifacts from the legacy
+Phase 3C.1 `pilot-100` directory: its ShareGPT prompts did not use the Qwen chat template. This
+run generates target trajectories once, creates selector-independent snapshots on GPU 0, and then
+performs sequential and learned-selector replay on CPU. It does not measure latency, goodput, SLO
+attainment or speedup and does not execute packed-tree verification.
+
+### Fetch and bind one exact Draft PR #3 commit
+
+```bash
+conda activate /root/autodl-tmp/envs/specrhythm-phase3-80d5769
+set -euo pipefail
+cd /root/autodl-tmp/src/SpecRhythm
+
+git fetch origin codex/gpu-integration-v0.1
+export SR_PHASE3C3_COMMIT="$(git rev-parse FETCH_HEAD)"
+git switch --detach "$SR_PHASE3C3_COMMIT"
+test "$(git rev-parse HEAD)" = "$SR_PHASE3C3_COMMIT"
+test -z "$(git status --short)"
+
+python -m pip install -e '.[dev,gpu]'
+python -m pytest -q
+python -m ruff check .
+git diff --check
+
+export SR_DRAFT_MODEL="/root/autodl-tmp/models/Qwen3-0.6B"
+export SR_TARGET_MODEL="/root/autodl-tmp/models/Qwen3-32B"
+export SR_MOONCAKE_TRACE="/root/autodl-tmp/SpecRhythm-data/raw/Mooncake/FAST25-release/traces/conversation_trace.jsonl"
+export SR_HUMANEVAL_JSONL="/root/autodl-tmp/SpecRhythm-data/raw/public/HumanEval/HumanEval.jsonl.gz"
+export SR_SHAREGPT_JSONL="/root/autodl-tmp/SpecRhythm-data/raw/public/ShareGPT/sharegpt.jsonl"
+export SR_CNNDM_JSONL="/root/autodl-tmp/SpecRhythm-data/raw/public/CNN-DailyMail/cnn_dailymail-test.jsonl"
+export SR_PHASE3C3_RUN="/root/autodl-tmp/SpecRhythm-data/results/phase3c/$SR_PHASE3C3_COMMIT/corrected-multiround-100"
+
+test -f "$SR_DRAFT_MODEL/config.json"
+test -f "$SR_TARGET_MODEL/config.json"
+test -f "$SR_MOONCAKE_TRACE"
+test -f "$SR_HUMANEVAL_JSONL"
+test -f "$SR_SHAREGPT_JSONL"
+test -f "$SR_CNNDM_JSONL"
+test ! -e "$SR_PHASE3C3_RUN/workload.jsonl"
+mkdir -p "$SR_PHASE3C3_RUN"
+```
+
+The `test ! -e` guard prevents an old or partially understood workload from being relabeled as
+corrected evidence. If the corrected workload was already deliberately built at this exact
+commit, skip only that guard and the workload-build command; do not rebuild its manifest during a
+resume.
+
+### Build the corrected workload and freeze the target once
+
+```bash
+specrhythm phase3c-workload-build \
+  --config configs/phase3c_r3_real_1d2v.yaml \
+  --request-count 100 \
+  --output "$SR_PHASE3C3_RUN/workload.jsonl" \
+  --manifest "$SR_PHASE3C3_RUN/workload-manifest.json"
+
+env -u CUDA_VISIBLE_DEVICES specrhythm phase3c-target-trajectory \
+  --config configs/phase3c_r3_real_1d2v.yaml \
+  --workload "$SR_PHASE3C3_RUN/workload.jsonl" \
+  --output-dir "$SR_PHASE3C3_RUN/target" \
+  --resume \
+  2>&1 | tee "$SR_PHASE3C3_RUN/target.log"
+```
+
+The target command is one coordinator process. The checked 1D2V config maps Qwen3-32B TP=2 to
+physical GPUs 1 and 2; do not wrap it in `torchrun`. `--resume` validates and skips immutable
+completed requests, so it never regenerates an already frozen target trajectory.
+
+### Generate common-prefix snapshots and replay frozen selectors
+
+```bash
+CUDA_VISIBLE_DEVICES=0 specrhythm phase3c-multiround-snapshots \
+  --config configs/phase3c_r3_real_1d2v.yaml \
+  --workload "$SR_PHASE3C3_RUN/workload.jsonl" \
+  --target-dir "$SR_PHASE3C3_RUN/target" \
+  --output-dir "$SR_PHASE3C3_RUN/common-prefix-snapshots" \
+  --resume \
+  2>&1 | tee "$SR_PHASE3C3_RUN/snapshots.log"
+
+env CUDA_VISIBLE_DEVICES="" specrhythm phase3c-multiround-replay \
+  --workload "$SR_PHASE3C3_RUN/workload.jsonl" \
+  --target-dir "$SR_PHASE3C3_RUN/target" \
+  --snapshot-dir "$SR_PHASE3C3_RUN/common-prefix-snapshots" \
+  --output-dir "$SR_PHASE3C3_RUN/sequential-replay" \
+  --resume
+```
+
+Every selector reads the same serialized forest at a target-prefix position. Although replay
+retains immutable 4x rows for compatibility, the Phase 3C.3 summary reports target-blind evidence
+only at 1x/2x and uses 4x solely for Oracle 4x-minus-2x.
+
+### Validate and create the corrected multi-round diagnosis
+
+```bash
+specrhythm phase3c-multiround-validate \
+  --workload "$SR_PHASE3C3_RUN/workload.jsonl" \
+  --workload-manifest "$SR_PHASE3C3_RUN/workload-manifest.json" \
+  --target-dir "$SR_PHASE3C3_RUN/target" \
+  --snapshot-dir "$SR_PHASE3C3_RUN/common-prefix-snapshots" \
+  --sequential-dir "$SR_PHASE3C3_RUN/sequential-replay" \
+  --expected-request-count 100 \
+  --output "$SR_PHASE3C3_RUN/validation.json"
+
+specrhythm phase3c-multiround-summary \
+  --snapshot-dir "$SR_PHASE3C3_RUN/common-prefix-snapshots" \
+  --sequential-dir "$SR_PHASE3C3_RUN/sequential-replay" \
+  --source-trace-commit "$SR_PHASE3C3_COMMIT" \
+  --output "$SR_PHASE3C3_RUN/multiround-diagnosis.json" \
+  --markdown-output "$SR_PHASE3C3_RUN/multiround-diagnosis.md"
+```
+
+### Run the offline learned-shell diagnostic
+
+```bash
+env CUDA_VISIBLE_DEVICES="" specrhythm phase3c-learned-pilot \
+  --workload "$SR_PHASE3C3_RUN/workload.jsonl" \
+  --target-dir "$SR_PHASE3C3_RUN/target" \
+  --snapshot-dir "$SR_PHASE3C3_RUN/common-prefix-snapshots" \
+  --sequential-dir "$SR_PHASE3C3_RUN/sequential-replay" \
+  --output-dir "$SR_PHASE3C3_RUN/learned-shell" \
+  --source-trace-commit "$SR_PHASE3C3_COMMIT" \
+  --seed 1664 \
+  --resume \
+  --output "$SR_PHASE3C3_RUN/learned-shell-diagnosis.json" \
+  --markdown-output "$SR_PHASE3C3_RUN/learned-shell-diagnosis.md"
+```
+
+This command trains a fixed linear diagnostic on the 70-request train split and evaluates the
+15-request test split. The 15 validation requests are not used to change features or
+hyperparameters. It writes an immutable feature dataset, request split, model, shell decomposition,
+separability report, held-out report, per-request learned replay and artifact manifest. Target
+labels are present in the offline training dataset but are rejected by the inference interface.
+
+### Final completeness gate
+
+```bash
+python - "$SR_PHASE3C3_RUN" "$SR_PHASE3C3_COMMIT" <<'PY'
+import json
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+commit = sys.argv[2]
+manifest = json.load(open(root / "workload-manifest.json"))
+validation = json.load(open(root / "validation.json"))
+multi = json.load(open(root / "multiround-diagnosis.json"))
+learned = json.load(open(root / "learned-shell-diagnosis.json"))
+artifact = json.load(open(root / "learned-shell" / "artifact-manifest.json"))
+
+assert manifest["schema_version"] == "specrhythm.r3-real-workload-manifest.v2"
+assert manifest["task_counts"] == {"code": 60, "chat": 20, "summarization": 20}
+assert manifest["prompt_rendering_audit"]["chat"]["chat_template_applied"] is True
+assert manifest["prompt_rendering_audit"]["chat"]["enable_thinking"] is False
+assert validation["valid"], validation["errors"]
+assert all(validation["checks"].values()), validation["checks"]
+assert multi["source_trace_commit"] == commit
+assert multi["request_count"] == 100
+assert multi["formal_pool_ratios"] == ["1x", "2x"]
+assert {row["pool_ratio"] for row in multi["aggregate_metrics"]} == {"1x", "2x"}
+assert all(row["selector"] == "within-request-target-oracle" for row in multi["diagnostic_4x_oracle"])
+assert multi["final_target_sequence_match"] is True
+assert multi["gpu_performance_result"] is False
+assert multi["reports_goodput_slo_or_speedup"] is False
+assert learned["source_trace_commit"] == commit
+assert learned["split_counts"] == {"train": 70, "validation": 15, "test": 15}
+assert learned["model"]["target_labels_available_at_inference"] is False
+assert learned["feature_dataset"]["runtime_and_target_fields_serialized_separately"] is True
+assert learned["decision"]["outcome"] in {"A", "B"}
+assert learned["gpu_performance_result"] is False
+assert artifact["runtime_features_only_at_inference"] is True
+assert artifact["target_labels_used_for_training_only"] is True
+print("Phase 3C.3 corrected-100 completeness gate PASS")
+print("fixed decision outcome:", learned["decision"]["outcome"])
+PY
+
+cat "$SR_PHASE3C3_RUN/multiround-diagnosis.md"
+cat "$SR_PHASE3C3_RUN/learned-shell-diagnosis.md"
+find "$SR_PHASE3C3_RUN" -maxdepth 3 -type f -print | sort
+```
+
+Return the workload manifest, three stage summaries, validation JSON, both diagnosis JSON/Markdown
+pairs, learned artifact manifest, shell opportunity/separability/held-out JSON, and logs. Then
+stop. Do not start packed-tree verification, Dual-Batch, Eager, vLLM/SGLang, SLO/goodput
+evaluation or simulator calibration until these corrected artifacts and the fixed A/B outcome are
+reviewed.
