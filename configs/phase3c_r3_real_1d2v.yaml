@@ -1,0 +1,70 @@
+{
+  "schema_version": "specrhythm.phase3c-config.v1",
+  "runtime": {
+    "schema_version": "specrhythm.phase3-config.v1",
+    "backend": "transformers",
+    "draft": {
+      "model_path": "${SR_DRAFT_MODEL}",
+      "gpu_ids": [0],
+      "tp_size": 1,
+      "dtype": "bfloat16",
+      "revision": null,
+      "trust_remote_code": false
+    },
+    "target": {
+      "model_path": "${SR_TARGET_MODEL}",
+      "gpu_ids": [1, 2],
+      "tp_size": 2,
+      "dtype": "bfloat16",
+      "revision": null,
+      "trust_remote_code": false
+    },
+    "context_length": 4096,
+    "batch_size": 1,
+    "search_pool_size": 64,
+    "candidate_budget": 4,
+    "candidate_width": 2,
+    "max_new_tokens": 16,
+    "random_seed": 1664,
+    "sampling_configuration": {
+      "do_sample": false,
+      "temperature": 0.0,
+      "top_p": 1.0
+    }
+  },
+  "workload": {
+    "arrival_trace": "${SR_MOONCAKE_TRACE}",
+    "tokenizer_model": "${SR_DRAFT_MODEL}",
+    "request_count": 100,
+    "maximum_new_tokens": 16,
+    "time_scale": 1.0,
+    "sources": {
+      "code": {
+        "dataset": "HumanEval",
+        "adapter": "humaneval",
+        "path": "${SR_HUMANEVAL_JSONL}",
+        "split": "test",
+        "source_license_or_url": "https://github.com/openai/human-eval"
+      },
+      "chat": {
+        "dataset": "ShareGPT",
+        "adapter": "sharegpt",
+        "path": "${SR_SHAREGPT_JSONL}",
+        "split": "train",
+        "source_license_or_url": "https://huggingface.co/datasets/anon8231489123/ShareGPT_Vicuna_unfiltered"
+      },
+      "summarization": {
+        "dataset": "CNN-DailyMail",
+        "adapter": "cnn_dailymail",
+        "path": "${SR_CNNDM_JSONL}",
+        "split": "test",
+        "source_license_or_url": "https://huggingface.co/datasets/abisee/cnn_dailymail"
+      }
+    }
+  },
+  "candidate_pool": {
+    "phase2_config_path": "simulator.json",
+    "ratios": [1, 2, 4],
+    "verification_budget": 4
+  }
+}

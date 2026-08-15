@@ -33,7 +33,7 @@ claims.
 | --- | --- | --- | --- |
 | [#1 workload-v0.1](https://github.com/rzwang22/SpecRhythm/pull/1) | merged | strict Mooncake replay, R3 proxy config, validator, manifest, fixture tests and docs | workload plumbing only; proxy payload and illustrative acceptance |
 | [#2 simulator-semantics-v0.2](https://github.com/rzwang22/SpecRhythm/pull/2) | frozen draft; Phase 2 complete, not merged | proposal lifecycle, deterministic tree oracle, tree-aware allocators, base-preserving residual controls, Phase-2 nested search pools and common-snapshot oracle replay, path-aware eager and accounting | pure-Python proxy and oracle upper bounds only; no deployable oracle, measured search cost, GPU integration, or performance claim |
-| [#3 gpu-integration-v0.1](https://github.com/rzwang22/SpecRhythm/pull/3) | draft; Phase 3B.1 implemented, GPU rerun pending | isolated real-trace schema, immutable checkpoints, GPU/NVIDIA probe, TP validator, Transformers correctness backend, 1D4V/1D2V serial runners, strict multi-rank primitive measurement/validation/comparison and server runbook | Mac tests plus user-run 3×A800 correctness smoke; hardened schema has not yet been rerun on CUDA; no serving-engine benchmark, Dual-Batch overlap, or speedup claim |
+| [#3 gpu-integration-v0.1](https://github.com/rzwang22/SpecRhythm/pull/3) | draft; Phase 3B.1 passed, Phase 3C.1 code ready for GPU pilot | hardened multi-rank primitive evidence plus deterministic R3-real workload, shared real candidate forest, immutable target labels and offline selector diagnosis | Phase 3B.1 user-run 3×A800 validation plus Phase 3C.1 Mac CPU tests; no Phase 3C GPU pilot yet, packed-tree/serving engine, Dual-Batch, SLO or speedup claim |
 
 ## Phase 3.0: GPU readiness and real-trace runner
 
@@ -90,9 +90,38 @@ interface exists without fake timings. Transfer now covers both draft↔target-l
 the target-leader→TP-peer path when present, and payloads from 4 KiB to 256 MiB, but remains a bare
 device-copy primitive rather than complete Draft→Verify transport.
 
-No NVIDIA GPU was available to the Mac agent that implemented Phase 3B.1. The next gate is a
-same-commit three-run A800 validation of the v2 evidence. R3-real, packed-tree verification,
-Dual-Batch, Eager, end-to-end SLO evaluation and simulator calibration have not started.
+No NVIDIA GPU was available to the Mac agent that implemented Phase 3B.1. The user subsequently
+completed the same-commit three-run A800 validation: TP=2 verify run-to-run CV was about
+0.9%–1.3% with maximum reported variation 3.04%; draft variation was about 6.7%–8.0%; the
+synthetic top-k primitive was about 0.03 ms; large-payload peer copies were stable; and every v2
+validation passed. These are repeatability observations for `hf_correctness` primitives, not a
+serving latency surface or a performance claim.
+
+## Phase 3C.1: R3-real selector learnability pilot
+
+Phase 3C.1 adds an isolated, resumable pipeline without changing the simulator. It builds a fixed
+100-request public-text pilot with a 60/20/20 code/chat/summarization mixture, binds the first 100
+chronological Mooncake arrivals, and stores token IDs and lengths from the actual configured Qwen3
+tokenizer. Missing datasets are fatal and no prompts are synthesized as fallback. The 40/50/150 ms
+classes remain metadata only.
+
+The draft stage uses Qwen3-0.6B TP=1 to build one shared real 4× forest per request; 1× and 2× are
+strict prefix-closed subsets. Node counts 16/32/64 and verification budget 4 are derived from the
+frozen Phase-2 width/depth/speculative-budget configuration. The target stage uses Qwen3-32B TP=2
+to generate one immutable greedy continuation per request, independent of ratio. Both remain
+full-context Transformers correctness paths with `kv_cache_reuse=false`.
+
+Label join keeps draft runtime features and target-only labels in separate objects. Five
+target-blind selectors and a within-request target oracle replay the same forest, target and fixed
+budget. Reports cover pool/selected target-path coverage, candidate efficiency, oracle regret,
+depth/probability/entropy calibration, sibling hits and pool robustness. Stable request-level
+train/validation/test splits prevent candidate-node leakage.
+
+The Mac agent has run only CPU fixtures and dry-runs. The next gate is first the 3/1/1 five-request
+smoke, then the 60/20/20 100-request pilot on the user's 3×A800 host. Until those artifacts are
+reviewed, Phase 3C.1 has no empirical Qwen coverage or selector-learnability result. Packed-tree,
+vLLM/SGLang, Dual-Batch, Eager, SLO evaluation and simulator calibration remain explicitly out of
+scope. See [phase3-real-trace.md](phase3-real-trace.md) for the frozen schema and formulas.
 
 ## Phase 1.5: residual selection
 

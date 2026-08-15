@@ -34,3 +34,11 @@ dataset payloads, model outputs, per-cycle checkpoint JSON, raw logits, and cons
 outside Git under `$SR_GPU_RESULTS/phase3/`. The two tiny prompts in
 `configs/phase3-smoke-prompts.jsonl` are schema/smoke fixtures only, not an evaluation workload.
 See `docs/phase3-gpu-runbook.md` for the resumable trace and manifest workflow.
+
+Phase 3C.1 additionally expects three user-provided public JSONL exports: one code file
+(HumanEval or MBPP), one chat file (ShareGPT or OpenAssistant), and one summarization file
+(CNN/DailyMail, XSum, or GovReport). The checked server config selects HumanEval, ShareGPT, and
+CNN/DailyMail. It also requires the raw Mooncake conversation trace and the local Qwen3 tokenizer.
+None of those files, the derived 100-request workload, per-request forest/target checkpoints, or
+selector reports may be committed. Keep them under `$SR_PHASE3C_ROOT`; only the tiny synthetic
+fixtures under `tests/fixtures/` belong in Git.

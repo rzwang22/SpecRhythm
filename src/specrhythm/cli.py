@@ -366,6 +366,75 @@ def build_parser() -> argparse.ArgumentParser:
     phase3_selector_dry_run.add_argument("--search-pool-size", type=int, default=16)
     phase3_selector_dry_run.add_argument("--candidate-budget", type=int, default=8)
     phase3_selector_dry_run.add_argument("--output", required=True)
+
+    phase3c_workload = subparsers.add_parser(
+        "phase3c-workload-build",
+        help="build deterministic R3-real public-text requests with real tokenizer lengths",
+    )
+    phase3c_workload.add_argument("--config", required=True)
+    phase3c_workload.add_argument("--output", required=True)
+    phase3c_workload.add_argument("--manifest", required=True)
+    phase3c_workload.add_argument("--request-count", type=int)
+    phase3c_workload.add_argument("--backend", choices=("dry-run", "transformers"))
+
+    phase3c_draft = subparsers.add_parser(
+        "phase3c-draft-forest",
+        help="generate one shared nested 1x/2x/4x correctness candidate forest",
+    )
+    phase3c_draft.add_argument("--config", required=True)
+    phase3c_draft.add_argument("--workload", required=True)
+    phase3c_draft.add_argument("--output-dir", required=True)
+    phase3c_draft.add_argument("--resume", action="store_true")
+    phase3c_draft.add_argument("--backend", choices=("dry-run", "transformers"))
+
+    phase3c_target = subparsers.add_parser(
+        "phase3c-target-trajectory",
+        help="generate one immutable greedy target trajectory per R3-real request",
+    )
+    phase3c_target.add_argument("--config", required=True)
+    phase3c_target.add_argument("--workload", required=True)
+    phase3c_target.add_argument("--output-dir", required=True)
+    phase3c_target.add_argument("--resume", action="store_true")
+    phase3c_target.add_argument("--backend", choices=("dry-run", "transformers"))
+
+    phase3c_join = subparsers.add_parser(
+        "phase3c-label-join",
+        help="join immutable draft-side features with target-only evaluation labels",
+    )
+    phase3c_join.add_argument("--workload", required=True)
+    phase3c_join.add_argument("--forest-dir", required=True)
+    phase3c_join.add_argument("--target-dir", required=True)
+    phase3c_join.add_argument("--output-dir", required=True)
+    phase3c_join.add_argument("--resume", action="store_true")
+
+    phase3c_replay = subparsers.add_parser(
+        "phase3c-selector-replay",
+        help="replay fixed-budget target-blind selectors and a within-request oracle",
+    )
+    phase3c_replay.add_argument("--config", required=True)
+    phase3c_replay.add_argument("--labeled-dir", required=True)
+    phase3c_replay.add_argument("--output-dir", required=True)
+    phase3c_replay.add_argument("--resume", action="store_true")
+
+    phase3c_validate = subparsers.add_parser(
+        "phase3c-validate",
+        help="validate Phase-3C forest, target, label, and token semantics",
+    )
+    phase3c_validate.add_argument("--workload", required=True)
+    phase3c_validate.add_argument("--forest-dir", required=True)
+    phase3c_validate.add_argument("--target-dir", required=True)
+    phase3c_validate.add_argument("--labeled-dir", required=True)
+    phase3c_validate.add_argument("--selector-dir", required=True)
+    phase3c_validate.add_argument("--output", required=True)
+
+    phase3c_summary = subparsers.add_parser(
+        "phase3c-summary",
+        help="summarize selector learnability without latency, SLO, or speedup claims",
+    )
+    phase3c_summary.add_argument("--labeled-dir", required=True)
+    phase3c_summary.add_argument("--selector-dir", required=True)
+    phase3c_summary.add_argument("--output", required=True)
+    phase3c_summary.add_argument("--markdown-output", required=True)
     return parser
 
 
@@ -386,6 +455,17 @@ def _current_git_commit() -> Optional[str]:
         ["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=False
     )
     return completed.stdout.strip() if completed.returncode == 0 else None
+
+
+def _phase3c_config(path: str, backend: Optional[str] = None) -> Any:
+    from dataclasses import replace
+
+    from specrhythm.phase3.phase3c_config import load_phase3c_config
+
+    config = load_phase3c_config(path)
+    if backend is not None:
+        config = replace(config, runtime=config.runtime.with_overrides(backend=backend))
+    return config
 
 
 def _final_tokens(trace_dir: Path) -> dict[str, tuple[int, ...]]:
@@ -628,6 +708,134 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         except ValueError as error:
             raise SystemExit(f"Phase-3 selector dry-run failed: {error}") from error
         atomic_write_json(Path(args.output).resolve(), report)
+        return 0
+    if args.command == "phase3c-workload-build":
+        from specrhythm.phase3.r3_workload import build_r3_real_workload
+
+        try:
+            command_argv = list(argv) if argv is not None else sys.argv[1:]
+            manifest = build_r3_real_workload(
+                _phase3c_config(args.config, args.backend),
+                output_path=Path(args.output).resolve(),
+                manifest_path=Path(args.manifest).resolve(),
+                command=shlex.join(["specrhythm", *command_argv]),
+                request_count=args.request_count,
+                git_commit=_current_git_commit(),
+            )
+        except (FileNotFoundError, ValueError, RuntimeError) as error:
+            raise SystemExit(f"Phase-3C workload build failed: {error}") from error
+        _write_json(manifest, None)
+        return 0
+    if args.command in {"phase3c-draft-forest", "phase3c-target-trajectory"}:
+        from specrhythm.phase3.r3_workload import load_r3_workload
+        from specrhythm.phase3.real_candidate_trace import (
+            run_draft_forest_stage,
+            run_target_trajectory_stage,
+        )
+
+        try:
+            config = _phase3c_config(args.config, args.backend)
+            workload_path = Path(args.workload).resolve()
+            requests = load_r3_workload(workload_path)
+            output_dir = Path(args.output_dir).resolve()
+            if args.command == "phase3c-draft-forest":
+                report = run_draft_forest_stage(
+                    requests,
+                    config,
+                    workload_path=workload_path,
+                    output_dir=output_dir,
+                    resume=args.resume,
+                )
+            else:
+                report = run_target_trajectory_stage(
+                    requests,
+                    config,
+                    workload_path=workload_path,
+                    output_dir=output_dir,
+                    resume=args.resume,
+                )
+        except (FileExistsError, FileNotFoundError, ValueError, RuntimeError) as error:
+            raise SystemExit(f"Phase-3C model stage failed: {error}") from error
+        _write_json(report, str(output_dir / "stage-summary.json"))
+        _write_json(report, None)
+        return 0
+    if args.command == "phase3c-label-join":
+        from specrhythm.phase3.r3_workload import load_r3_workload
+        from specrhythm.phase3.real_candidate_trace import run_label_join_stage
+
+        try:
+            report = run_label_join_stage(
+                load_r3_workload(Path(args.workload).resolve()),
+                forest_dir=Path(args.forest_dir).resolve(),
+                target_dir=Path(args.target_dir).resolve(),
+                output_dir=Path(args.output_dir).resolve(),
+                resume=args.resume,
+            )
+        except (FileExistsError, FileNotFoundError, ValueError) as error:
+            raise SystemExit(f"Phase-3C label join failed: {error}") from error
+        _write_json(report, str(Path(args.output_dir).resolve() / "stage-summary.json"))
+        _write_json(report, None)
+        return 0
+    if args.command == "phase3c-selector-replay":
+        from specrhythm.phase3.selector_diagnosis import run_selector_replay_stage
+
+        try:
+            output_dir = Path(args.output_dir).resolve()
+            report = run_selector_replay_stage(
+                _phase3c_config(args.config),
+                labeled_dir=Path(args.labeled_dir).resolve(),
+                output_dir=output_dir,
+                resume=args.resume,
+            )
+        except (FileExistsError, FileNotFoundError, ValueError) as error:
+            raise SystemExit(f"Phase-3C selector replay failed: {error}") from error
+        _write_json(report, str(output_dir / "stage-summary.json"))
+        _write_json(report, None)
+        return 0
+    if args.command == "phase3c-validate":
+        from specrhythm.phase3.r3_workload import load_r3_workload
+        from specrhythm.phase3.real_candidate_trace import validate_phase3c_artifacts
+        from specrhythm.phase3.selector_diagnosis import validate_selector_artifacts
+
+        try:
+            report = validate_phase3c_artifacts(
+                load_r3_workload(Path(args.workload).resolve()),
+                forest_dir=Path(args.forest_dir).resolve(),
+                target_dir=Path(args.target_dir).resolve(),
+                labeled_dir=Path(args.labeled_dir).resolve(),
+            )
+            selector_validation = validate_selector_artifacts(
+                labeled_dir=Path(args.labeled_dir).resolve(),
+                selector_dir=Path(args.selector_dir).resolve(),
+            )
+            report["selector_validation"] = selector_validation
+            if not selector_validation["valid"]:
+                report["valid"] = False
+                report["errors"].extend(selector_validation["errors"])
+        except (FileNotFoundError, KeyError, TypeError, ValueError) as error:
+            report = {
+                "schema_version": "specrhythm.phase3c-validation.v1",
+                "valid": False,
+                "errors": [str(error)],
+            }
+        _write_json(report, args.output)
+        return 0 if report["valid"] else 1
+    if args.command == "phase3c-summary":
+        from specrhythm.phase3.benchmark import atomic_write_json, atomic_write_text
+        from specrhythm.phase3.selector_diagnosis import (
+            diagnosis_markdown,
+            summarize_selector_diagnosis,
+        )
+
+        try:
+            report = summarize_selector_diagnosis(
+                labeled_dir=Path(args.labeled_dir).resolve(),
+                selector_dir=Path(args.selector_dir).resolve(),
+            )
+        except (FileNotFoundError, ValueError) as error:
+            raise SystemExit(f"Phase-3C summary failed: {error}") from error
+        atomic_write_json(Path(args.output).resolve(), report)
+        atomic_write_text(Path(args.markdown_output).resolve(), diagnosis_markdown(report))
         return 0
     if args.command == "generate":
         config = load_json(args.config)

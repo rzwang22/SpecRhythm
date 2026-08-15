@@ -18,6 +18,8 @@ The repository currently provides:
 - tests for budget, prefix, determinism, and accounting invariants.
 - a versioned real-model trace schema, resumable checkpoints, GPU environment probe, conservative
   TP validator, and CUDA-only latency interfaces.
+- a deterministic R3-real public-text pilot builder, nested real candidate-forest checkpoints,
+  immutable target labels, and fixed-budget offline selector diagnosis.
 
 ## Quick start
 
@@ -183,6 +185,14 @@ is not a packed-tree serving kernel. Every report forbids simulator-surface use 
 correctness-backend primitive measurement, not a vLLM/SGLang throughput claim. CPU dry-runs test
 schemas and the selector-stage contract but never emit synthetic GPU latency. See
 [docs/phase3-gpu-runbook.md](docs/phase3-gpu-runbook.md) before using a GPU host.
+
+Phase 3C.1 adds `configs/phase3c_r3_real_1d2v.yaml` for a three-GPU R3-real pilot. Public prompts,
+Mooncake arrivals, Qwen token IDs, candidate forests and target trajectories stay outside Git.
+The pipeline is split into workload build, draft forest, target trajectory, label join, selector
+replay, validation and summary commands so every expensive stage can resume independently.
+Its output diagnoses target-path coverage and target-blind selector regret against a
+within-request oracle; it never reports goodput, SLO attainment or GPU speedup. See
+[docs/phase3-real-trace.md](docs/phase3-real-trace.md) for its evidence boundary.
 
 The completed audit contains 3/3 common replays (10,000 corrected-queue snapshots each), 9/9
 references, and all 48 end-to-end cells. A_1× exactly reproduces Residual-Probability at all

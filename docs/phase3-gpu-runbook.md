@@ -4,8 +4,8 @@ This runbook starts from the frozen Phase-2 head through the stacked
 `codex/gpu-integration-v0.1` branch. Phase 3A is a correctness-first Transformers collector and
 Phase 3B.1 hardens primitive measurement evidence. Neither is a vLLM/SGLang serving
 implementation, and neither performs Dual-Batch overlap. GPU latency commands have no synthetic
-fallback. Section 12 is the canonical three-GPU Phase 3B.1 rerun; the earlier commands remain as
-historical bootstrap examples.
+fallback. Section 12 is the completed three-GPU Phase 3B.1 repeatability protocol; Section 13 is
+the current Phase 3C.1 R3-real pilot. The earlier commands remain as historical bootstrap examples.
 
 ## Repository audit at the Phase-2 boundary
 
@@ -512,3 +512,246 @@ cat "$SR_PHASE3B1_ROOT/transfer-comparison.md"
 Stop after returning the three comparison reports, three run summaries, validation JSON, and any
 warning/error logs. Do not start R3-real, packed-tree verification, simulator calibration,
 Dual-Batch, Eager, or end-to-end SLO evaluation from these primitive measurements.
+
+## 13. Phase 3C.1 R3-real pilot on three A800 GPUs
+
+Phase 3B.1 has passed the user's three-run A800 validation. This section starts a separate
+Phase 3C.1 trace pilot. It does not load the Phase 3B.1 latency JSON into the simulator and does
+not implement packed-tree verification, a serving engine, overlap, Eager, SLO scheduling or
+goodput evaluation.
+
+### Required external inputs
+
+Provide exactly these three public-data exports before running the checked configuration:
+
+1. `HumanEval.jsonl` or `HumanEval.jsonl.gz`, one JSON object per line with `task_id` and `prompt`;
+2. `sharegpt.jsonl`, one conversation object per line with `id` and `conversations`/`messages`;
+3. `cnn_dailymail-test.jsonl`, one JSON object per line with `id`, `article` and `highlights`.
+
+The builder also needs the existing Mooncake `conversation_trace.jsonl`. Do not place any of
+these files in the repository. If a downloaded ShareGPT artifact is one large JSON array, export
+it to one-object-per-line JSONL before this run; the builder intentionally does not guess or
+silently rewrite source formats.
+
+Fetch one exact Draft PR #3 head, activate the existing environment, install that checkout and
+bind the external paths:
+
+```bash
+conda activate /root/autodl-tmp/envs/specrhythm-phase3-80d5769
+set -euo pipefail
+cd /root/autodl-tmp/src/SpecRhythm
+
+git fetch origin codex/gpu-integration-v0.1
+export SR_PHASE3C_COMMIT="$(git rev-parse FETCH_HEAD)"
+git switch --detach "$SR_PHASE3C_COMMIT"
+test "$(git rev-parse HEAD)" = "$SR_PHASE3C_COMMIT"
+test -z "$(git status --short)"
+
+python -m pip install -e '.[dev,gpu]'
+python -m pytest -q
+python -m ruff check .
+git diff --check
+
+export SR_DRAFT_MODEL="/root/autodl-tmp/models/Qwen3-0.6B"
+export SR_TARGET_MODEL="/root/autodl-tmp/models/Qwen3-32B"
+export SR_MOONCAKE_TRACE="/root/autodl-tmp/SpecRhythm-data/raw/Mooncake/FAST25-release/traces/conversation_trace.jsonl"
+export SR_HUMANEVAL_JSONL="/root/autodl-tmp/SpecRhythm-data/raw/public/HumanEval/HumanEval.jsonl.gz"
+export SR_SHAREGPT_JSONL="/root/autodl-tmp/SpecRhythm-data/raw/public/ShareGPT/sharegpt.jsonl"
+export SR_CNNDM_JSONL="/root/autodl-tmp/SpecRhythm-data/raw/public/CNN-DailyMail/cnn_dailymail-test.jsonl"
+export SR_PHASE3C_ROOT="/root/autodl-tmp/SpecRhythm-data/results/phase3c/$SR_PHASE3C_COMMIT"
+
+test -f "$SR_DRAFT_MODEL/config.json"
+test -f "$SR_TARGET_MODEL/config.json"
+test -f "$SR_MOONCAKE_TRACE"
+test -f "$SR_HUMANEVAL_JSONL"
+test -f "$SR_SHAREGPT_JSONL"
+test -f "$SR_CNNDM_JSONL"
+mkdir -p "$SR_PHASE3C_ROOT"
+```
+
+The config uses GPU 0 for draft TP=1 and launches a persistent target TP=2 worker group on
+physical GPUs 1–2. The target command is a coordinator command and must not be wrapped in
+`torchrun`.
+
+### Five-request smoke: 3 code, 1 chat, 1 summarization
+
+Build a real-tokenized workload. This stage loads only the Qwen3 tokenizer and does not run a GPU
+model:
+
+```bash
+export SR_PHASE3C_RUN="$SR_PHASE3C_ROOT/smoke-5"
+mkdir -p "$SR_PHASE3C_RUN"
+
+specrhythm phase3c-workload-build \
+  --config configs/phase3c_r3_real_1d2v.yaml \
+  --request-count 5 \
+  --output "$SR_PHASE3C_RUN/workload.jsonl" \
+  --manifest "$SR_PHASE3C_RUN/workload-manifest.json"
+```
+
+Generate the shared nested forest on GPU 0, then generate the immutable target trajectory on
+GPUs 1–2:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 specrhythm phase3c-draft-forest \
+  --config configs/phase3c_r3_real_1d2v.yaml \
+  --workload "$SR_PHASE3C_RUN/workload.jsonl" \
+  --output-dir "$SR_PHASE3C_RUN/draft"
+
+env -u CUDA_VISIBLE_DEVICES specrhythm phase3c-target-trajectory \
+  --config configs/phase3c_r3_real_1d2v.yaml \
+  --workload "$SR_PHASE3C_RUN/workload.jsonl" \
+  --output-dir "$SR_PHASE3C_RUN/target"
+```
+
+Join labels and replay all fixed selectors on CPU, then validate and summarize:
+
+```bash
+specrhythm phase3c-label-join \
+  --workload "$SR_PHASE3C_RUN/workload.jsonl" \
+  --forest-dir "$SR_PHASE3C_RUN/draft" \
+  --target-dir "$SR_PHASE3C_RUN/target" \
+  --output-dir "$SR_PHASE3C_RUN/labeled"
+
+specrhythm phase3c-selector-replay \
+  --config configs/phase3c_r3_real_1d2v.yaml \
+  --labeled-dir "$SR_PHASE3C_RUN/labeled" \
+  --output-dir "$SR_PHASE3C_RUN/selectors"
+
+specrhythm phase3c-validate \
+  --workload "$SR_PHASE3C_RUN/workload.jsonl" \
+  --forest-dir "$SR_PHASE3C_RUN/draft" \
+  --target-dir "$SR_PHASE3C_RUN/target" \
+  --labeled-dir "$SR_PHASE3C_RUN/labeled" \
+  --selector-dir "$SR_PHASE3C_RUN/selectors" \
+  --output "$SR_PHASE3C_RUN/validation.json"
+
+specrhythm phase3c-summary \
+  --labeled-dir "$SR_PHASE3C_RUN/labeled" \
+  --selector-dir "$SR_PHASE3C_RUN/selectors" \
+  --output "$SR_PHASE3C_RUN/selector-diagnosis.json" \
+  --markdown-output "$SR_PHASE3C_RUN/selector-diagnosis.md"
+```
+
+Require the exact smoke mixture, real tokenizer lengths, all five immutable stage records and no
+performance fields:
+
+```bash
+python - "$SR_PHASE3C_RUN" <<'PY'
+import hashlib
+import json
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+manifest = json.load(open(root / "workload-manifest.json"))
+validation = json.load(open(root / "validation.json"))
+diagnosis = json.load(open(root / "selector-diagnosis.json"))
+assert manifest["task_counts"] == {"code": 3, "chat": 1, "summarization": 1}
+assert manifest["prompt_lengths_are_proxy"] is False
+assert hashlib.sha256((root / "workload.jsonl").read_bytes()).hexdigest() == manifest["output_workload_sha256"]
+assert validation["valid"], validation["errors"]
+assert validation["forest_records"] == validation["target_records"] == validation["labeled_records"] == 5
+assert diagnosis["request_count"] == 5
+assert diagnosis["gpu_performance_result"] is False
+assert diagnosis["reports_goodput"] is False
+assert diagnosis["reports_slo_attainment"] is False
+assert diagnosis["reports_speedup"] is False
+print("Phase 3C.1 five-request smoke PASS")
+PY
+```
+
+If a model stage is interrupted, rerun only that exact stage with `--resume`. For example:
+
+```bash
+env -u CUDA_VISIBLE_DEVICES specrhythm phase3c-target-trajectory \
+  --config configs/phase3c_r3_real_1d2v.yaml \
+  --workload "$SR_PHASE3C_RUN/workload.jsonl" \
+  --output-dir "$SR_PHASE3C_RUN/target" \
+  --resume
+```
+
+Completed request files are compared by identity and never replaced.
+
+### 100-request pilot: 60 code, 20 chat, 20 summarization
+
+Run this only after the five-request validation passes:
+
+```bash
+export SR_PHASE3C_RUN="$SR_PHASE3C_ROOT/pilot-100"
+mkdir -p "$SR_PHASE3C_RUN"
+
+specrhythm phase3c-workload-build \
+  --config configs/phase3c_r3_real_1d2v.yaml \
+  --request-count 100 \
+  --output "$SR_PHASE3C_RUN/workload.jsonl" \
+  --manifest "$SR_PHASE3C_RUN/workload-manifest.json"
+
+CUDA_VISIBLE_DEVICES=0 specrhythm phase3c-draft-forest \
+  --config configs/phase3c_r3_real_1d2v.yaml \
+  --workload "$SR_PHASE3C_RUN/workload.jsonl" \
+  --output-dir "$SR_PHASE3C_RUN/draft" \
+  --resume
+
+env -u CUDA_VISIBLE_DEVICES specrhythm phase3c-target-trajectory \
+  --config configs/phase3c_r3_real_1d2v.yaml \
+  --workload "$SR_PHASE3C_RUN/workload.jsonl" \
+  --output-dir "$SR_PHASE3C_RUN/target" \
+  --resume
+
+specrhythm phase3c-label-join \
+  --workload "$SR_PHASE3C_RUN/workload.jsonl" \
+  --forest-dir "$SR_PHASE3C_RUN/draft" \
+  --target-dir "$SR_PHASE3C_RUN/target" \
+  --output-dir "$SR_PHASE3C_RUN/labeled" \
+  --resume
+
+specrhythm phase3c-selector-replay \
+  --config configs/phase3c_r3_real_1d2v.yaml \
+  --labeled-dir "$SR_PHASE3C_RUN/labeled" \
+  --output-dir "$SR_PHASE3C_RUN/selectors" \
+  --resume
+
+specrhythm phase3c-validate \
+  --workload "$SR_PHASE3C_RUN/workload.jsonl" \
+  --forest-dir "$SR_PHASE3C_RUN/draft" \
+  --target-dir "$SR_PHASE3C_RUN/target" \
+  --labeled-dir "$SR_PHASE3C_RUN/labeled" \
+  --selector-dir "$SR_PHASE3C_RUN/selectors" \
+  --output "$SR_PHASE3C_RUN/validation.json"
+
+specrhythm phase3c-summary \
+  --labeled-dir "$SR_PHASE3C_RUN/labeled" \
+  --selector-dir "$SR_PHASE3C_RUN/selectors" \
+  --output "$SR_PHASE3C_RUN/selector-diagnosis.json" \
+  --markdown-output "$SR_PHASE3C_RUN/selector-diagnosis.md"
+```
+
+The new pilot directory is empty, so using `--resume` on its first model/join/replay invocation is
+safe and also makes the commands directly reusable after interruption. Perform the final gate:
+
+```bash
+python - "$SR_PHASE3C_RUN" <<'PY'
+import json
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+manifest = json.load(open(root / "workload-manifest.json"))
+validation = json.load(open(root / "validation.json"))
+diagnosis = json.load(open(root / "selector-diagnosis.json"))
+assert manifest["request_count"] == 100
+assert manifest["task_counts"] == {"code": 60, "chat": 20, "summarization": 20}
+assert validation["valid"], validation["errors"]
+assert validation["forest_records"] == validation["target_records"] == validation["labeled_records"] == 100
+assert diagnosis["request_count"] == 100
+assert diagnosis["evidence_scope"] == "100-request-pilot-schema-and-selector-signal-only"
+print("Phase 3C.1 100-request pilot PASS")
+PY
+
+cat "$SR_PHASE3C_RUN/selector-diagnosis.md"
+```
+
+Return the workload manifest, all stage summaries, validation JSON, selector diagnosis JSON/MD,
+and error logs if any. Stop there. Do not interpret the pilot as a GPU speedup or proceed to
+packed-tree, serving-engine, Dual-Batch, Eager, SLO or simulator work without review.
