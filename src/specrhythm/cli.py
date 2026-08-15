@@ -320,7 +320,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     phase3_benchmark = subparsers.add_parser(
         "phase3-benchmark",
-        help="run real-CUDA latency interfaces; there is no dry-run timing fallback",
+        help=(
+            "measure hf_correctness primitives with real CUDA; not a serving engine or "
+            "simulator surface"
+        ),
+        description=(
+            "Collect Phase-3B.1 correctness-backend primitive latency with strict per-rank "
+            "evidence. Verification is serial full-context replay without KV-cache reuse or "
+            "packed-tree execution. There is no dry-run timing fallback."
+        ),
     )
     phase3_benchmark.add_argument("--config", required=True)
     phase3_benchmark.add_argument(
@@ -332,6 +340,32 @@ def build_parser() -> argparse.ArgumentParser:
     phase3_benchmark.add_argument("--output", required=True)
     phase3_benchmark.add_argument("--markdown-output", required=True)
     phase3_benchmark.add_argument("--environment-metadata")
+
+    phase3_benchmark_validate = subparsers.add_parser(
+        "phase3-benchmark-validate",
+        help="strictly validate a Phase-3B.1 primitive-latency report",
+    )
+    phase3_benchmark_validate.add_argument("--input", required=True)
+    phase3_benchmark_validate.add_argument("--output", required=True)
+
+    phase3_benchmark_compare = subparsers.add_parser(
+        "phase3-benchmark-compare",
+        help="compare repeated same-commit, same-semantics Phase-3B.1 runs",
+    )
+    phase3_benchmark_compare.add_argument(
+        "--input", action="append", required=True, help="repeat for each run JSON"
+    )
+    phase3_benchmark_compare.add_argument("--output", required=True)
+    phase3_benchmark_compare.add_argument("--markdown-output", required=True)
+
+    phase3_selector_dry_run = subparsers.add_parser(
+        "phase3-selector-dry-run",
+        help="exercise the real-selector stage contract without recording fake latency",
+    )
+    phase3_selector_dry_run.add_argument("--request-count", type=int, default=2)
+    phase3_selector_dry_run.add_argument("--search-pool-size", type=int, default=16)
+    phase3_selector_dry_run.add_argument("--candidate-budget", type=int, default=8)
+    phase3_selector_dry_run.add_argument("--output", required=True)
     return parser
 
 
@@ -521,9 +555,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 0
     if args.command == "phase3-benchmark":
         from specrhythm.phase3.benchmark import (
+            atomic_write_json,
+            atomic_write_text,
             benchmark_markdown,
             run_latency_benchmark,
         )
+        from specrhythm.phase3.benchmark_validation import validate_benchmark_report
         from specrhythm.phase3.config import load_phase3_config
 
         try:
@@ -541,10 +578,56 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 environment_path = Path(args.environment_metadata).resolve()
                 report["environment_metadata_file"] = environment_path.name
                 report["environment_metadata_sha256"] = sha256_file(environment_path)
-            _write_json(report, args.output)
-            markdown = Path(args.markdown_output)
-            markdown.parent.mkdir(parents=True, exist_ok=True)
-            markdown.write_text(benchmark_markdown(report), encoding="utf-8")
+            report["validation"] = validate_benchmark_report(report)
+            atomic_write_json(Path(args.output).resolve(), report)
+            atomic_write_text(
+                Path(args.markdown_output).resolve(), benchmark_markdown(report)
+            )
+        return 0 if report["validation"]["valid"] else 1
+    if args.command == "phase3-benchmark-validate":
+        from specrhythm.phase3.benchmark import atomic_write_json
+        from specrhythm.phase3.benchmark_validation import validate_benchmark_report
+
+        try:
+            report = json.loads(Path(args.input).read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            raise SystemExit(f"Phase-3 benchmark validation failed: {error}") from error
+        validation = validate_benchmark_report(report)
+        atomic_write_json(Path(args.output).resolve(), validation)
+        return 0 if validation["valid"] else 1
+    if args.command == "phase3-benchmark-compare":
+        from specrhythm.phase3.benchmark import atomic_write_json, atomic_write_text
+        from specrhythm.phase3.benchmark_validation import (
+            compare_benchmark_reports,
+            comparison_markdown,
+        )
+
+        paths = [Path(value).resolve() for value in args.input]
+        try:
+            reports = [json.loads(path.read_text(encoding="utf-8")) for path in paths]
+        except (OSError, json.JSONDecodeError) as error:
+            raise SystemExit(f"Phase-3 benchmark comparison failed: {error}") from error
+        comparison = compare_benchmark_reports(
+            reports, [f"{path.parent.name}/{path.name}" for path in paths]
+        )
+        atomic_write_json(Path(args.output).resolve(), comparison)
+        atomic_write_text(
+            Path(args.markdown_output).resolve(), comparison_markdown(comparison)
+        )
+        return 0 if comparison["valid"] else 1
+    if args.command == "phase3-selector-dry-run":
+        from specrhythm.phase3.benchmark import atomic_write_json
+        from specrhythm.phase3.selector_benchmark import run_selector_dry_run
+
+        try:
+            report = run_selector_dry_run(
+                request_count=args.request_count,
+                search_pool_size=args.search_pool_size,
+                candidate_budget=args.candidate_budget,
+            )
+        except ValueError as error:
+            raise SystemExit(f"Phase-3 selector dry-run failed: {error}") from error
+        atomic_write_json(Path(args.output).resolve(), report)
         return 0
     if args.command == "generate":
         config = load_json(args.config)

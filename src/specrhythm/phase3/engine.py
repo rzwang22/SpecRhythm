@@ -10,6 +10,10 @@ from dataclasses import dataclass
 from typing import Any, Optional, Protocol
 
 from specrhythm.phase3.config import ModelRuntimeConfig, resolve_runtime_path
+from specrhythm.phase3.hardware import (
+    cuda_visible_devices_mapping,
+    physical_gpu_id,
+)
 
 
 class EngineUnavailableError(RuntimeError):
@@ -133,10 +137,18 @@ class TransformersBackend:
         self._torch = torch
         self._closed = False
         self._owns_process_group = False
+        self._last_forward_input_shape: Optional[tuple[int, ...]] = None
+        self._last_forward_output_shape: Optional[tuple[int, ...]] = None
+        self._last_output_checksum: Optional[str] = None
+        self._forward_invocations = 0
         self.model_id = resolve_runtime_path(config.model_path)
         self.tp_size = config.tp_size
         world_size = int(os.environ.get("WORLD_SIZE", "1"))
         local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+        self.global_rank = int(os.environ.get("RANK", "0"))
+        self.local_rank = local_rank
+        self.world_size = world_size
+        self.configured_gpu_ids = config.gpu_ids
         if self.tp_size > 1 and world_size != self.tp_size:
             raise EngineUnavailableError(
                 f"TP={self.tp_size} requires torchrun WORLD_SIZE={self.tp_size}; got {world_size}"
@@ -203,6 +215,10 @@ class TransformersBackend:
         input_ids = torch.tensor(contexts, dtype=torch.long, device=self.device)
         with torch.inference_mode():
             output = self.model(input_ids=input_ids, use_cache=False)
+            self._last_forward_input_shape = tuple(int(value) for value in input_ids.shape)
+            self._last_forward_output_shape = tuple(
+                int(value) for value in output.logits.shape
+            )
             logits = output.logits[:, -1].float()
             probabilities = torch.softmax(logits, dim=-1)
             count = min(max(2, top_k), int(logits.shape[-1]))
@@ -215,6 +231,14 @@ class TransformersBackend:
         logits_cpu = top_logits.detach().cpu().tolist()
         probabilities_cpu = top_probabilities.detach().cpu().tolist()
         entropy_cpu = entropy.detach().cpu().tolist()
+        self._last_output_checksum = hashlib.sha256(
+            json.dumps(
+                {"token_ids": ids, "top_logits": logits_cpu},
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+        ).hexdigest()
+        self._forward_invocations += 1
         return tuple(
             NextTokenDistribution(
                 tuple(
@@ -230,6 +254,68 @@ class TransformersBackend:
                 ids, logits_cpu, probabilities_cpu, entropy_cpu
             )
         )
+
+    def benchmark_rank_metadata(self) -> dict[str, Any]:
+        """Return evidence that this rank owns model state and executed a forward."""
+
+        torch = self._torch
+        logical_device = int(self.device.index or 0)
+        parameter_count = 0
+        parameter_bytes = 0
+        parameter_devices = set()
+        for parameter in self.model.parameters():
+            local_parameter = (
+                parameter.to_local() if hasattr(parameter, "to_local") else parameter
+            )
+            parameter_count += int(local_parameter.numel())
+            parameter_bytes += int(local_parameter.numel() * local_parameter.element_size())
+            parameter_devices.add(str(local_parameter.device))
+        expected = f"cuda:{logical_device}"
+        parameters_on_expected_device = bool(parameter_devices) and all(
+            device == expected for device in parameter_devices
+        )
+        properties = torch.cuda.get_device_properties(logical_device)
+        distributed = torch.distributed
+        if distributed.is_initialized():
+            global_rank = int(distributed.get_rank())
+            world_size = int(distributed.get_world_size())
+        else:
+            global_rank = self.global_rank
+            world_size = self.world_size
+        return {
+            "global_rank": global_rank,
+            "local_rank": self.local_rank,
+            "world_size": world_size,
+            "logical_cuda_index": logical_device,
+            "physical_gpu_id": physical_gpu_id(
+                logical_device, torch.cuda.device_count()
+            ),
+            "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES"),
+            "cuda_visible_devices_mapping": cuda_visible_devices_mapping(
+                torch.cuda.device_count()
+            ),
+            "gpu_uuid": str(getattr(properties, "uuid", "")) or None,
+            "model_id": self.model_id,
+            "transformers_version": self.transformers_version,
+            "model_parameter_count": parameter_count,
+            "model_parameter_count_semantics": "local shard elements resident on this rank",
+            "parameter_bytes": parameter_bytes,
+            "parameter_devices": sorted(parameter_devices),
+            "expected_parameter_device": expected,
+            "model_parameters_on_expected_device": parameters_on_expected_device,
+            "allocated_memory_bytes": int(torch.cuda.memory_allocated(logical_device)),
+            "reserved_memory_bytes": int(torch.cuda.memory_reserved(logical_device)),
+            "max_allocated_memory_bytes": int(
+                torch.cuda.max_memory_allocated(logical_device)
+            ),
+            "max_reserved_memory_bytes": int(
+                torch.cuda.max_memory_reserved(logical_device)
+            ),
+            "forward_input_shape": list(self._last_forward_input_shape or ()),
+            "forward_output_shape": list(self._last_forward_output_shape or ()),
+            "output_checksum": self._last_output_checksum,
+            "forward_invocations": self._forward_invocations,
+        }
 
     def close(self) -> None:
         if self._closed:

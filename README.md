@@ -175,11 +175,13 @@ at TP=4. A three-GPU fallback uses draft GPU 0 at TP=1 and target GPUs 1–2 at 
 in `configs/phase3_trace_1d2v.yaml` and `configs/phase3_latency_1d2v.yaml`. There is no Dual-Batch
 overlap in this revision.
 
-The CUDA microbenchmark API records CUDA-event and synchronized host-wall timing for draft,
-selection, verification, and transfer primitives. The current Transformers verifier recomputes
-full contexts and is not a packed-tree serving kernel, so its measurements are calibration inputs,
-not vLLM/SGLang throughput claims. CPU `dry-run` validates schemas and lifecycle only and is
-forbidden from emitting latency results. See
+The Phase 3B.1 CUDA microbenchmark records raw per-rank CUDA-event and synchronized host-wall
+samples, model/device/memory/forward evidence, max-rank critical-path latency, observed hardware
+state, bidirectional bare-copy metadata, strict validation, and same-commit repeated-run
+comparisons. The current Transformers verifier recomputes full contexts without KV-cache reuse and
+is not a packed-tree serving kernel. Every report forbids simulator-surface use and is a
+correctness-backend primitive measurement, not a vLLM/SGLang throughput claim. CPU dry-runs test
+schemas and the selector-stage contract but never emit synthetic GPU latency. See
 [docs/phase3-gpu-runbook.md](docs/phase3-gpu-runbook.md) before using a GPU host.
 
 The completed audit contains 3/3 common replays (10,000 corrected-queue snapshots each), 9/9

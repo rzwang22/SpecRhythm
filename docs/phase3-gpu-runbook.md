@@ -1,9 +1,11 @@
 # Phase 3 GPU server runbook
 
 This runbook starts from the frozen Phase-2 head through the stacked
-`codex/gpu-integration-v0.1` branch. Phase 3A is a correctness-first Transformers collector, not a
-vLLM/SGLang serving implementation. It performs no Dual-Batch overlap. The latency commands below
-must run on real NVIDIA GPUs; the code has no synthetic timing fallback.
+`codex/gpu-integration-v0.1` branch. Phase 3A is a correctness-first Transformers collector and
+Phase 3B.1 hardens primitive measurement evidence. Neither is a vLLM/SGLang serving
+implementation, and neither performs Dual-Batch overlap. GPU latency commands have no synthetic
+fallback. Section 12 is the canonical three-GPU Phase 3B.1 rerun; the earlier commands remain as
+historical bootstrap examples.
 
 ## Repository audit at the Phase-2 boundary
 
@@ -350,3 +352,163 @@ specrhythm phase3-benchmark \
 
 These measurements exercise the Transformers correctness primitives. They are not packed-tree,
 continuous-batching, vLLM/SGLang, Dual-Batch, or end-to-end serving measurements.
+
+## 12. Phase 3B.1 canonical three-run A800 rerun
+
+The initial v1 smoke proved that the programs ran, but its TP memory dictionary was rank-0-local,
+and two verify files came from different commits. Do not compare or average those files. The v2
+gate below records and validates every TP rank independently, uses the per-iteration maximum rank
+latency, retains raw samples, captures hardware state before and after, and rejects cross-commit or
+cross-semantics comparisons. It still measures HF full-context correctness primitives only.
+
+Activate the existing environment, resolve one immutable branch head, and keep all outputs outside
+Git:
+
+```bash
+conda activate /root/autodl-tmp/envs/specrhythm-phase3-80d5769
+set -euo pipefail
+cd /root/autodl-tmp/src/SpecRhythm
+
+git fetch origin codex/gpu-integration-v0.1
+export SR_PHASE3B1_COMMIT="$(git rev-parse FETCH_HEAD)"
+git switch --detach "$SR_PHASE3B1_COMMIT"
+test "$(git rev-parse HEAD)" = "$SR_PHASE3B1_COMMIT"
+test -z "$(git status --short)"
+
+export SR_DRAFT_MODEL="/root/autodl-tmp/models/Qwen3-0.6B"
+export SR_TARGET_MODEL="/root/autodl-tmp/models/Qwen3-32B"
+export SR_PHASE3B1_ROOT="/root/autodl-tmp/SpecRhythm-data/results/phase3b1/${SR_PHASE3B1_COMMIT}"
+
+test -f "$SR_DRAFT_MODEL/config.json"
+test -f "$SR_TARGET_MODEL/config.json"
+mkdir -p "$SR_PHASE3B1_ROOT"
+
+python -m pip install -e '.[dev,gpu]'
+python -m pytest -q
+python -m ruff check .
+git diff --check
+
+nvidia-smi -L | tee "$SR_PHASE3B1_ROOT/nvidia-smi-L.txt"
+nvidia-smi topo -m | tee "$SR_PHASE3B1_ROOT/nvidia-smi-topo.txt"
+specrhythm gpu-probe --output "$SR_PHASE3B1_ROOT/gpu-environment.json"
+
+specrhythm phase3-selector-dry-run \
+  --request-count 2 \
+  --search-pool-size 16 \
+  --candidate-budget 8 \
+  --output "$SR_PHASE3B1_ROOT/selector-interface-dry-run.json"
+```
+
+Run draft/synthetic-top-k, TP=2 serial-full-context verify, and all configured bare-copy
+directions three times. The transfer operation includes GPU 0→1, GPU 1→0, and GPU 1→2, with
+4 KiB, 64 KiB, 1 MiB, 16 MiB, 64 MiB, and 256 MiB payloads.
+
+```bash
+for sr_repeat in 1 2 3; do
+  export SR_PHASE3B1_RUN="$SR_PHASE3B1_ROOT/run-$sr_repeat"
+  mkdir -p "$SR_PHASE3B1_RUN"
+
+  CUDA_VISIBLE_DEVICES=0 specrhythm phase3-benchmark \
+    --config configs/phase3_latency_1d2v.yaml \
+    --operation draft \
+    --operation select \
+    --output "$SR_PHASE3B1_RUN/draft-select.json" \
+    --markdown-output "$SR_PHASE3B1_RUN/draft-select.md" \
+    --environment-metadata "$SR_PHASE3B1_ROOT/gpu-environment.json" \
+    2>&1 | tee "$SR_PHASE3B1_RUN/draft-select.log"
+
+  CUDA_VISIBLE_DEVICES=1,2 torchrun \
+    --standalone \
+    --nproc-per-node=2 \
+    -m specrhythm.cli phase3-benchmark \
+    --config configs/phase3_latency_1d2v.yaml \
+    --operation verify \
+    --output "$SR_PHASE3B1_RUN/verify-tp2.json" \
+    --markdown-output "$SR_PHASE3B1_RUN/verify-tp2.md" \
+    --environment-metadata "$SR_PHASE3B1_ROOT/gpu-environment.json" \
+    2>&1 | tee "$SR_PHASE3B1_RUN/verify-tp2.log"
+
+  env -u CUDA_VISIBLE_DEVICES specrhythm phase3-benchmark \
+    --config configs/phase3_latency_1d2v.yaml \
+    --operation transfer \
+    --output "$SR_PHASE3B1_RUN/transfer.json" \
+    --markdown-output "$SR_PHASE3B1_RUN/transfer.md" \
+    --environment-metadata "$SR_PHASE3B1_ROOT/gpu-environment.json" \
+    2>&1 | tee "$SR_PHASE3B1_RUN/transfer.log"
+
+  for sr_report in draft-select verify-tp2 transfer; do
+    specrhythm phase3-benchmark-validate \
+      --input "$SR_PHASE3B1_RUN/$sr_report.json" \
+      --output "$SR_PHASE3B1_RUN/$sr_report-validation.json"
+  done
+done
+```
+
+Compare only like-for-like reports from the exact same commit and config:
+
+```bash
+specrhythm phase3-benchmark-compare \
+  --input "$SR_PHASE3B1_ROOT/run-1/draft-select.json" \
+  --input "$SR_PHASE3B1_ROOT/run-2/draft-select.json" \
+  --input "$SR_PHASE3B1_ROOT/run-3/draft-select.json" \
+  --output "$SR_PHASE3B1_ROOT/draft-select-comparison.json" \
+  --markdown-output "$SR_PHASE3B1_ROOT/draft-select-comparison.md"
+
+specrhythm phase3-benchmark-compare \
+  --input "$SR_PHASE3B1_ROOT/run-1/verify-tp2.json" \
+  --input "$SR_PHASE3B1_ROOT/run-2/verify-tp2.json" \
+  --input "$SR_PHASE3B1_ROOT/run-3/verify-tp2.json" \
+  --output "$SR_PHASE3B1_ROOT/verify-tp2-comparison.json" \
+  --markdown-output "$SR_PHASE3B1_ROOT/verify-tp2-comparison.md"
+
+specrhythm phase3-benchmark-compare \
+  --input "$SR_PHASE3B1_ROOT/run-1/transfer.json" \
+  --input "$SR_PHASE3B1_ROOT/run-2/transfer.json" \
+  --input "$SR_PHASE3B1_ROOT/run-3/transfer.json" \
+  --output "$SR_PHASE3B1_ROOT/transfer-comparison.json" \
+  --markdown-output "$SR_PHASE3B1_ROOT/transfer-comparison.md"
+```
+
+Finally, require two non-empty TP ranks in every verify cell and inspect the compact summaries:
+
+```bash
+python - "$SR_PHASE3B1_ROOT" <<'PY'
+import json
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+for path in sorted(root.glob("run-*/verify-tp2.json")):
+    report = json.load(open(path))
+    assert report["validation"]["valid"], report["validation"]
+    assert report["git_commit"] == root.name
+    for cell in report["measurements"]:
+        ranks = cell["rank_measurements"]
+        assert [rank["global_rank"] for rank in ranks] == [0, 1]
+        for rank in ranks:
+            assert rank["model_parameter_count"] > 0
+            assert rank["parameter_bytes"] > 0
+            assert rank["max_allocated_memory_bytes"] > 0
+            assert rank["model_parameters_on_expected_device"] is True
+            assert len(rank["cuda_samples_ms"]) == 30
+            assert len(rank["host_samples_ms"]) == 30
+    print(path.relative_to(root), "PASS")
+
+for name in (
+    "draft-select-comparison.json",
+    "verify-tp2-comparison.json",
+    "transfer-comparison.json",
+):
+    report = json.load(open(root / name))
+    assert report["valid"], report["errors"]
+    print(name, "cells=", len(report["cells"]), "PASS")
+PY
+
+cat "$SR_PHASE3B1_ROOT/verify-tp2-comparison.md"
+cat "$SR_PHASE3B1_ROOT/draft-select-comparison.md"
+cat "$SR_PHASE3B1_ROOT/transfer-comparison.md"
+```
+
+Stop after returning the three comparison reports, three run summaries, validation JSON, and any
+warning/error logs. Do not start R3-real, packed-tree verification, simulator calibration,
+Dual-Batch, Eager, or end-to-end SLO evaluation from these primitive measurements.

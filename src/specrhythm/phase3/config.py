@@ -85,13 +85,20 @@ class ModelRuntimeConfig:
 
 @dataclass(frozen=True)
 class BenchmarkConfig:
-    warmup_iterations: int = 3
-    measured_iterations: int = 10
+    warmup_iterations: int = 5
+    measured_iterations: int = 30
     request_batch_sizes: tuple[int, ...] = (1, 4)
     search_pool_sizes: tuple[int, ...] = (8, 32)
     verify_candidate_sizes: tuple[int, ...] = (4, 16)
     context_lengths: tuple[int, ...] = (128, 512)
-    transfer_payload_bytes: tuple[int, ...] = (4096, 65536)
+    transfer_payload_bytes: tuple[int, ...] = (
+        4096,
+        65536,
+        1048576,
+        16777216,
+        67108864,
+        268435456,
+    )
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "BenchmarkConfig":
@@ -101,19 +108,26 @@ class BenchmarkConfig:
                 raise ValueError(f"benchmark.{name} must be a non-empty list")
             return tuple(_positive_int(f"benchmark.{name}", item) for item in raw)
 
+        warmup_iterations = _positive_int(
+            "benchmark.warmup_iterations", value.get("warmup_iterations", 5)
+        )
+        measured_iterations = _positive_int(
+            "benchmark.measured_iterations", value.get("measured_iterations", 30)
+        )
+        if warmup_iterations < 5:
+            raise ValueError("benchmark.warmup_iterations must be at least 5")
+        if measured_iterations < 30:
+            raise ValueError("benchmark.measured_iterations must be at least 30")
         return cls(
-            warmup_iterations=_positive_int(
-                "benchmark.warmup_iterations", value.get("warmup_iterations", 3)
-            ),
-            measured_iterations=_positive_int(
-                "benchmark.measured_iterations", value.get("measured_iterations", 10)
-            ),
+            warmup_iterations=warmup_iterations,
+            measured_iterations=measured_iterations,
             request_batch_sizes=positive_tuple("request_batch_sizes", (1, 4)),
             search_pool_sizes=positive_tuple("search_pool_sizes", (8, 32)),
             verify_candidate_sizes=positive_tuple("verify_candidate_sizes", (4, 16)),
             context_lengths=positive_tuple("context_lengths", (128, 512)),
             transfer_payload_bytes=positive_tuple(
-                "transfer_payload_bytes", (4096, 65536)
+                "transfer_payload_bytes",
+                (4096, 65536, 1048576, 16777216, 67108864, 268435456),
             ),
         )
 

@@ -1,6 +1,6 @@
 # SpecRhythm project status
 
-Last updated: 2026-08-14
+Last updated: 2026-08-15
 
 Maintenance rule: every code-changing PR updates this file with its scope, status, evidence,
 known limitations, and next gate before that PR is considered complete.
@@ -33,7 +33,7 @@ claims.
 | --- | --- | --- | --- |
 | [#1 workload-v0.1](https://github.com/rzwang22/SpecRhythm/pull/1) | merged | strict Mooncake replay, R3 proxy config, validator, manifest, fixture tests and docs | workload plumbing only; proxy payload and illustrative acceptance |
 | [#2 simulator-semantics-v0.2](https://github.com/rzwang22/SpecRhythm/pull/2) | frozen draft; Phase 2 complete, not merged | proposal lifecycle, deterministic tree oracle, tree-aware allocators, base-preserving residual controls, Phase-2 nested search pools and common-snapshot oracle replay, path-aware eager and accounting | pure-Python proxy and oracle upper bounds only; no deployable oracle, measured search cost, GPU integration, or performance claim |
-| [#3 gpu-integration-v0.1](https://github.com/rzwang22/SpecRhythm/pull/3) | draft; Phase 3.0 correctness smoke passed, latency gate pending | isolated real-trace schema, immutable checkpoints, GPU/NVIDIA probe, TP validator, Transformers correctness backend, 1D4V/1D2V serial runners, CUDA benchmark interfaces and server runbook | Mac tests plus user-run 3×A800 1D2V correctness evidence; no serving-engine benchmark, Dual-Batch overlap, or speedup claim |
+| [#3 gpu-integration-v0.1](https://github.com/rzwang22/SpecRhythm/pull/3) | draft; Phase 3B.1 implemented, GPU rerun pending | isolated real-trace schema, immutable checkpoints, GPU/NVIDIA probe, TP validator, Transformers correctness backend, 1D4V/1D2V serial runners, strict multi-rank primitive measurement/validation/comparison and server runbook | Mac tests plus user-run 3×A800 correctness smoke; hardened schema has not yet been rerun on CUDA; no serving-engine benchmark, Dual-Batch overlap, or speedup claim |
 
 ## Phase 3.0: GPU readiness and real-trace runner
 
@@ -59,12 +59,40 @@ trace committed 10 accepted candidate tokens plus 6 target-root tokens, and vali
 resume, accounting, and greedy token semantics only; `gpu_measurement=false` is intentional, and
 no latency or serving-throughput conclusion follows from this smoke test.
 
-The latency API exposes `T_draft(B_req,N_search,C)`, `T_select(B_req,N_search,B_verify)`,
-`T_verify(B_req,B_cand,C,TP)`, and `T_transfer(payload_bytes)` with separate warmup/measured
-iterations, CUDA-event/host-wall distributions, memory peaks, and explicit root/search/verify
-counts. It has no CPU timing fallback. The current verifier is a full-context correctness path,
-not an optimized packed-tree serving kernel, so any future server output remains calibration data
-rather than a performance claim until engine integration and validation are complete.
+The first user-run primitive smoke exposed a real evidence gap: the TP=2 JSON reported about
+34 GB for rank 0 and zero for rank 1 because each process could only observe its own allocator,
+while the rank-0 writer never gathered rank-1 state. Two verify runs were also produced by
+different commits and therefore are not repeat runs of one implementation. Those v1 files remain
+smoke provenance only; their numerical values are not accepted as a latency surface or a
+performance result.
+
+Phase 3B.1 replaces that format with a strict v2 schema. Each TP rank now retains its logical and
+physical GPU identity, UUID, local parameter count/bytes and device placement, allocated/reserved
+memory, forward shapes/checksum, and all CUDA/host samples. Distributed barriers and CUDA
+synchronization surround each iteration; rank 0 gathers every rank, and the global sample for an
+iteration is the maximum participating-rank latency. Missing ranks, zero model state/memory,
+missing samples, device mismatch, invalid statistics, or non-max aggregation fail validation.
+Only rank 0 atomically publishes the report.
+
+The hardened statistics retain every sample and report mean, standard deviation, CV, min,
+P50/P90/P95/P99/max and flagged outliers, with defaults of five warmups and thirty measured
+iterations. Before/after hardware snapshots record observed clocks, temperature, power, P-state,
+ECC, memory, PCIe, topology and peer-access state without attempting clock control. Repeated-run
+comparison requires an identical commit, config checksum, model revisions, GPU model, TP layout,
+backend and operation semantics; raw samples are never pooled across incompatible runs.
+
+All v2 measurements are explicitly `backend=hf_correctness`, `serving_engine=false`,
+`kv_cache_reuse=false`, `packed_tree_verification=false`, and
+`simulator_latency_surface_compatible=false`. Draft remains serial greedy full-context replay;
+verify remains serial full-context replay for `B_cand+1` target forwards. Selector timing still
+labels the existing kernel as synthetic `torch.topk`; a dependency-free five-stage selector
+interface exists without fake timings. Transfer now covers both draft↔target-leader directions,
+the target-leader→TP-peer path when present, and payloads from 4 KiB to 256 MiB, but remains a bare
+device-copy primitive rather than complete Draft→Verify transport.
+
+No NVIDIA GPU was available to the Mac agent that implemented Phase 3B.1. The next gate is a
+same-commit three-run A800 validation of the v2 evidence. R3-real, packed-tree verification,
+Dual-Batch, Eager, end-to-end SLO evaluation and simulator calibration have not started.
 
 ## Phase 1.5: residual selection
 
