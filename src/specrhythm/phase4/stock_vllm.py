@@ -51,13 +51,11 @@ class SmokeRequest:
         ):
             raise ValueError("R3-real smoke request identity/prompt/tokenizer is incomplete")
         if task_class == "chat" and not (
-            prompt_text.startswith("<|im_start|>user")
-            and "<|im_start|>assistant" in prompt_text
+            prompt_text.startswith("<|im_start|>user") and "<|im_start|>assistant" in prompt_text
         ):
             raise ValueError("R3-real chat smoke prompt is not Qwen chat-template rendered")
         if not token_ids or any(
-            not isinstance(item, int) or isinstance(item, bool) or item < 0
-            for item in token_ids
+            not isinstance(item, int) or isinstance(item, bool) or item < 0 for item in token_ids
         ):
             raise ValueError("R3-real smoke prompt_token_ids are invalid")
         if value.get("prompt_length") != len(token_ids):
@@ -158,9 +156,7 @@ def _worker_runtime_snapshot(worker: Any) -> dict[str, Any]:
             backend = getattr(group, "backend", None)
             if backend is not None:
                 get_name = getattr(backend, "get_name", None)
-                attention_backends.add(
-                    str(get_name()) if callable(get_name) else backend.__name__
-                )
+                attention_backends.add(str(get_name()) if callable(get_name) else backend.__name__)
     expected_device = f"cuda:{logical_gpu_id}"
     return {
         "global_rank": int(worker.rank),
@@ -187,9 +183,7 @@ def _worker_runtime_snapshot(worker: Any) -> dict[str, Any]:
     }
 
 
-def validate_worker_ranks(
-    rows: Sequence[Mapping[str, Any]], engine: EngineConfig
-) -> list[str]:
+def validate_worker_ranks(rows: Sequence[Mapping[str, Any]], engine: EngineConfig) -> list[str]:
     errors = []
     if len(rows) != engine.tensor_parallel_size:
         errors.append("worker rank count does not equal configured tensor parallel size")
@@ -344,9 +338,7 @@ def compare_frozen_target(
                 "equal": equal,
                 "first_divergence_position": mismatch,
                 "vllm_token_id": (
-                    actual[mismatch]
-                    if mismatch is not None and mismatch < len(actual)
-                    else None
+                    actual[mismatch] if mismatch is not None and mismatch < len(actual) else None
                 ),
                 "hf_token_id": (
                     expected[mismatch]
@@ -388,9 +380,7 @@ def _update_combined_manifest(path: Path, role_manifest: Mapping[str, Any]) -> N
             raise ValueError("refusing to combine role manifests from different commits")
         existing_inputs = existing.get("inputs")
         current_inputs = role_manifest.get("inputs")
-        if not isinstance(existing_inputs, Mapping) or not isinstance(
-            current_inputs, Mapping
-        ):
+        if not isinstance(existing_inputs, Mapping) or not isinstance(current_inputs, Mapping):
             raise ValueError("runtime role manifest input provenance is missing")
         for key in (
             "config_sha256",
@@ -420,16 +410,13 @@ def run_stock_smoke(
 
     if role not in {"draft", "target"}:
         raise ValueError("stock smoke role must be draft or target")
-    if role == "target" and frozen_target_dir is None:
-        raise ValueError("target smoke requires the immutable frozen HF target directory")
     environment = json.loads(environment_path.read_text(encoding="utf-8"))
     topology = json.loads(topology_path.read_text(encoding="utf-8"))
     environment_validation = validate_environment(environment, config)
     topology_validation = validate_topology(topology, config)
     if not environment_validation["valid"]:
         raise RuntimeError(
-            "invalid Phase-4 environment: "
-            + "; ".join(environment_validation["errors"])
+            "invalid Phase-4 environment: " + "; ".join(environment_validation["errors"])
         )
     if not topology_validation["valid"]:
         raise RuntimeError("invalid Phase-4 topology: " + "; ".join(topology_validation["errors"]))
@@ -502,14 +489,12 @@ def run_stock_smoke(
     deterministic = all(
         first["generated_token_ids"] == second["generated_token_ids"]
         and first["text"] == second["text"]
+        and first["finish_reason"] == second["finish_reason"]
+        and first["stop_reason"] == second["stop_reason"]
         for first, second in zip(runs[0], runs[1])
     )
     attention_backends = sorted(
-        {
-            str(backend)
-            for row in worker_ranks
-            for backend in row.get("attention_backends", ())
-        }
+        {str(backend) for row in worker_ranks for backend in row.get("attention_backends", ())}
     )
     manifest = build_runtime_manifest(
         config,

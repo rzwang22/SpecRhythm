@@ -1,4 +1,4 @@
-"""Configuration and semantic guardrails for Phase-4A stock vLLM bring-up."""
+"""Configuration and semantic guardrails for the frozen Phase-4A workflow."""
 
 from __future__ import annotations
 
@@ -52,9 +52,7 @@ class EngineConfig:
         if role not in {"draft", "target"}:
             raise ValueError("engine role must be draft or target")
         model = _nonempty(f"{role}.model_path", value.get("model_path"))
-        tokenizer = _nonempty(
-            f"{role}.tokenizer_path", value.get("tokenizer_path", model)
-        )
+        tokenizer = _nonempty(f"{role}.tokenizer_path", value.get("tokenizer_path", model))
         gpus = _gpu_ids(f"{role}.physical_gpu_ids", value.get("physical_gpu_ids"))
         tp = value.get("tensor_parallel_size")
         if not isinstance(tp, int) or isinstance(tp, bool) or tp != len(gpus):
@@ -78,9 +76,7 @@ class EngineConfig:
             tensor_parallel_size=tp,
             dtype=dtype,
             revision=None if revision is None else str(revision),
-            tokenizer_revision=(
-                None if tokenizer_revision is None else str(tokenizer_revision)
-            ),
+            tokenizer_revision=(None if tokenizer_revision is None else str(tokenizer_revision)),
             trust_remote_code=trust,
             gpu_memory_utilization=float(utilization),
         )
@@ -133,9 +129,7 @@ class ModeContract:
                 "vLLM colocated speculative decoding cannot represent a disaggregated mode"
             )
         if mode.vllm_dbo:
-            raise ValueError(
-                "vLLM DBO cannot be labeled as SpecRhythm draft/verify Dual-Batch"
-            )
+            raise ValueError("vLLM DBO cannot be labeled as SpecRhythm draft/verify Dual-Batch")
         return mode
 
 
@@ -151,6 +145,9 @@ class Phase4Config:
     logprobs: int
     enforce_eager: bool
     enable_prefix_caching: bool
+    proposal_budget: int
+    target_model_runner: str
+    enable_thinking: bool
     expected_vllm_version: str
     expected_vllm_commit: str
     expected_python_series: str
@@ -175,6 +172,12 @@ class Phase4Config:
             raise ValueError("Phase-4 integration environment must use PyTorch 2.11.0")
         if self.max_model_len < 1 or self.smoke_request_count != 5 or self.logprobs < 5:
             raise ValueError("invalid Phase-4 context/request-count/logprob contract")
+        if self.proposal_budget != 4:
+            raise ValueError("Phase-4A.1 freezes the linear proposal budget at K=4")
+        if self.target_model_runner != "v1":
+            raise ValueError("Phase-4A.1 custom proposer requires frozen vLLM model runner v1")
+        if self.enable_thinking:
+            raise ValueError("Phase-4 freezes Qwen chat rendering with enable_thinking=false")
         if not self.enforce_eager:
             raise ValueError("stock bring-up must use enforce_eager for deterministic inspection")
 
@@ -225,6 +228,9 @@ def load_phase4_config(path: str) -> Phase4Config:
         logprobs=value.get("logprobs", 5),
         enforce_eager=bool(value.get("enforce_eager", True)),
         enable_prefix_caching=bool(value.get("enable_prefix_caching", False)),
+        proposal_budget=value.get("proposal_budget", 4),
+        target_model_runner=str(value.get("target_model_runner", "v1")),
+        enable_thinking=bool(value.get("enable_thinking", False)),
         expected_vllm_version=str(pins.get("vllm_version", "")),
         expected_vllm_commit=str(pins.get("vllm_commit", "")),
         expected_python_series=str(pins.get("python_series", "")),

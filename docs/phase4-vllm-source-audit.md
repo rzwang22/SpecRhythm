@@ -42,8 +42,33 @@ and Target TP=2 with physical GPUs 1 and 2. The commands are separate and serial
 shared object is the already-tokenized five-request workload; no candidate verification or
 cross-engine data plane exists yet.
 
-The next implementation gate, after server bring-up is reviewed, is a minimal design for an
-external CandidateBatch data plane and a pinned Python patch at scheduler/model-runner boundaries.
-Packed-tree attention/KV layout must be designed and profiled before deciding whether existing
-kernels suffice. A general plugin can package registration and worker extensions, but source at
-this commit does not expose stable scheduler, KV-owner, or verifier plugin interfaces.
+## Phase 4A.1 audit decision
+
+The linear `K<=4` correctness path does not require a new Target kernel. At the pinned commit, the
+legacy V1 GPU model runner's `custom_class` proposer returns variable-length per-request token
+lists. The scheduler stores those lists as `request.spec_token_ids`; the next scheduled step
+materializes candidate positions in the vLLM-managed KV cache, the Target runner executes them as
+one speculative batch, `RejectionSampler` applies greedy acceptance, and scheduler bookkeeping
+subtracts rejected positions from the logical computed length. This is the reused Target path.
+
+The custom proposer API is insufficient in two narrow ways: the call omits vLLM request IDs, and
+there is no observer hook around the Target verification forward. Phase 4A.1 therefore maintains
+one pinned Python patch, `integrations/vllm/patches/0001-custom-proposer-request-and-verify-hooks.patch`.
+It changes only `vllm/v1/worker/gpu_model_runner.py`, passes existing request IDs, and invokes
+optional before/after hooks. It exposes no Target logits, does not alter sampling or KV state, and
+is inactive for Target-only generation. The exact base and patched file SHA256 values are enforced
+by `integrations/vllm/manage_patch.py`; apply/check/restore were exercised on the exact source
+commit during Mac development.
+
+The remote Draft side does not use vLLM's colocated DraftModelProposer. It is a separate GPU-0
+process with one resident Qwen3-0.6B model and per-request mutable Transformers KV. This avoids
+loading the Draft model on Target ranks while preserving cross-round Draft cache semantics. It is
+a correctness implementation with recorded per-request microbatches, not a performance claim.
+
+VLLM model runner V2 does not instantiate `custom_class` at this commit, so Phase 4A.1 explicitly
+freezes `VLLM_USE_V2_MODEL_RUNNER=0`. This choice is a version-specific compatibility constraint,
+not a claim that V1 is generally preferable.
+
+Packed-tree verification remains a separate source gate. It changes position/attention layout
+and may require runner, attention-metadata, Triton, or CUDA work. No Phase 4A.1 artifact can be
+relabeled as packed-tree, Dual-Batch, Eager, SLO, or performance evidence.

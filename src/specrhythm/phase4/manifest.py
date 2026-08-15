@@ -301,9 +301,7 @@ def model_revision_manifest(
         "tokenizer.json",
     )
     checksums = {
-        name: sha256_file(model_path / name)
-        for name in files
-        if (model_path / name).is_file()
+        name: sha256_file(model_path / name) for name in files if (model_path / name).is_file()
     }
     if not checksums:
         raise ValueError(f"model/tokenizer metadata is missing under {model_path}")
@@ -343,6 +341,7 @@ def build_runtime_manifest(
             "name": "vllm",
             "version": config.expected_vllm_version,
             "source_commit": config.expected_vllm_commit,
+            "model_runner": config.target_model_runner if role == "target" else None,
             "built_in_speculative_decoding": False,
             "vllm_dbo_enabled": False,
             "specrhythm_dual_batch_implemented": False,
@@ -419,9 +418,7 @@ def validate_runtime_manifest(value: Mapping[str, Any], config: Phase4Config) ->
             if not isinstance(revision, Mapping) or not revision.get("resolved_revision"):
                 errors.append(f"runtime {key} revision is missing")
     inputs = value.get("inputs")
-    if not isinstance(inputs, Mapping) or inputs.get("config_sha256") != sha256_file(
-        config.path
-    ):
+    if not isinstance(inputs, Mapping) or inputs.get("config_sha256") != sha256_file(config.path):
         errors.append("runtime config checksum does not match the checked config")
     for row in rows:
         if not isinstance(row, Mapping):

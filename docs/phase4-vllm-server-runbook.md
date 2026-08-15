@@ -1,24 +1,14 @@
-# Phase 4A.0 vLLM server runbook (3×A800)
+# Phase 4A.1 1D+2V Serial Disaggregated runbook (3×A800)
 
-This runbook brings up two independent stock vLLM engines. It does not run speculative
-verification, serial-disaggregated execution, SpecRhythm Dual-Batch, packed trees, eager work,
-SLO evaluation, or a performance benchmark. Do not add generated artifacts to Git.
+This runbook executes a five-request GPU correctness smoke. It does not benchmark performance,
+replay arrivals, report SLO/goodput/speedup, or implement Dual-Batch, Eager, packed trees, TP3, or
+OPT-66B. Generated artifacts remain outside Git.
 
-`enforce_eager=true` in the vLLM config only disables CUDA Graph execution for an inspectable
-stock-engine bring-up. It is not the SpecRhythm rolling-Eager mechanism.
+The fixed layout is Draft Qwen3-0.6B on physical GPU 0 and Target Qwen3-32B TP=2 on physical GPUs
+1 and 2. `VLLM_USE_V2_MODEL_RUNNER=0` is required because custom-class proposers are implemented
+only by the pinned V1 runner in vLLM v0.25.1.
 
-The commands assume the existing server layout:
-
-```text
-/root/autodl-tmp/src/SpecRhythm
-/root/autodl-tmp/models/Qwen3-0.6B
-/root/autodl-tmp/models/Qwen3-32B
-/root/autodl-tmp/SpecRhythm-data/results/
-```
-
-## 1. Fetch the isolated Phase 4 branch
-
-Use a fresh shell. Do not modify the frozen Phase 3 conda environment.
+## 1. Fetch the Draft PR head without changing PR #3
 
 ```bash
 set -euo pipefail
@@ -30,53 +20,37 @@ test -z "$(git status --short)"
 git show --no-patch --oneline "$SR_PHASE4_COMMIT"
 ```
 
-Compare `SR_PHASE4_COMMIT` with the commit in the Phase 4 handoff before running a model.
+Compare `SR_PHASE4_COMMIT` with the handoff commit before loading a model.
 
-## 2. Create the independent Python 3.11 environment
+## 2. Activate the independent pinned environment
+
+Reuse the Phase 4 Python 3.11 environment if Phase 4A.0 already created it:
 
 ```bash
-conda create -y -p /root/autodl-tmp/envs/specrhythm-phase4-vllm-0.25.1 python=3.11
 conda activate /root/autodl-tmp/envs/specrhythm-phase4-vllm-0.25.1
+cd /root/autodl-tmp/src/SpecRhythm
 python -VV
-python -m pip install --upgrade pip setuptools wheel
-```
-
-Download the exact binary distribution first so its SHA256 is retained. Installation still
-resolves the pinned environment dependencies; it is not an editable install of vLLM.
-
-```bash
-export SR_PHASE4_WHEELS="/root/autodl-tmp/SpecRhythm-data/wheels/vllm-0.25.1"
-mkdir -p "$SR_PHASE4_WHEELS"
-python -m pip download --only-binary=:all: --no-deps vllm==0.25.1 -d "$SR_PHASE4_WHEELS"
-sha256sum "$SR_PHASE4_WHEELS"/vllm-0.25.1-*.whl | tee "$SR_PHASE4_WHEELS/vllm-wheel-sha256.txt"
-python -m pip install \
-  "$SR_PHASE4_WHEELS"/vllm-0.25.1-*.whl \
-  'torch==2.11.0' \
-  'transformers>=5.5.3,<5.6'
 python -m pip install -e '.[dev]' --no-deps
 python -m pip check
 ```
 
-## 3. Check out the exact vLLM source for source-to-wheel provenance
-
-The checkout is an audit/provenance source and is not vendored into SpecRhythm.
+If it does not exist, create it first:
 
 ```bash
-export SR_VLLM_SOURCE="/root/autodl-tmp/src/vllm-v0.25.1"
-if test ! -d "$SR_VLLM_SOURCE/.git"; then
-  git clone --filter=blob:none https://github.com/vllm-project/vllm.git "$SR_VLLM_SOURCE"
-fi
-git -C "$SR_VLLM_SOURCE" fetch origin tag v0.25.1
-git -C "$SR_VLLM_SOURCE" checkout --detach 752a3a504485790a2e8491cacbb35c137339ad34
-test "$(git -C "$SR_VLLM_SOURCE" rev-parse HEAD)" = \
-  "752a3a504485790a2e8491cacbb35c137339ad34"
-test "$(git -C "$SR_VLLM_SOURCE" describe --tags --exact-match HEAD)" = "v0.25.1"
-test -z "$(git -C "$SR_VLLM_SOURCE" status --porcelain --untracked-files=no)"
+conda create -y -p /root/autodl-tmp/envs/specrhythm-phase4-vllm-0.25.1 python=3.11
+conda activate /root/autodl-tmp/envs/specrhythm-phase4-vllm-0.25.1
+python -m pip install --upgrade pip setuptools wheel
+python -m pip install 'vllm==0.25.1' 'torch==2.11.0' 'transformers>=5.5.3,<5.6'
+cd /root/autodl-tmp/src/SpecRhythm
+python -m pip install -e '.[dev]' --no-deps
+python -m pip check
 ```
 
-Verify the runtime packages without importing any Phase 3 GPU dependencies:
+Verify versions and CUDA without setting the insecure-serialization override:
 
 ```bash
+unset VLLM_ALLOW_INSECURE_SERIALIZATION
+export VLLM_USE_V2_MODEL_RUNNER=0
 python - <<'PY'
 import platform
 import torch
@@ -86,22 +60,48 @@ import vllm
 assert platform.python_version().startswith("3.11.")
 assert torch.__version__.split("+")[0] == "2.11.0"
 assert vllm.__version__ == "0.25.1"
+assert torch.cuda.is_available()
 print({
     "python": platform.python_version(),
     "torch": torch.__version__,
-    "torch_cuda_build": torch.version.cuda,
-    "cuda_available": torch.cuda.is_available(),
-    "nccl": torch.cuda.nccl.version() if torch.cuda.is_available() else None,
+    "cuda": torch.version.cuda,
+    "nccl": torch.cuda.nccl.version(),
     "transformers": transformers.__version__,
     "vllm": vllm.__version__,
 })
 PY
 ```
 
-## 4. Freeze paths and inspect the corrected five-request source
+## 3. Verify the exact vLLM source and stock installed Python file
 
-The smoke selects the earliest 3 code, 1 chat and 1 summarization rows from the existing corrected
-R3-real workload while retaining their trace order. It does not render or tokenize a new prompt.
+```bash
+export SR_VLLM_SOURCE="/root/autodl-tmp/src/vllm-v0.25.1"
+if test ! -d "$SR_VLLM_SOURCE/.git"; then
+  git clone --depth=1 --branch v0.25.1 https://github.com/vllm-project/vllm.git \
+    "$SR_VLLM_SOURCE"
+fi
+git -C "$SR_VLLM_SOURCE" checkout --detach \
+  752a3a504485790a2e8491cacbb35c137339ad34
+test "$(git -C "$SR_VLLM_SOURCE" rev-parse HEAD)" = \
+  "752a3a504485790a2e8491cacbb35c137339ad34"
+test "$(git -C "$SR_VLLM_SOURCE" describe --tags --exact-match HEAD)" = "v0.25.1"
+test -z "$(git -C "$SR_VLLM_SOURCE" status --porcelain --untracked-files=no)"
+
+export SR_VLLM_ROOT="$(python - <<'PY'
+from pathlib import Path
+import vllm
+print(Path(vllm.__file__).resolve().parents[1])
+PY
+)"
+python integrations/vllm/manage_patch.py check \
+  --vllm-root "$SR_VLLM_ROOT" \
+  --source "$SR_VLLM_SOURCE"
+```
+
+The last command must report `patch_applied=false`. Stop if the stock-file SHA does not match; do
+not force or fuzzy-apply the patch.
+
+## 4. Freeze models, workload, reference, and output paths
 
 ```bash
 export SR_DRAFT_MODEL="/root/autodl-tmp/models/Qwen3-0.6B"
@@ -110,165 +110,296 @@ export SR_PHASE3C_COMMIT="34c7ea9836c2595c8a8aeaeb5680709520edd3d8"
 export SR_PHASE3C_RUN="/root/autodl-tmp/SpecRhythm-data/results/phase3c/$SR_PHASE3C_COMMIT/corrected-multiround-100"
 export SR_R3_WORKLOAD="$SR_PHASE3C_RUN/workload.jsonl"
 export SR_HF_TARGET="$SR_PHASE3C_RUN/target"
-export SR_PHASE4_RUN="/root/autodl-tmp/SpecRhythm-data/results/phase4/$SR_PHASE4_COMMIT/stock-1d2v"
-mkdir -p "$SR_PHASE4_RUN"
+export SR_PHASE4_RUN="/root/autodl-tmp/SpecRhythm-data/results/phase4/$SR_PHASE4_COMMIT/serial-1d2v-$(date -u +%Y%m%dT%H%M%SZ)"
 
 test -f "$SR_DRAFT_MODEL/config.json"
 test -f "$SR_TARGET_MODEL/config.json"
 test -f "$SR_R3_WORKLOAD"
 test -d "$SR_HF_TARGET/requests"
-test "$(wc -l < "$SR_R3_WORKLOAD")" -ge 5
+test ! -e "$SR_PHASE4_RUN"
+mkdir -p "$SR_PHASE4_RUN"
+```
+
+Extract the earliest corrected 3/1/1 requests in trace order. No prompt is rewritten or
+retokenized:
+
+```bash
 python - "$SR_R3_WORKLOAD" "$SR_PHASE4_RUN/r3-real-smoke-5.jsonl" <<'PY'
 import json
 import sys
 
-required = {"code": 3, "chat": 1, "summarization": 1}
+needed = {"code": 3, "chat": 1, "summarization": 1}
 rows = []
 for line in open(sys.argv[1], encoding="utf-8"):
     row = json.loads(line)
     task = row["task_class"]
-    if required.get(task, 0) > 0:
+    if needed.get(task, 0):
         rows.append(row)
-        required[task] -= 1
-    if not any(required.values()):
+        needed[task] -= 1
+    if not any(needed.values()):
         break
-assert not any(required.values()), required
-with open(sys.argv[2], "w", encoding="utf-8") as handle:
-    for row in rows:
-        handle.write(json.dumps(row, sort_keys=True, separators=(",", ":")) + "\n")
+assert needed == {"code": 0, "chat": 0, "summarization": 0}, needed
 assert len(rows) == 5
 assert all(row["prompt_length"] == len(row["prompt_token_ids"]) for row in rows)
 assert all(row["maximum_new_tokens"] > 0 for row in rows)
-assert [sum(row["task_class"] == task for row in rows) for task in required] == [3, 1, 1]
-chat = next(row for row in rows if row["task_class"] == "chat")
-assert chat["prompt_text"].startswith("<|im_start|>user")
-assert "<|im_start|>assistant" in chat["prompt_text"]
+with open(sys.argv[2], "w", encoding="utf-8") as handle:
+    for row in rows:
+        handle.write(json.dumps(row, sort_keys=True, separators=(",", ":")) + "\n")
 print([(row["request_id"], row["task_class"], row["prompt_length"]) for row in rows])
 PY
 ```
 
-The extracted five-row file is a run artifact under `SpecRhythm-data`; do not commit it.
-
-## 5. Probe environment and physical topology
-
-Run the probe with all three GPUs visible so physical IDs 0, 1 and 2 can be validated.
+## 5. Check the earlier Phase 4A.0 artifact, then probe this run
 
 ```bash
-cd /root/autodl-tmp/src/SpecRhythm
+export SR_PHASE4A0_COMMIT="ba9bded3f16c9b58f13c93a4426c000d523330cd"
+export SR_PHASE4A0_RUN="/root/autodl-tmp/SpecRhythm-data/results/phase4/$SR_PHASE4A0_COMMIT/stock-1d2v"
+test -f "$SR_PHASE4A0_RUN/validation.json"
+python - "$SR_PHASE4A0_RUN/validation.json" <<'PY'
+import json
+import sys
+value = json.load(open(sys.argv[1], encoding="utf-8"))
+assert value["valid"], value
+print("Phase 4A.0 artifact valid")
+PY
+
 nvidia-smi -L | tee "$SR_PHASE4_RUN/nvidia-smi-L.txt"
 nvidia-smi topo -m | tee "$SR_PHASE4_RUN/nvidia-smi-topo.txt"
-
 env -u CUDA_VISIBLE_DEVICES specrhythm phase4-probe \
   --config configs/phase4a_target_fair_1d2v.yaml \
   --vllm-source "$SR_VLLM_SOURCE" \
   --environment-output "$SR_PHASE4_RUN/environment.json" \
   --topology-output "$SR_PHASE4_RUN/topology.json" \
   --validation-output "$SR_PHASE4_RUN/probe-validation.json" \
-  2>&1 | tee "$SR_PHASE4_RUN/phase4a.log"
+  2>&1 | tee "$SR_PHASE4_RUN/probe.log"
+```
 
-python - "$SR_PHASE4_RUN/probe-validation.json" <<'PY'
+## 6. Generate and freeze the unmodified stock Target-only reference
+
+This must happen before applying the patch. The command performs two identical greedy runs and
+freezes the output file with exclusive creation.
+
+```bash
+CUDA_VISIBLE_DEVICES=1,2 VLLM_USE_V2_MODEL_RUNNER=0 \
+specrhythm phase4-stock-reference \
+  --config configs/phase4a_target_fair_1d2v.yaml \
+  --workload "$SR_PHASE4_RUN/r3-real-smoke-5.jsonl" \
+  --environment "$SR_PHASE4_RUN/environment.json" \
+  --topology "$SR_PHASE4_RUN/topology.json" \
+  --runtime-manifest "$SR_PHASE4_RUN/runtime-manifest.json" \
+  --legacy-hf-target-dir "$SR_HF_TARGET" \
+  --output "$SR_PHASE4_RUN/stock-target-reference.json" \
+  2>&1 | tee "$SR_PHASE4_RUN/stock-reference.log"
+
+chmod a-w "$SR_PHASE4_RUN/stock-target-reference.json"
+sha256sum "$SR_PHASE4_RUN/stock-target-reference.json" | \
+  tee "$SR_PHASE4_RUN/stock-target-reference.sha256"
+```
+
+An HF mismatch is advisory. A repeated stock-vLLM mismatch is fatal.
+
+## 7. Apply the pinned one-file Python hook patch
+
+```bash
+python integrations/vllm/manage_patch.py apply \
+  --vllm-root "$SR_VLLM_ROOT" \
+  --source "$SR_VLLM_SOURCE" \
+  --manifest "$SR_PHASE4_RUN/vllm-base-and-patch-manifest.json" \
+  2>&1 | tee "$SR_PHASE4_RUN/patch-apply.log"
+
+python - "$SR_PHASE4_RUN/vllm-base-and-patch-manifest.json" <<'PY'
 import json
 import sys
 value = json.load(open(sys.argv[1], encoding="utf-8"))
-assert value["valid"], value
+assert value["patch_applied"] is True
+assert value["python_only"] is True
+assert value["cpp_cuda_modified"] is False
+assert value["target_only_behavior_change_when_speculation_disabled"] is False
 print(json.dumps(value, indent=2, sort_keys=True))
 PY
 ```
 
-If the probe exits nonzero, stop. It intentionally has no CPU/synthetic fallback.
+Do not set `VLLM_ALLOW_INSECURE_SERIALIZATION=1` unless vLLM explicitly refuses its local worker
+RPC. If it is required, use only this trusted host and regenerate the patch manifest with the
+variable set so validation emits the security warning.
 
-## 6. Draft TP=1 stock-engine smoke on physical GPU 0
+## 8. Run patched Target-only regression
 
 ```bash
-CUDA_VISIBLE_DEVICES=0 specrhythm phase4-stock-smoke \
+CUDA_VISIBLE_DEVICES=1,2 VLLM_USE_V2_MODEL_RUNNER=0 \
+specrhythm phase4-target-regression \
   --config configs/phase4a_target_fair_1d2v.yaml \
-  --role draft \
   --workload "$SR_PHASE4_RUN/r3-real-smoke-5.jsonl" \
   --environment "$SR_PHASE4_RUN/environment.json" \
   --topology "$SR_PHASE4_RUN/topology.json" \
   --runtime-manifest "$SR_PHASE4_RUN/runtime-manifest.json" \
-  --output "$SR_PHASE4_RUN/draft-smoke.json" \
-  2>&1 | tee -a "$SR_PHASE4_RUN/phase4a.log"
+  --reference "$SR_PHASE4_RUN/stock-target-reference.json" \
+  --patch-manifest "$SR_PHASE4_RUN/vllm-base-and-patch-manifest.json" \
+  --legacy-hf-target-dir "$SR_HF_TARGET" \
+  --output "$SR_PHASE4_RUN/patched-target-regression.json" \
+  2>&1 | tee "$SR_PHASE4_RUN/patched-target-regression.log"
+
+python - "$SR_PHASE4_RUN/patched-target-regression.json" <<'PY'
+import json
+import sys
+value = json.load(open(sys.argv[1], encoding="utf-8"))
+assert value["valid"], value
+assert value["comparison"]["all_sequences_equal"] is True
+print("patched Target-only == frozen stock Target-only")
+PY
 ```
 
-This is ordinary greedy generation by the Draft model, not candidate-tree generation.
+Stop here if regression fails. Never regenerate the reference to match patched output.
 
-## 7. Target TP=2 stock-engine smoke on physical GPUs 1 and 2
+## 9. Run Serial Disaggregated twice
+
+Define a shell function that creates one fresh Draft service and one Target process. Each run uses
+fresh sockets and checkpoints; no artifact is resumed or overwritten.
 
 ```bash
-CUDA_VISIBLE_DEVICES=1,2 specrhythm phase4-stock-smoke \
-  --config configs/phase4a_target_fair_1d2v.yaml \
-  --role target \
-  --workload "$SR_PHASE4_RUN/r3-real-smoke-5.jsonl" \
-  --environment "$SR_PHASE4_RUN/environment.json" \
-  --topology "$SR_PHASE4_RUN/topology.json" \
-  --runtime-manifest "$SR_PHASE4_RUN/runtime-manifest.json" \
-  --frozen-hf-target-dir "$SR_HF_TARGET" \
-  --output "$SR_PHASE4_RUN/target-tp2-smoke.json" \
-  2>&1 | tee -a "$SR_PHASE4_RUN/phase4a.log"
+run_serial_once () {
+  run_id="$1"
+  run_dir="$SR_PHASE4_RUN/run-$run_id"
+  test ! -e "$run_dir"
+  mkdir -p "$run_dir"
+
+  CUDA_VISIBLE_DEVICES=0 VLLM_USE_V2_MODEL_RUNNER=0 \
+  specrhythm phase4-draft-service \
+    --config configs/phase4a_target_fair_1d2v.yaml \
+    --socket "$run_dir/draft.sock" \
+    --event-log "$run_dir/draft-service-events.jsonl" \
+    --ready "$run_dir/draft-service-ready.json" \
+    >"$run_dir/draft-service.log" 2>&1 &
+  draft_pid="$!"
+
+  ready=0
+  for _ in $(seq 1 600); do
+    if test -f "$run_dir/draft-service-ready.json" && test -S "$run_dir/draft.sock"; then
+      ready=1
+      break
+    fi
+    if ! kill -0 "$draft_pid" 2>/dev/null; then
+      cat "$run_dir/draft-service.log"
+      return 1
+    fi
+    sleep 1
+  done
+  if test "$ready" != 1; then
+    kill "$draft_pid" 2>/dev/null || true
+    wait "$draft_pid" 2>/dev/null || true
+    echo "Draft service readiness timeout" >&2
+    return 1
+  fi
+
+  if ! CUDA_VISIBLE_DEVICES=1,2 VLLM_USE_V2_MODEL_RUNNER=0 \
+    specrhythm phase4-serial-run \
+      --config configs/phase4a_target_fair_1d2v.yaml \
+      --workload "$SR_PHASE4_RUN/r3-real-smoke-5.jsonl" \
+      --environment "$SR_PHASE4_RUN/environment.json" \
+      --topology "$SR_PHASE4_RUN/topology.json" \
+      --runtime-manifest "$SR_PHASE4_RUN/runtime-manifest.json" \
+      --reference "$SR_PHASE4_RUN/stock-target-reference.json" \
+      --patch-manifest "$SR_PHASE4_RUN/vllm-base-and-patch-manifest.json" \
+      --draft-socket "$run_dir/draft.sock" \
+      --draft-ready "$run_dir/draft-service-ready.json" \
+      --round-events "$SR_PHASE4_RUN/round-events-run-$run_id.jsonl" \
+      --transport-events "$SR_PHASE4_RUN/transport-events-run-$run_id.jsonl" \
+      --plugin-report "$run_dir/remote-proposer-report.json" \
+      --output "$SR_PHASE4_RUN/serial-disaggregated-run-$run_id.json" \
+      >"$run_dir/target-serial.log" 2>&1; then
+    kill "$draft_pid" 2>/dev/null || true
+    wait "$draft_pid" 2>/dev/null || true
+    cat "$run_dir/target-serial.log"
+    return 1
+  fi
+  wait "$draft_pid"
+  test ! -S "$run_dir/draft.sock"
+  python - "$SR_PHASE4_RUN/serial-disaggregated-run-$run_id.json" <<'PY'
+import json
+import sys
+value = json.load(open(sys.argv[1], encoding="utf-8"))
+assert value["valid"], value
+assert value["exact_sequence_match"] is True
+assert value["strict_serial_timeline"]["validated_in_runner"] is True
+assert value["accounting"]["valid"] is True
+print({
+    "requests": value["request_count"],
+    "rounds": value["strict_serial_timeline"]["round_events"],
+    "accounting": value["accounting"],
+})
+PY
+}
+
+run_serial_once 1
+run_serial_once 2
 ```
 
-If the vLLM and HF token trajectories differ, do not regenerate the HF target. The smoke JSON
-will retain the first divergence, vLLM top-k row, token IDs and configuration for review.
-
-## 8. Validate, summarize and inspect
+## 10. Validate both runs and generate the summary
 
 ```bash
-specrhythm phase4-validate \
+specrhythm phase4-serial-validate \
   --config configs/phase4a_target_fair_1d2v.yaml \
-  --environment "$SR_PHASE4_RUN/environment.json" \
-  --topology "$SR_PHASE4_RUN/topology.json" \
-  --runtime-manifest "$SR_PHASE4_RUN/runtime-manifest.json" \
-  --draft-smoke "$SR_PHASE4_RUN/draft-smoke.json" \
-  --target-smoke "$SR_PHASE4_RUN/target-tp2-smoke.json" \
+  --reference "$SR_PHASE4_RUN/stock-target-reference.json" \
+  --patch-manifest "$SR_PHASE4_RUN/vllm-base-and-patch-manifest.json" \
+  --target-regression "$SR_PHASE4_RUN/patched-target-regression.json" \
+  --run "$SR_PHASE4_RUN/serial-disaggregated-run-1.json" \
+  --run "$SR_PHASE4_RUN/serial-disaggregated-run-2.json" \
+  --round-events "$SR_PHASE4_RUN/round-events-run-1.jsonl" \
+  --round-events "$SR_PHASE4_RUN/round-events-run-2.jsonl" \
+  --transport-events "$SR_PHASE4_RUN/transport-events-run-1.jsonl" \
+  --transport-events "$SR_PHASE4_RUN/transport-events-run-2.jsonl" \
   --output "$SR_PHASE4_RUN/validation.json" \
   --markdown-output "$SR_PHASE4_RUN/summary.md" \
-  2>&1 | tee -a "$SR_PHASE4_RUN/phase4a.log"
+  2>&1 | tee "$SR_PHASE4_RUN/validation.log"
 
-python - "$SR_PHASE4_RUN" <<'PY'
+cat "$SR_PHASE4_RUN/summary.md"
+python - "$SR_PHASE4_RUN/validation.json" <<'PY'
 import json
-import pathlib
 import sys
-
-root = pathlib.Path(sys.argv[1])
-validation = json.load(open(root / "validation.json", encoding="utf-8"))
-runtime = json.load(open(root / "runtime-manifest.json", encoding="utf-8"))
-assert validation["valid"], validation
-assert set(runtime["roles"]) == {"draft", "target"}
-assert runtime["roles"]["draft"]["engine"]["physical_gpu_ids"] == [0]
-assert runtime["roles"]["target"]["engine"]["physical_gpu_ids"] == [1, 2]
-assert len(runtime["roles"]["target"]["worker_ranks"]) == 2
-for role in ("draft", "target"):
-    for rank in runtime["roles"][role]["worker_ranks"]:
-        assert rank["parameter_count"] > 0
-        assert rank["allocated_memory_bytes"] > 0
-        assert rank["gpu_uuid"]
-        assert rank["attention_backends"]
-print((root / "summary.md").read_text(encoding="utf-8"))
+value = json.load(open(sys.argv[1], encoding="utf-8"))
+assert value["valid"], value
+assert value["checks"]["patched_target_equals_stock"] is True
+assert value["checks"]["serial_runs_equal_stock"] == [True, True]
+assert value["checks"]["serial_runs_deterministic"] is True
+print(json.dumps(value, indent=2, sort_keys=True))
 PY
-
-find "$SR_PHASE4_RUN" -maxdepth 2 -type f -print | sort
 ```
 
-## 9. Package the small review bundle
-
-Do not include model weights, raw logits, full Phase 3 traces or any repository data.
+## 11. Create the review bundle
 
 ```bash
-tar -C "$SR_PHASE4_RUN" -czf "$SR_PHASE4_RUN/phase4a-review-bundle.tar.gz" \
+tar -C "$SR_PHASE4_RUN" -czf "$SR_PHASE4_RUN/review-bundle.tar.gz" \
   environment.json \
   topology.json \
   probe-validation.json \
   runtime-manifest.json \
-  draft-smoke.json \
-  target-tp2-smoke.json \
+  vllm-base-and-patch-manifest.json \
+  stock-target-reference.json \
+  stock-target-reference.sha256 \
+  patched-target-regression.json \
+  serial-disaggregated-run-1.json \
+  serial-disaggregated-run-2.json \
+  round-events-run-1.jsonl \
+  round-events-run-2.jsonl \
+  transport-events-run-1.jsonl \
+  transport-events-run-2.jsonl \
   validation.json \
   summary.md \
   nvidia-smi-L.txt \
-  nvidia-smi-topo.txt
-sha256sum "$SR_PHASE4_RUN/phase4a-review-bundle.tar.gz" | \
-  tee "$SR_PHASE4_RUN/phase4a-review-bundle.sha256"
+  nvidia-smi-topo.txt \
+  probe.log \
+  stock-reference.log \
+  patch-apply.log \
+  patched-target-regression.log \
+  validation.log \
+  run-1 \
+  run-2
+
+sha256sum "$SR_PHASE4_RUN/review-bundle.tar.gz" | \
+  tee "$SR_PHASE4_RUN/review-bundle.sha256"
+find "$SR_PHASE4_RUN" -maxdepth 2 -type f -print | sort
 ```
 
-Return `summary.md`, `validation.json`, the bundle SHA256 and bundle. Stop after this run; do not
-start cross-engine verification or latency/SLO experiments.
+Return `summary.md`, `validation.json`, both Serial JSON files, both round-event logs, the bundle,
+and `review-bundle.sha256`. Stop after this correctness run. Do not start a 100-request workload,
+arrival replay, latency/capacity sweep, Dual-Batch, Eager, or packed-tree experiment.

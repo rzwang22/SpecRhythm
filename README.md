@@ -4,8 +4,9 @@ SpecRhythm is a pure-Python research harness for testing SLO-aware speculative-d
 policies before integrating them into vLLM or SGLang. The default install remains dependency
 free. Phase 3 adds an isolated, optional PyTorch/Transformers correctness collector and GPU
 calibration interface; it does not change the control-plane simulator or claim serving-engine
-performance. Phase 4A adds a separate Python 3.11/vLLM v0.25.1 integration workflow for stock
-engine bring-up; vLLM is not installed into the default simulator environment.
+performance. Phase 4 adds a separate Python 3.11/vLLM v0.25.1 workflow. Phase 4A.1 implements a
+narrow three-GPU Serial Disaggregated correctness path with a persistent remote Draft KV service
+and stock vLLM Target verification; vLLM is not installed into the default simulator environment.
 
 The repository currently provides:
 
@@ -22,7 +23,8 @@ The repository currently provides:
 - a deterministic R3-real public-text pilot builder, nested real candidate-forest checkpoints,
   immutable target labels, and fixed-budget offline selector diagnosis.
 - dependency-free Draft/Target adapter contracts plus strict stock-vLLM environment, topology,
-  rank-placement, determinism, token-comparison, and bring-up validation tools.
+  rank-placement, immutable-reference, Serial timeline, KV/accounting, determinism, and
+  token-comparison validation tools.
 
 ## Quick start
 
@@ -96,7 +98,7 @@ docs/phase-a.md          Hypotheses, ablations, and proof gates
 docs/workload-design.md  Dataset construction and validation protocol
 docs/development.md      Mac/GitHub/remote-GPU workflow
 docs/phase3-gpu-runbook.md  Exact Phase-3 server commands and safety boundaries
-docs/phase4-vllm-server-runbook.md  Exact independent vLLM bring-up commands
+docs/phase4-vllm-server-runbook.md  Exact 3×A800 stock-reference and Serial commands
 src/specrhythm/          Workload, policy, simulation, and CLI code
 tests/                   Unit and integration tests
 ~~~

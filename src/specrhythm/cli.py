@@ -565,6 +565,75 @@ def build_parser() -> argparse.ArgumentParser:
     phase4_validate.add_argument("--target-smoke", required=True)
     phase4_validate.add_argument("--output", required=True)
     phase4_validate.add_argument("--markdown-output", required=True)
+
+    phase4_reference = subparsers.add_parser(
+        "phase4-stock-reference",
+        help="generate and immutably freeze the stock-vLLM Target-only reference",
+    )
+    phase4_reference.add_argument("--config", required=True)
+    phase4_reference.add_argument("--workload", required=True)
+    phase4_reference.add_argument("--environment", required=True)
+    phase4_reference.add_argument("--topology", required=True)
+    phase4_reference.add_argument("--runtime-manifest", required=True)
+    phase4_reference.add_argument("--legacy-hf-target-dir")
+    phase4_reference.add_argument("--output", required=True)
+
+    phase4_regression = subparsers.add_parser(
+        "phase4-target-regression",
+        help="prove patched vLLM target-only output equals the frozen stock reference",
+    )
+    phase4_regression.add_argument("--config", required=True)
+    phase4_regression.add_argument("--workload", required=True)
+    phase4_regression.add_argument("--environment", required=True)
+    phase4_regression.add_argument("--topology", required=True)
+    phase4_regression.add_argument("--runtime-manifest", required=True)
+    phase4_regression.add_argument("--reference", required=True)
+    phase4_regression.add_argument("--patch-manifest", required=True)
+    phase4_regression.add_argument("--legacy-hf-target-dir")
+    phase4_regression.add_argument("--output", required=True)
+
+    phase4_draft_service = subparsers.add_parser(
+        "phase4-draft-service",
+        help="run the persistent GPU-0 Draft proposer over a local Unix socket",
+    )
+    phase4_draft_service.add_argument("--config", required=True)
+    phase4_draft_service.add_argument("--socket", required=True)
+    phase4_draft_service.add_argument("--event-log", required=True)
+    phase4_draft_service.add_argument("--ready", required=True)
+
+    phase4_serial = subparsers.add_parser(
+        "phase4-serial-run",
+        help="run one 1D+2V strict-serial GPU correctness pass",
+    )
+    phase4_serial.add_argument("--config", required=True)
+    phase4_serial.add_argument("--workload", required=True)
+    phase4_serial.add_argument("--environment", required=True)
+    phase4_serial.add_argument("--topology", required=True)
+    phase4_serial.add_argument("--runtime-manifest", required=True)
+    phase4_serial.add_argument("--reference", required=True)
+    phase4_serial.add_argument("--patch-manifest", required=True)
+    phase4_serial.add_argument("--draft-socket", required=True)
+    phase4_serial.add_argument("--draft-ready", required=True)
+    phase4_serial.add_argument("--round-events", required=True)
+    phase4_serial.add_argument("--transport-events", required=True)
+    phase4_serial.add_argument("--plugin-report", required=True)
+    phase4_serial.add_argument("--output", required=True)
+
+    phase4_serial_validate = subparsers.add_parser(
+        "phase4-serial-validate",
+        help="validate patched Target regression and two strict-serial runs",
+    )
+    phase4_serial_validate.add_argument("--config", required=True)
+    phase4_serial_validate.add_argument("--reference", required=True)
+    phase4_serial_validate.add_argument("--patch-manifest", required=True)
+    phase4_serial_validate.add_argument("--target-regression", required=True)
+    phase4_serial_validate.add_argument("--run", action="append", required=True)
+    phase4_serial_validate.add_argument("--round-events", action="append", required=True)
+    phase4_serial_validate.add_argument(
+        "--transport-events", action="append", required=True
+    )
+    phase4_serial_validate.add_argument("--output", required=True)
+    phase4_serial_validate.add_argument("--markdown-output", required=True)
     return parser
 
 
@@ -698,6 +767,147 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         markdown = Path(args.markdown_output)
         markdown.parent.mkdir(parents=True, exist_ok=True)
         markdown.write_text(validation_markdown(report), encoding="utf-8")
+        return 0 if report["valid"] else 1
+    if args.command == "phase4-stock-reference":
+        from specrhythm.phase4.config import load_phase4_config
+        from specrhythm.phase4.reference import freeze_stock_reference
+
+        try:
+            freeze_stock_reference(
+                Path(args.output).resolve(),
+                load_phase4_config(args.config),
+                workload_path=Path(args.workload).resolve(),
+                environment_path=Path(args.environment).resolve(),
+                topology_path=Path(args.topology).resolve(),
+                runtime_manifest_path=Path(args.runtime_manifest).resolve(),
+                git_commit=_current_git_commit() or "unknown",
+                legacy_hf_target_dir=(
+                    Path(args.legacy_hf_target_dir).resolve()
+                    if args.legacy_hf_target_dir
+                    else None
+                ),
+            )
+        except (
+            FileExistsError,
+            FileNotFoundError,
+            ImportError,
+            RuntimeError,
+            ValueError,
+        ) as error:
+            raise SystemExit(f"Phase-4 stock reference failed: {error}") from error
+        return 0
+    if args.command == "phase4-target-regression":
+        from specrhythm.phase4.config import load_phase4_config
+        from specrhythm.phase4.serial_runner import run_patched_target_regression
+
+        try:
+            report = run_patched_target_regression(
+                load_phase4_config(args.config),
+                workload_path=Path(args.workload).resolve(),
+                environment_path=Path(args.environment).resolve(),
+                topology_path=Path(args.topology).resolve(),
+                runtime_manifest_path=Path(args.runtime_manifest).resolve(),
+                reference_path=Path(args.reference).resolve(),
+                patch_manifest_path=Path(args.patch_manifest).resolve(),
+                git_commit=_current_git_commit() or "unknown",
+                legacy_hf_target_dir=(
+                    Path(args.legacy_hf_target_dir).resolve()
+                    if args.legacy_hf_target_dir
+                    else None
+                ),
+            )
+        except (FileNotFoundError, ImportError, RuntimeError, ValueError) as error:
+            raise SystemExit(f"Phase-4 Target regression failed: {error}") from error
+        _write_json(report, args.output)
+        return 0 if report["valid"] else 1
+    if args.command == "phase4-draft-service":
+        from specrhythm.phase4.config import load_phase4_config
+        from specrhythm.phase4.draft_service import run_draft_service
+
+        try:
+            run_draft_service(
+                load_phase4_config(args.config),
+                socket_path=Path(args.socket).resolve(),
+                event_log_path=Path(args.event_log).resolve(),
+                ready_path=Path(args.ready).resolve(),
+            )
+        except (
+            FileExistsError,
+            FileNotFoundError,
+            ImportError,
+            RuntimeError,
+            ValueError,
+        ) as error:
+            raise SystemExit(f"Phase-4 Draft service failed: {error}") from error
+        return 0
+    if args.command == "phase4-serial-run":
+        from specrhythm.phase4.config import load_phase4_config
+        from specrhythm.phase4.serial_runner import run_serial_disaggregated
+
+        output_path = Path(args.output).resolve()
+        if output_path.exists():
+            raise SystemExit(f"refusing to overwrite Serial run artifact {output_path}")
+        try:
+            report = run_serial_disaggregated(
+                load_phase4_config(args.config),
+                workload_path=Path(args.workload).resolve(),
+                environment_path=Path(args.environment).resolve(),
+                topology_path=Path(args.topology).resolve(),
+                runtime_manifest_path=Path(args.runtime_manifest).resolve(),
+                reference_path=Path(args.reference).resolve(),
+                patch_manifest_path=Path(args.patch_manifest).resolve(),
+                draft_socket_path=Path(args.draft_socket).resolve(),
+                draft_ready_path=Path(args.draft_ready).resolve(),
+                round_events_path=Path(args.round_events).resolve(),
+                transport_events_path=Path(args.transport_events).resolve(),
+                plugin_report_path=Path(args.plugin_report).resolve(),
+                git_commit=_current_git_commit() or "unknown",
+            )
+        except (
+            FileExistsError,
+            FileNotFoundError,
+            ImportError,
+            RuntimeError,
+            ValueError,
+        ) as error:
+            raise SystemExit(f"Phase-4 Serial run failed: {error}") from error
+        _write_json(report, output_path)
+        return 0 if report["valid"] else 1
+    if args.command == "phase4-serial-validate":
+        from specrhythm.phase4.config import load_phase4_config
+        from specrhythm.phase4.serial_validation import (
+            serial_summary_markdown,
+            validate_serial_artifacts,
+        )
+
+        try:
+            run_paths = [Path(path).resolve() for path in args.run]
+            report = validate_serial_artifacts(
+                load_phase4_config(args.config),
+                reference_path=Path(args.reference).resolve(),
+                patch_manifest_path=Path(args.patch_manifest).resolve(),
+                target_regression_path=Path(args.target_regression).resolve(),
+                run_paths=run_paths,
+                round_event_paths=[Path(path).resolve() for path in args.round_events],
+                transport_event_paths=[
+                    Path(path).resolve() for path in args.transport_events
+                ],
+            )
+            runs = [json.loads(path.read_text(encoding="utf-8")) for path in run_paths]
+        except (FileNotFoundError, json.JSONDecodeError, RuntimeError, ValueError) as error:
+            report = {
+                "schema_version": "specrhythm.phase4a1-validation.v1",
+                "valid": False,
+                "errors": [str(error)],
+                "warnings": [],
+                "gpu_correctness_result": True,
+                "gpu_performance_result": False,
+            }
+            runs = []
+        _write_json(report, args.output)
+        markdown = Path(args.markdown_output).resolve()
+        markdown.parent.mkdir(parents=True, exist_ok=True)
+        markdown.write_text(serial_summary_markdown(report, runs), encoding="utf-8")
         return 0 if report["valid"] else 1
     if args.command == "gpu-probe":
         from specrhythm.phase3.probe import probe_gpu_environment

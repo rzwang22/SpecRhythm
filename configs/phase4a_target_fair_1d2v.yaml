@@ -64,9 +64,16 @@
   "logprobs": 5,
   "enforce_eager": true,
   "enable_prefix_caching": false,
+  "proposal_budget": 4,
+  "target_model_runner": "v1",
+  "enable_thinking": false,
   "result_semantics": {
-    "stage": "independent-stock-engine-bringup",
+    "stage": "phase4a1-serial-disaggregated-correctness",
     "serving_performance_result": false,
+    "gpu_correctness_result": true,
+    "reports_goodput": false,
+    "reports_slo_attainment": false,
+    "reports_speedup": false,
     "built_in_speculative_decoding": false,
     "vllm_dbo_enabled": false,
     "specrhythm_dual_batch_implemented": false
