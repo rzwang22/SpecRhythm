@@ -215,6 +215,7 @@ def test_runtime_manifest_schema(phase4_config, tmp_path):
         topology_path=topology,
         worker_ranks=[worker(0, 1, 2), worker(1, 2, 2)],
         attention_backend="FLASH_ATTN",
+        mode_setup={"configured_before_vllm_import": True},
     )
     assert manifest["schema_version"] == "specrhythm.phase4-runtime-manifest.v1"
     assert manifest["serving_performance_result"] is False
@@ -234,8 +235,9 @@ def test_full_artifact_validation_accepts_real_bringup_schema(phase4_config, tmp
             workload_path=WORKLOAD,
             environment_path=environment_path,
             topology_path=topology_path,
-            worker_ranks=[worker(0, 0, 1)],
-            attention_backend="FLASH_ATTN",
+                worker_ranks=[worker(0, 0, 1)],
+                attention_backend="FLASH_ATTN",
+                mode_setup={"configured_before_vllm_import": True},
         ),
         "target": build_runtime_manifest(
             phase4_config,
@@ -244,8 +246,9 @@ def test_full_artifact_validation_accepts_real_bringup_schema(phase4_config, tmp
             workload_path=WORKLOAD,
             environment_path=environment_path,
             topology_path=topology_path,
-            worker_ranks=[worker(0, 1, 2), worker(1, 2, 2)],
-            attention_backend="FLASH_ATTN",
+                worker_ranks=[worker(0, 1, 2), worker(1, 2, 2)],
+                attention_backend="FLASH_ATTN",
+                mode_setup={"configured_before_vllm_import": True},
         ),
     }
     runtime_path = tmp_path / "runtime-manifest.json"

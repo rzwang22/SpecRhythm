@@ -486,6 +486,10 @@ def test_phase4_serial_sources_parse_as_python39():
         "vllm_remote.py",
         "serial_runner.py",
         "serial_validation.py",
+        "batch_invariant.py",
+        "correctness_validation.py",
+        "fixed_control.py",
+        "vllm_diagnostics.py",
     ):
         path = root / "src" / "specrhythm" / "phase4" / name
         ast.parse(path.read_text(encoding="utf-8"), filename=str(path), feature_version=(3, 9))

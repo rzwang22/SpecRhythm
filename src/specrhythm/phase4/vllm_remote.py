@@ -17,6 +17,7 @@ from specrhythm.phase4.manifest import atomic_write_json
 from specrhythm.phase4.serial import Proposal, RoundRecord, SerialTimeline, greedy_acceptance
 from specrhythm.phase4.stock_vllm import load_smoke_requests
 from specrhythm.phase4.transport import CheckpointJsonl, UnixDraftClient
+from specrhythm.phase4.vllm_diagnostics import TARGET_ONLY_FIELDS
 
 
 @dataclass
@@ -453,7 +454,7 @@ def _prefix_hash(values: Sequence[int]) -> str:
 
 
 def _assert_target_information_isolated(value: Mapping[str, Any]) -> None:
-    forbidden = {
+    forbidden = set(TARGET_ONLY_FIELDS) | {
         "target_logits",
         "target_logprobs",
         "target_topk",

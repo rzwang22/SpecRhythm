@@ -8,6 +8,10 @@ import os
 from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
 
+from specrhythm.phase4.batch_invariant import (
+    normalize_correctness_mode,
+    require_matching_reference_mode,
+)
 from specrhythm.phase4.config import VLLM_COMMIT, VLLM_VERSION, Phase4Config
 from specrhythm.phase4.manifest import model_revision_manifest, sha256_file
 from specrhythm.phase4.stock_vllm import run_stock_smoke
@@ -84,6 +88,16 @@ def build_stock_reference(
                 "top_logprobs": one.get("top_logprobs", []),
             }
         )
+    correctness_mode = normalize_correctness_mode(
+        str(smoke.get("correctness_mode", "default"))
+    )
+    batch_validation = smoke.get("batch_invariant_validation")
+    if correctness_mode == "batch-invariant" and (
+        smoke.get("batch_invariant_effective") is not True
+        or not isinstance(batch_validation, Mapping)
+        or batch_validation.get("valid") is not True
+    ):
+        raise ValueError("stock reference cannot freeze unproven batch-invariant mode")
     value: dict[str, Any] = {
         "schema_version": REFERENCE_SCHEMA,
         "serving_correctness_reference": "stock-vllm-target-only",
@@ -127,6 +141,15 @@ def build_stock_reference(
         },
         "sampling_configuration": smoke.get("sampling"),
         "target_runtime_configuration": {
+            "correctness_mode": correctness_mode,
+            "VLLM_BATCH_INVARIANT": (
+                "1" if correctness_mode == "batch-invariant" else "0"
+            ),
+            "batch_invariant_requested": correctness_mode == "batch-invariant",
+            "batch_invariant_effective": smoke.get(
+                "batch_invariant_effective", False
+            ),
+            "batch_invariant_validation": batch_validation,
             "physical_gpu_ids": list(config.target.physical_gpu_ids),
             "tensor_parallel_size": config.target.tensor_parallel_size,
             "dtype": config.target.dtype,
@@ -136,6 +159,23 @@ def build_stock_reference(
             "vllm_dbo_enabled": False,
             "built_in_speculative_decoding": False,
             "enable_thinking": config.enable_thinking,
+            "worker_ranks": smoke.get("worker_ranks"),
+            "attention_backends": sorted(
+                {
+                    str(backend)
+                    for row in smoke.get("worker_ranks", ())
+                    if isinstance(row, Mapping)
+                    for backend in row.get("attention_backends", ())
+                }
+            ),
+            "all_reduce_backends": sorted(
+                {
+                    str(backend)
+                    for row in smoke.get("worker_ranks", ())
+                    if isinstance(row, Mapping)
+                    for backend in row.get("all_reduce_backends", ())
+                }
+            ),
         },
         "outputs": outputs,
         "repeated_run_determinism": True,
@@ -162,6 +202,8 @@ def freeze_stock_reference(
     runtime_manifest_path: Path,
     git_commit: str,
     legacy_hf_target_dir: Optional[Path] = None,
+    correctness_mode: str = "default",
+    diagnostics_path: Optional[Path] = None,
 ) -> dict[str, Any]:
     if output_path.exists():
         raise FileExistsError("stock target reference already exists and is immutable")
@@ -179,6 +221,8 @@ def freeze_stock_reference(
         runtime_manifest_path=runtime_manifest_path,
         git_commit=git_commit,
         frozen_target_dir=legacy_hf_target_dir,
+        correctness_mode=correctness_mode,
+        diagnostics_path=diagnostics_path,
     )
     reference = build_stock_reference(
         smoke,
@@ -211,6 +255,33 @@ def validate_stock_reference(value: Mapping[str, Any]) -> list[str]:
     for key in ("model", "tokenizer", "sampling_configuration", "target_runtime_configuration"):
         if not isinstance(value.get(key), Mapping):
             errors.append(f"stock reference {key} is missing")
+    runtime = value.get("target_runtime_configuration")
+    if isinstance(runtime, Mapping):
+        try:
+            mode = normalize_correctness_mode(
+                str(runtime.get("correctness_mode", "default"))
+            )
+        except ValueError as error:
+            errors.append(str(error))
+            mode = "default"
+        if mode == "batch-invariant":
+            validation = runtime.get("batch_invariant_validation")
+            if runtime.get("batch_invariant_effective") is not True:
+                errors.append("batch-invariant stock reference is not proven effective")
+            if not isinstance(validation, Mapping) or validation.get("valid") is not True:
+                errors.append("batch-invariant stock reference validation is missing")
+            ranks = runtime.get("worker_ranks")
+            if not isinstance(ranks, list) or len(ranks) != 2:
+                errors.append("batch-invariant stock reference TP-rank evidence is missing")
+            if not runtime.get("attention_backends"):
+                errors.append("batch-invariant stock reference attention backend is missing")
+            elif not any(
+                "FLASH" in str(backend).upper()
+                for backend in runtime.get("attention_backends", ())
+            ):
+                errors.append("batch-invariant stock reference did not use FlashAttention")
+            if not runtime.get("all_reduce_backends"):
+                errors.append("batch-invariant stock reference all-reduce backend is missing")
     if value.get("created_before_serial") is not True or value.get("immutable") is not True:
         errors.append("stock target reference is not frozen before Serial")
     if value.get("repeated_run_determinism") is not True:
@@ -335,6 +406,12 @@ def compare_outputs_to_reference(
         "reference_errors": reference_errors,
         "requests": comparisons,
     }
+
+
+def require_reference_for_mode(reference: Mapping[str, Any], mode: str) -> None:
+    """Reject accidental A/B reference reuse in a fresh C/D experiment."""
+
+    require_matching_reference_mode(reference, mode)
 
 
 def build_target_regression(

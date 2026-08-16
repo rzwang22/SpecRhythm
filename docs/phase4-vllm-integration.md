@@ -33,6 +33,67 @@ Draft batch finishes
 There is no cross-round or same-round Draft/Verify overlap. vLLM DBO is disabled. Dual-Batch,
 Dual-Eager, packed trees, tree selection, SLO evaluation, goodput, and speedup remain absent.
 
+## Phase 4A.1.1 batch-invariant correctness hardening
+
+The first user-run default-mode A/B experiment passed patched Target-only regression, lifecycle
+accounting, strict-serial ordering, GPU placement, persistent Draft KV, and Target-label
+isolation. One of five Serial outputs nevertheless differed from stock Target-only at generated
+position 1. Stock Target-only had an exact BF16 log-probability tie between token IDs 22570 and
+53143 and chose 22570; expanded speculative verification changed the values and accepted the
+Draft proposal 53143. This is an unresolved exact-token correctness failure, not a benign-drift
+waiver.
+
+Phase 4A.1.1 makes execution configuration a first-class correctness input. Both stock
+Target-only C and Serial D accept `--correctness-mode batch-invariant`, which sets
+`VLLM_BATCH_INVARIANT=1` before importing vLLM. Each TP rank reports the raw and parsed flag,
+dtype, compute capability, attention backend and its support declaration, custom-all-reduce
+state, and enabled all-reduce path. The combined manifest records separate
+`batch_invariant_requested`, `batch_invariant_effective`, and `batch_invariant_validation`
+fields. A requested mode without consistent, complete rank evidence fails; setting the
+environment variable alone is never sufficient.
+
+The pinned vLLM v0.25.1 source explicitly documents batch invariance as requiring NVIDIA compute
+capability at least 9.0. The available A800 is compute capability 8.0. Consequently, the formal
+preflight must fail on the current 3×A800 server and the repository must not label an A800 C/D
+run effective. There is no override or silent fallback. A supported-Hopper-or-newer run may
+continue to C/D only after the preflight and initialized-rank validation both pass.
+
+The four conceptual experiments remain distinct and use fresh artifact directories:
+
+| Group | Execution | Mode | Status |
+| --- | --- | --- | --- |
+| A | stock Target-only | default | retained provenance; never rewritten |
+| B | Serial Disaggregated | default | retained failed exact comparison |
+| C | stock Target-only, twice | batch-invariant | gated by hardware/rank proof |
+| D | Serial Disaggregated, twice | batch-invariant | compared only with C |
+
+Outcome A requires both C repeats, both D repeats, termination, accounting, strict timeline, KV
+monotonicity, and every `D == C` token sequence to pass. If C and D differ, the Target-only
+diagnostic log is matched to the Serial log by stable request ID and committed-prefix SHA256. It
+records vLLM's actual `target_logits_indices`, proposal index, flattened input position,
+contiguous position IDs, logical/physical KV lengths, raw-logit and log-prob top-k values,
+selected Target token, verification shape, attention/all-reduce backend, dtype, and
+batch-invariant state. This log is Target-only and its fields are forbidden from every Draft IPC
+payload.
+
+Only after a failed C/D comparison may the `K=1,2,4` fixed controls run on the single divergent
+request. `LocalStaticProposer` and `RemoteFixedProposer` return the same prefix of
+`[53143, 2213, 369, 264]`; the latter adds only local Unix transport. Equal target logits,
+accepted prefix, committed tokens, and final trajectory plus a valid prefix/position/KV/mask
+proof makes Outcome B eligible: an upstream execution-shape numerical limitation, with exact
+correctness still failed. Any control or mapping difference is Outcome C, an integration bug.
+No epsilon tie rule, token-specific rewrite, reference-guided acceptance, Target shadow replay,
+request deletion, or relaxed text-similarity criterion is permitted.
+
+These evidence levels are not interchangeable:
+
+| Evidence | Meaning in this phase |
+| --- | --- |
+| Algorithmic speculative correctness | rejection, correction/bonus, termination, and KV/accounting invariants hold |
+| Exact token equality | every generated token and termination field in D equals C |
+| Hardware numerical batch invariance | pinned mode is requested and proven effective on every TP rank for a supported GPU |
+| Serving performance | not measured or reported anywhere in Phase 4A.1.1 |
+
 ## Correctness references
 
 The Phase 4 serving correctness reference is an immutable stock vLLM Target-only greedy artifact:
@@ -136,11 +197,14 @@ patch under `integrations/vllm/patches/` therefore changes only
 `vllm/v1/worker/gpu_model_runner.py` to:
 
 1. pass existing vLLM request IDs to the custom proposer;
-2. invoke optional `on_target_verify_start` and `on_target_verify_end` hooks.
+2. invoke optional `on_target_verify_start` and `on_target_verify_end` hooks;
+3. invoke an observational Target diagnostic hook, which writes nothing unless an external
+   diagnostic path is explicitly configured.
 
-No Target logits or decisions are passed by the patch. It changes no scheduler, sampler, KV,
-attention, C++, CUDA, or Triton code. When speculative decoding is disabled the added branches are
-inactive. The patch manager verifies the exact base file SHA256, applies with zero fuzz, records
+No Target logits or decisions are passed to Draft by the patch. It changes no scheduler, sampler,
+KV, attention, C++, CUDA, or Triton code. When speculative decoding is disabled, the proposal and
+verification branches are inactive; only an explicitly requested Target-only diagnostic log can
+run. The patch manager verifies the exact base file SHA256, applies with zero fuzz, records
 patch/pre/post hashes, and can restore stock code. Patched Target-only must still equal the frozen
 unmodified reference before Serial is allowed to pass.
 

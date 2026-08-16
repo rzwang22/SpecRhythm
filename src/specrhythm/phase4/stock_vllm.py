@@ -14,6 +14,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence, Tuple
 
+from specrhythm.phase4.batch_invariant import (
+    configure_before_worker_creation,
+    requested_for_mode,
+    validate_batch_invariant_ranks,
+    worker_batch_invariant_evidence,
+)
 from specrhythm.phase4.config import EngineConfig, Phase4Config
 from specrhythm.phase4.manifest import (
     atomic_write_json,
@@ -75,7 +81,9 @@ class SmokeRequest:
         )
 
 
-def load_smoke_requests(path: Path, expected_count: int = 5) -> list[SmokeRequest]:
+def load_smoke_requests(
+    path: Path, expected_count: int = 5, *, require_task_mixture: bool = True
+) -> list[SmokeRequest]:
     requests = []
     with path.open("r", encoding="utf-8") as handle:
         for line_number, line in enumerate(handle, 1):
@@ -97,7 +105,11 @@ def load_smoke_requests(path: Path, expected_count: int = 5) -> list[SmokeReques
         task: sum(request.task_class == task for request in requests)
         for task in ("code", "chat", "summarization")
     }
-    if task_counts != {"code": 3, "chat": 1, "summarization": 1}:
+    if require_task_mixture and task_counts != {
+        "code": 3,
+        "chat": 1,
+        "summarization": 1,
+    }:
         raise ValueError("R3-real five-request smoke must have a 3/1/1 task mixture")
     return requests
 
@@ -158,7 +170,7 @@ def _worker_runtime_snapshot(worker: Any) -> dict[str, Any]:
                 get_name = getattr(backend, "get_name", None)
                 attention_backends.add(str(get_name()) if callable(get_name) else backend.__name__)
     expected_device = f"cuda:{logical_gpu_id}"
-    return {
+    result = {
         "global_rank": int(worker.rank),
         "local_rank": int(worker.local_rank),
         "world_size": int(worker.vllm_config.parallel_config.world_size),
@@ -181,6 +193,8 @@ def _worker_runtime_snapshot(worker: Any) -> dict[str, Any]:
         "max_reserved_memory_bytes": int(torch.cuda.max_memory_reserved(worker.device)),
         "attention_backends": sorted(attention_backends),
     }
+    result.update(worker_batch_invariant_evidence(worker))
+    return result
 
 
 def validate_worker_ranks(rows: Sequence[Mapping[str, Any]], engine: EngineConfig) -> list[str]:
@@ -390,6 +404,16 @@ def _update_combined_manifest(path: Path, role_manifest: Mapping[str, Any]) -> N
         ):
             if existing_inputs.get(key) != current_inputs.get(key):
                 raise ValueError(f"refusing to combine role manifests with different {key}")
+        existing_correctness = existing.get("correctness")
+        current_correctness = role_manifest.get("correctness")
+        if not isinstance(existing_correctness, Mapping) or not isinstance(
+            current_correctness, Mapping
+        ):
+            raise ValueError("runtime role manifest correctness provenance is missing")
+        if existing_correctness.get("mode") != current_correctness.get("mode"):
+            raise ValueError(
+                "refusing to combine default and batch-invariant runtime manifests"
+            )
     roles[str(role_manifest["role"])] = dict(role_manifest)
     value["roles"] = roles
     atomic_write_json(path, value)
@@ -405,11 +429,25 @@ def run_stock_smoke(
     runtime_manifest_path: Path,
     git_commit: str,
     frozen_target_dir: Optional[Path] = None,
+    correctness_mode: str = "default",
+    diagnostics_path: Optional[Path] = None,
 ) -> dict[str, Any]:
     """Bring up one independent stock vLLM engine and run the same five requests twice."""
 
+    mode_evidence = configure_before_worker_creation(correctness_mode)
     if role not in {"draft", "target"}:
         raise ValueError("stock smoke role must be draft or target")
+    if diagnostics_path is not None:
+        if role != "target":
+            raise ValueError("Target diagnostics cannot be enabled for the Draft role")
+        if diagnostics_path.exists():
+            raise FileExistsError(
+                f"refusing to overwrite Target diagnostics {diagnostics_path}"
+            )
+        os.environ["SR_PHASE4_TARGET_DIAGNOSTICS"] = str(diagnostics_path)
+        os.environ["SR_PHASE4_WORKLOAD"] = str(workload_path)
+    else:
+        os.environ.pop("SR_PHASE4_TARGET_DIAGNOSTICS", None)
     environment = json.loads(environment_path.read_text(encoding="utf-8"))
     topology = json.loads(topology_path.read_text(encoding="utf-8"))
     environment_validation = validate_environment(environment, config)
@@ -456,6 +494,10 @@ def run_stock_smoke(
     startup_finished = time.monotonic_ns()
     worker_ranks = llm.collective_rpc(_worker_runtime_snapshot)
     rank_errors = validate_worker_ranks(worker_ranks, engine)
+    batch_validation = validate_batch_invariant_ranks(
+        worker_ranks, requested=requested_for_mode(correctness_mode)
+    )
+    rank_errors.extend(batch_validation["batch_invariant_validation"]["errors"])
     if rank_errors:
         raise RuntimeError("invalid vLLM worker evidence: " + "; ".join(rank_errors))
     tokenizer = llm.get_tokenizer()
@@ -505,6 +547,9 @@ def run_stock_smoke(
         topology_path=topology_path,
         worker_ranks=worker_ranks,
         attention_backend=",".join(attention_backends) or None,
+        correctness_mode=correctness_mode,
+        mode_setup=mode_evidence,
+        batch_invariant_validation=batch_validation,
     )
     _update_combined_manifest(runtime_manifest_path, manifest)
     finished = time.monotonic_ns()
@@ -512,6 +557,8 @@ def run_stock_smoke(
         "schema_version": "specrhythm.phase4-stock-smoke.v1",
         "stage": "phase4a-stock-vllm-bringup",
         "role": role,
+        "correctness_mode": correctness_mode,
+        **batch_validation,
         "backend": "stock-vllm-v1-offline-llm",
         "fake_data": False,
         "gpu_result": True,
@@ -543,5 +590,15 @@ def run_stock_smoke(
             "workload_sha256": sha256_file(workload_path),
             "runtime_manifest_file": runtime_manifest_path.name,
         },
+        "target_diagnostics": (
+            {
+                "enabled": True,
+                "file": diagnostics_path.name,
+                "target_only": True,
+                "visible_to_draft": False,
+            }
+            if diagnostics_path is not None
+            else {"enabled": False}
+        ),
     }
     return report

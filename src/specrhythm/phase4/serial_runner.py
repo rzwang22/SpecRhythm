@@ -8,6 +8,11 @@ import time
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
+from specrhythm.phase4.batch_invariant import (
+    configure_before_worker_creation,
+    requested_for_mode,
+    validate_batch_invariant_ranks,
+)
 from specrhythm.phase4.config import Phase4Config
 from specrhythm.phase4.manifest import (
     atomic_write_json,
@@ -21,6 +26,7 @@ from specrhythm.phase4.reference import (
     compare_outputs_to_reference,
     load_reference,
     reference_file_evidence,
+    require_reference_for_mode,
 )
 from specrhythm.phase4.stock_vllm import (
     _serialize_outputs,
@@ -32,9 +38,10 @@ from specrhythm.phase4.stock_vllm import (
     validate_worker_ranks,
 )
 from specrhythm.phase4.transport import CheckpointJsonl, UnixDraftClient, payload_sha256
+from specrhythm.phase4.vllm_diagnostics import validate_kv_monotonicity
 
 PATCHED_VLLM_RUNNER_SHA256 = (
-    "ba307cbfdfa9079c04e1bf9bb6387eb923cbabb1eea811e720a94897ea6483fa"
+    "a99c410cd791f20071bb17b8a619e5b309427b50ed864b8753d066c1dc4b150c"
 )
 
 
@@ -122,11 +129,13 @@ def run_patched_target_regression(
     patch_manifest_path: Path,
     git_commit: str,
     legacy_hf_target_dir: Optional[Path] = None,
+    correctness_mode: str = "default",
+    diagnostics_path: Optional[Path] = None,
 ) -> dict[str, Any]:
     _require_v1_runner()
     reference = load_reference(reference_path)
+    require_reference_for_mode(reference, correctness_mode)
     patch_manifest = load_patch_manifest(patch_manifest_path, config)
-    installed_runner = validate_installed_patched_runner(patch_manifest)
     smoke = run_stock_smoke(
         config,
         role="target",
@@ -136,7 +145,10 @@ def run_patched_target_regression(
         runtime_manifest_path=runtime_manifest_path,
         git_commit=git_commit,
         frozen_target_dir=legacy_hf_target_dir,
+        correctness_mode=correctness_mode,
+        diagnostics_path=diagnostics_path,
     )
+    installed_runner = validate_installed_patched_runner(patch_manifest)
     result = build_target_regression(smoke, reference, patch_manifest=patch_manifest)
     result["stock_reference"] = reference_file_evidence(reference_path)
     result["patch_manifest_file_sha256"] = sha256_file(patch_manifest_path)
@@ -159,11 +171,15 @@ def run_serial_disaggregated(
     transport_events_path: Path,
     plugin_report_path: Path,
     git_commit: str,
+    correctness_mode: str = "default",
+    diagnostics_path: Optional[Path] = None,
 ) -> dict[str, Any]:
     """Run one real GPU correctness pass; no performance metrics are derived."""
 
     _require_v1_runner()
+    mode_evidence = configure_before_worker_creation(correctness_mode)
     reference = load_reference(reference_path)
+    require_reference_for_mode(reference, correctness_mode)
     patch_manifest = load_patch_manifest(patch_manifest_path, config)
     installed_runner = validate_installed_patched_runner(patch_manifest)
     environment = json.loads(environment_path.read_text(encoding="utf-8"))
@@ -188,7 +204,10 @@ def run_serial_disaggregated(
         or not isinstance(draft_provenance, Mapping)
     ):
         raise RuntimeError("Draft service residency/KV evidence is invalid")
-    for path in (round_events_path, transport_events_path, plugin_report_path):
+    artifact_paths = [round_events_path, transport_events_path, plugin_report_path]
+    if diagnostics_path is not None:
+        artifact_paths.append(diagnostics_path)
+    for path in artifact_paths:
         if path.exists():
             raise FileExistsError(f"refusing to overwrite Serial checkpoint artifact {path}")
     requests = load_smoke_requests(workload_path, config.smoke_request_count)
@@ -208,6 +227,10 @@ def run_serial_disaggregated(
             "SR_PHASE4_PLUGIN_REPORT": str(plugin_report_path),
         }
     )
+    if diagnostics_path is not None:
+        os.environ["SR_PHASE4_TARGET_DIAGNOSTICS"] = str(diagnostics_path)
+    else:
+        os.environ.pop("SR_PHASE4_TARGET_DIAGNOSTICS", None)
     started = time.monotonic_ns()
     llm = LLM(
         model=str(config.target.resolved_model_path),
@@ -233,6 +256,10 @@ def run_serial_disaggregated(
     startup_end = time.monotonic_ns()
     worker_ranks = llm.collective_rpc(_worker_runtime_snapshot)
     rank_errors = validate_worker_ranks(worker_ranks, config.target)
+    batch_validation = validate_batch_invariant_ranks(
+        worker_ranks, requested=requested_for_mode(correctness_mode)
+    )
+    rank_errors.extend(batch_validation["batch_invariant_validation"]["errors"])
     if rank_errors:
         raise RuntimeError("invalid Target worker evidence: " + "; ".join(rank_errors))
     tokenizer = llm.get_tokenizer()
@@ -286,6 +313,9 @@ def run_serial_disaggregated(
         topology_path=topology_path,
         worker_ranks=worker_ranks,
         attention_backend=",".join(attention_backends) or None,
+        correctness_mode=correctness_mode,
+        mode_setup=mode_evidence,
+        batch_invariant_validation=batch_validation,
     )
     manifest["stage"] = "phase4a1-serial-disaggregated-correctness"
     manifest["result_kind"] = "gpu-correctness-only"
@@ -296,6 +326,8 @@ def run_serial_disaggregated(
     runtime_bundle["stage"] = "phase4a1-serial-disaggregated-correctness"
     runtime_bundle["phase4a1"] = {
         "mode": "serial-disaggregated",
+        "correctness_mode": correctness_mode,
+        **batch_validation,
         "gpu_correctness_result": True,
         "gpu_performance_result": False,
         "draft_service_ready_file": draft_ready_path.name,
@@ -315,9 +347,12 @@ def run_serial_disaggregated(
     }
     atomic_write_json(runtime_manifest_path, runtime_bundle)
     accounting = _aggregate_accounting(round_rows, plugin_report)
+    kv_errors = validate_kv_monotonicity(round_rows)
     result = {
         "schema_version": "specrhythm.phase4-serial-disaggregated-run.v1",
         "mode": "serial-disaggregated",
+        "correctness_mode": correctness_mode,
+        **batch_validation,
         "execution_semantics": (
             "Draft completes, local IPC completes, Target batched verification completes, "
             "state synchronization completes, then next-round Draft starts"
@@ -334,6 +369,24 @@ def run_serial_disaggregated(
         "dual_batch_overlap": False,
         "eager": False,
         "candidate_budget": config.proposal_budget,
+        "sampling_configuration": config.sampling.to_dict(),
+        "target_runtime_configuration": {
+            "physical_gpu_ids": list(config.target.physical_gpu_ids),
+            "tensor_parallel_size": config.target.tensor_parallel_size,
+            "dtype": config.target.dtype,
+            "max_model_len": config.max_model_len,
+            "attention_backends": attention_backends,
+            "all_reduce_backends": sorted(
+                {
+                    str(backend)
+                    for row in worker_ranks
+                    for backend in row.get("all_reduce_backends", ())
+                }
+            ),
+            "VLLM_BATCH_INVARIANT": (
+                "1" if requested_for_mode(correctness_mode) else "0"
+            ),
+        },
         "request_count": len(requests),
         "outputs": serialized,
         "comparison": comparison,
@@ -354,6 +407,11 @@ def run_serial_disaggregated(
             },
         },
         "accounting": accounting,
+        "kv_monotonicity": {
+            "valid": not kv_errors,
+            "errors": kv_errors,
+            "rejected_or_future_tokens_retained": False if not kv_errors else None,
+        },
         "strict_serial_timeline": {
             "round_events": len(round_rows),
             "validated_in_runner": _timeline_rows_valid(round_rows),
@@ -370,6 +428,16 @@ def run_serial_disaggregated(
             "complete_draft_to_verify_transport_benchmark": False,
         },
         "plugin_report": plugin_report,
+        "target_diagnostics": (
+            {
+                "enabled": True,
+                "file": diagnostics_path.name,
+                "target_only": True,
+                "visible_to_draft": False,
+            }
+            if diagnostics_path is not None
+            else {"enabled": False}
+        ),
         "draft_shutdown": draft_shutdown,
         "stock_reference": reference_file_evidence(reference_path),
         "patch_manifest": {
@@ -395,8 +463,149 @@ def run_serial_disaggregated(
         comparison["all_sequences_equal"]
         and result["strict_serial_timeline"]["validated_in_runner"]
         and accounting["valid"]
+        and not kv_errors
+        and batch_validation["batch_invariant_validation"]["valid"]
     )
     return result
+
+
+def run_fixed_proposal_control(
+    config: Phase4Config,
+    *,
+    workload_path: Path,
+    environment_path: Path,
+    topology_path: Path,
+    patch_manifest_path: Path,
+    diagnostics_path: Path,
+    git_commit: str,
+    proposer: str,
+    proposal_budget: int,
+    correctness_mode: str = "batch-invariant",
+    remote_socket_path: Optional[Path] = None,
+) -> dict[str, Any]:
+    """Run one K=1/2/4 single-request diagnostic control, never a benchmark."""
+
+    _require_v1_runner()
+    mode_setup = configure_before_worker_creation(correctness_mode)
+    if proposer not in {"local-static", "remote-fixed"}:
+        raise ValueError("control proposer must be local-static or remote-fixed")
+    if proposal_budget not in (1, 2, 4):
+        raise ValueError("control proposal budget must be 1, 2, or 4")
+    if diagnostics_path.exists():
+        raise FileExistsError(f"refusing to overwrite diagnostics {diagnostics_path}")
+    if proposer == "remote-fixed" and (
+        remote_socket_path is None or not remote_socket_path.is_socket()
+    ):
+        raise RuntimeError("remote fixed-proposal socket is not ready")
+    patch_manifest = load_patch_manifest(patch_manifest_path, config)
+    installed_runner = validate_installed_patched_runner(patch_manifest)
+    environment = json.loads(environment_path.read_text(encoding="utf-8"))
+    topology = json.loads(topology_path.read_text(encoding="utf-8"))
+    environment_validation = validate_environment(environment, config)
+    topology_validation = validate_topology(topology, config)
+    if not environment_validation["valid"]:
+        raise RuntimeError(
+            "invalid Phase-4 environment: "
+            + "; ".join(environment_validation["errors"])
+        )
+    if not topology_validation["valid"]:
+        raise RuntimeError(
+            "invalid Phase-4 topology: " + "; ".join(topology_validation["errors"])
+        )
+    if _visible_physical_ids() != config.target.physical_gpu_ids:
+        raise RuntimeError("fixed control Target must see configured physical GPUs 1,2")
+    requests = load_smoke_requests(
+        workload_path, expected_count=1, require_task_mixture=False
+    )
+    os.environ.update(
+        {
+            "SR_PHASE4_WORKLOAD": str(workload_path),
+            "SR_PHASE4_TARGET_DIAGNOSTICS": str(diagnostics_path),
+            "SR_PHASE4_FIXED_K": str(proposal_budget),
+        }
+    )
+    if remote_socket_path is not None:
+        os.environ["SR_PHASE4_FIXED_SOCKET"] = str(remote_socket_path)
+    try:
+        import torch
+        from vllm import LLM, SamplingParams
+    except ImportError as error:
+        raise RuntimeError("Phase-4 vLLM GPU environment is not installed") from error
+    proposer_class = (
+        "specrhythm.phase4.fixed_control.LocalStaticProposer"
+        if proposer == "local-static"
+        else "specrhythm.phase4.fixed_control.RemoteFixedProposer"
+    )
+    llm = LLM(
+        model=str(config.target.resolved_model_path),
+        tokenizer=str(config.target.resolved_tokenizer_path),
+        tensor_parallel_size=config.target.tensor_parallel_size,
+        dtype=config.target.dtype,
+        revision=config.target.revision,
+        tokenizer_revision=config.target.tokenizer_revision,
+        trust_remote_code=config.target.trust_remote_code,
+        seed=config.sampling.seed,
+        gpu_memory_utilization=config.target.gpu_memory_utilization,
+        max_model_len=config.max_model_len,
+        enforce_eager=config.enforce_eager,
+        enable_prefix_caching=config.enable_prefix_caching,
+        enable_dbo=False,
+        speculative_config={
+            "model": proposer_class,
+            "method": "custom_class",
+            "num_speculative_tokens": proposal_budget,
+        },
+        disable_log_stats=False,
+    )
+    worker_ranks = llm.collective_rpc(_worker_runtime_snapshot)
+    errors = validate_worker_ranks(worker_ranks, config.target)
+    batch_validation = validate_batch_invariant_ranks(
+        worker_ranks, requested=requested_for_mode(correctness_mode)
+    )
+    errors.extend(batch_validation["batch_invariant_validation"]["errors"])
+    if errors:
+        raise RuntimeError("invalid fixed-control worker evidence: " + "; ".join(errors))
+    request = requests[0]
+    outputs = llm.generate(
+        [{"prompt_token_ids": list(request.prompt_token_ids)}],
+        SamplingParams(
+            temperature=0.0,
+            top_p=1.0,
+            max_tokens=request.maximum_new_tokens,
+            seed=request.sampling_seed,
+            n=1,
+            logprobs=config.logprobs,
+        ),
+        use_tqdm=False,
+    )
+    torch.cuda.synchronize()
+    serialized = _serialize_outputs(outputs, requests)
+    remote_shutdown = None
+    if proposer == "remote-fixed" and remote_socket_path is not None:
+        remote_shutdown = UnixDraftClient(remote_socket_path).shutdown()
+    return {
+        "schema_version": "specrhythm.phase4-fixed-proposal-control.v1",
+        "control_only": True,
+        "gpu_performance_result": False,
+        "proposer": proposer,
+        "proposal_token_ids": [53143, 2213, 369, 264][:proposal_budget],
+        "proposal_budget": proposal_budget,
+        "correctness_mode": correctness_mode,
+        **batch_validation,
+        "mode_setup": mode_setup,
+        "request_id": request.request_id,
+        "outputs": serialized,
+        "worker_ranks": worker_ranks,
+        "diagnostics_file": diagnostics_path.name,
+        "target_diagnostics_visible_to_draft": False,
+        "remote_shutdown": remote_shutdown,
+        "patch_provenance": {
+            "vllm_source_commit": config.expected_vllm_commit,
+            "patch_sha256": patch_manifest["patch_sha256"],
+            "installed_vllm_runner": installed_runner,
+        },
+        "git_commit": git_commit,
+    }
 
 
 def _aggregate_accounting(

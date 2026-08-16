@@ -1,4 +1,315 @@
-# Phase 4A.1 1D+2V Serial Disaggregated runbook (3×A800)
+# Phase 4A.1.1 batch-invariant correctness runbook
+
+Phase 4A.1 default-mode A/B artifacts must remain unchanged. This addendum creates only fresh C/D
+artifacts. It does not run Dual-Batch, Eager, packed trees, SLO/goodput, or a performance test.
+
+## 0. Mandatory 3×A800 preflight
+
+Fetch the Draft PR head, activate the existing independent Python 3.11 environment, and record
+the exact commit. Do not edit server code.
+
+```bash
+set -euo pipefail
+cd /root/autodl-tmp/src/SpecRhythm
+git fetch origin codex/vllm-serving-v0.1
+git switch --detach origin/codex/vllm-serving-v0.1
+export SR_PHASE4_COMMIT="$(git rev-parse HEAD)"
+test -z "$(git status --short)"
+conda activate /root/autodl-tmp/envs/specrhythm-phase4-vllm-0.25.1
+python -m pip install -e '.[dev]' --no-deps
+
+export SR_DRAFT_MODEL="/root/autodl-tmp/models/Qwen3-0.6B"
+export SR_TARGET_MODEL="/root/autodl-tmp/models/Qwen3-32B"
+export SR_PHASE4_BI_ROOT="/root/autodl-tmp/SpecRhythm-data/results/phase4/$SR_PHASE4_COMMIT/batch-invariant-$(date -u +%Y%m%dT%H%M%SZ)"
+test ! -e "$SR_PHASE4_BI_ROOT"
+mkdir -p "$SR_PHASE4_BI_ROOT"
+
+set +e
+CUDA_VISIBLE_DEVICES=1,2 VLLM_USE_V2_MODEL_RUNNER=0 VLLM_BATCH_INVARIANT=1 \
+specrhythm phase4-batch-invariant-preflight \
+  --correctness-mode batch-invariant \
+  --output "$SR_PHASE4_BI_ROOT/batch-invariant-preflight.json"
+preflight_status="$?"
+set -e
+cat "$SR_PHASE4_BI_ROOT/batch-invariant-preflight.json"
+test "$preflight_status" -eq 2
+python - "$SR_PHASE4_BI_ROOT/batch-invariant-preflight.json" <<'PY'
+import json
+import sys
+value = json.load(open(sys.argv[1], encoding="utf-8"))
+assert value["cuda_available"] is True, value
+assert value["batch_invariant_requested"] is True, value
+assert value["batch_invariant_effective"] is False, value
+assert value["devices"] and all(
+    row["compute_capability"] == "8.0" for row in value["devices"]
+), value
+assert any("compute capability >= 9.0" in item for item in value["errors"]), value
+PY
+```
+
+On the current A800 server this is the expected, evidence-backed result: every visible GPU is
+compute capability 8.0, while pinned vLLM v0.25.1 documents the mode only for capability at least
+9.0. Stop and return `batch-invariant-preflight.json`. Do not set an override, run C/D anyway, or
+interpret `VLLM_BATCH_INVARIANT=1` as effective.
+
+The remainder of this section is for a supported NVIDIA capability ≥9.0 host only. It must begin
+with the same preflight returning zero:
+
+```bash
+CUDA_VISIBLE_DEVICES=1,2 VLLM_USE_V2_MODEL_RUNNER=0 VLLM_BATCH_INVARIANT=1 \
+specrhythm phase4-batch-invariant-preflight \
+  --correctness-mode batch-invariant \
+  --output "$SR_PHASE4_BI_ROOT/batch-invariant-preflight.json"
+```
+
+Reuse the exact five-request file from A/B without modifying it. Point `SR_PHASE4_AB_RUN` at the
+old default-mode result directory; checksums are retained as provenance, while all C/D outputs go
+under the fresh root.
+
+```bash
+export SR_PHASE4_AB_RUN="/root/autodl-tmp/SpecRhythm-data/results/phase4/REPLACE_WITH_AB_COMMIT/REPLACE_WITH_AB_RUN"
+export SR_R3_SMOKE="$SR_PHASE4_AB_RUN/r3-real-smoke-5.jsonl"
+export SR_VLLM_SOURCE="/root/autodl-tmp/src/vllm-v0.25.1"
+export SR_VLLM_ROOT="$(python - <<'PY'
+from pathlib import Path
+import vllm
+print(Path(vllm.__file__).resolve().parents[1])
+PY
+)"
+test -f "$SR_R3_SMOKE"
+sha256sum "$SR_R3_SMOKE" | tee "$SR_PHASE4_BI_ROOT/workload.sha256"
+```
+
+Restore/check the unmodified Target runner, probe once, then create two independent immutable C
+references. Target diagnostic rows are collected later from patched Target-only regressions,
+which must exactly equal these unmodified references.
+
+```bash
+python integrations/vllm/manage_patch.py restore \
+  --vllm-root "$SR_VLLM_ROOT" --source "$SR_VLLM_SOURCE" || \
+python integrations/vllm/manage_patch.py check \
+  --vllm-root "$SR_VLLM_ROOT" --source "$SR_VLLM_SOURCE"
+python integrations/vllm/manage_patch.py check \
+  --vllm-root "$SR_VLLM_ROOT" --source "$SR_VLLM_SOURCE"
+
+env -u CUDA_VISIBLE_DEVICES VLLM_BATCH_INVARIANT=1 specrhythm phase4-probe \
+  --config configs/phase4a_target_fair_1d2v.yaml \
+  --vllm-source "$SR_VLLM_SOURCE" \
+  --environment-output "$SR_PHASE4_BI_ROOT/environment.json" \
+  --topology-output "$SR_PHASE4_BI_ROOT/topology.json" \
+  --validation-output "$SR_PHASE4_BI_ROOT/probe-validation.json"
+
+for run_id in 1 2; do
+  run_dir="$SR_PHASE4_BI_ROOT/C-$run_id"
+  test ! -e "$run_dir"
+  mkdir -p "$run_dir"
+  CUDA_VISIBLE_DEVICES=1,2 VLLM_USE_V2_MODEL_RUNNER=0 VLLM_BATCH_INVARIANT=1 \
+  specrhythm phase4-stock-reference \
+    --config configs/phase4a_target_fair_1d2v.yaml \
+    --correctness-mode batch-invariant \
+    --workload "$SR_R3_SMOKE" \
+    --environment "$SR_PHASE4_BI_ROOT/environment.json" \
+    --topology "$SR_PHASE4_BI_ROOT/topology.json" \
+    --runtime-manifest "$run_dir/runtime-manifest.json" \
+    --output "$run_dir/stock-target-reference.json" \
+    2>&1 | tee "$run_dir/stock-reference.log"
+  chmod a-w "$run_dir/stock-target-reference.json"
+done
+```
+
+Apply the exact zero-fuzz Python observer patch, then run two patched Target-only regressions to
+collect C-side target diagnostics without changing token semantics.
+
+```bash
+python integrations/vllm/manage_patch.py apply \
+  --vllm-root "$SR_VLLM_ROOT" \
+  --source "$SR_VLLM_SOURCE" \
+  --manifest "$SR_PHASE4_BI_ROOT/vllm-base-and-patch-manifest.json"
+
+for run_id in 1 2; do
+  run_dir="$SR_PHASE4_BI_ROOT/C-$run_id"
+  CUDA_VISIBLE_DEVICES=1,2 VLLM_USE_V2_MODEL_RUNNER=0 VLLM_BATCH_INVARIANT=1 \
+  specrhythm phase4-target-regression \
+    --config configs/phase4a_target_fair_1d2v.yaml \
+    --correctness-mode batch-invariant \
+    --workload "$SR_R3_SMOKE" \
+    --environment "$SR_PHASE4_BI_ROOT/environment.json" \
+    --topology "$SR_PHASE4_BI_ROOT/topology.json" \
+    --runtime-manifest "$run_dir/patched-runtime-manifest.json" \
+    --reference "$run_dir/stock-target-reference.json" \
+    --patch-manifest "$SR_PHASE4_BI_ROOT/vllm-base-and-patch-manifest.json" \
+    --target-diagnostics "$run_dir/target-diagnostics.jsonl" \
+    --output "$run_dir/patched-target-regression.json" \
+    2>&1 | tee "$run_dir/patched-target-regression.log"
+done
+```
+
+Run D twice. Each run uses a new Draft process, socket, checkpoints, runtime manifest, diagnostic
+log, and result file. The Draft process receives no Target diagnostics.
+
+```bash
+run_batch_invariant_serial () {
+  run_id="$1"
+  run_dir="$SR_PHASE4_BI_ROOT/D-$run_id"
+  test ! -e "$run_dir"
+  mkdir -p "$run_dir"
+  CUDA_VISIBLE_DEVICES=0 VLLM_USE_V2_MODEL_RUNNER=0 VLLM_BATCH_INVARIANT=1 \
+  specrhythm phase4-draft-service \
+    --config configs/phase4a_target_fair_1d2v.yaml \
+    --socket "$run_dir/draft.sock" \
+    --event-log "$run_dir/draft-service-events.jsonl" \
+    --ready "$run_dir/draft-service-ready.json" \
+    >"$run_dir/draft-service.log" 2>&1 &
+  draft_pid="$!"
+  for _ in $(seq 1 600); do
+    test -f "$run_dir/draft-service-ready.json" && test -S "$run_dir/draft.sock" && break
+    kill -0 "$draft_pid" 2>/dev/null || { cat "$run_dir/draft-service.log"; return 1; }
+    sleep 1
+  done
+  test -S "$run_dir/draft.sock"
+  set +e
+  CUDA_VISIBLE_DEVICES=1,2 VLLM_USE_V2_MODEL_RUNNER=0 VLLM_BATCH_INVARIANT=1 \
+  specrhythm phase4-serial-run \
+    --config configs/phase4a_target_fair_1d2v.yaml \
+    --correctness-mode batch-invariant \
+    --workload "$SR_R3_SMOKE" \
+    --environment "$SR_PHASE4_BI_ROOT/environment.json" \
+    --topology "$SR_PHASE4_BI_ROOT/topology.json" \
+    --runtime-manifest "$run_dir/runtime-manifest.json" \
+    --reference "$SR_PHASE4_BI_ROOT/C-1/stock-target-reference.json" \
+    --patch-manifest "$SR_PHASE4_BI_ROOT/vllm-base-and-patch-manifest.json" \
+    --draft-socket "$run_dir/draft.sock" \
+    --draft-ready "$run_dir/draft-service-ready.json" \
+    --round-events "$run_dir/round-events.jsonl" \
+    --transport-events "$run_dir/transport-events.jsonl" \
+    --plugin-report "$run_dir/remote-proposer-report.json" \
+    --target-diagnostics "$run_dir/target-diagnostics.jsonl" \
+    --output "$run_dir/serial-run.json" \
+    >"$run_dir/target-serial.log" 2>&1
+  serial_status="$?"
+  set -e
+  wait "$draft_pid"
+  test -f "$run_dir/serial-run.json"
+  echo "$serial_status" >"$run_dir/serial-exit-status.txt"
+}
+run_batch_invariant_serial 1
+run_batch_invariant_serial 2
+```
+
+Validate C/D. A zero exit and `outcome=A` is the only Phase 4A.1 correctness pass.
+
+```bash
+set +e
+specrhythm phase4-batch-invariant-validate \
+  --stock-reference "$SR_PHASE4_BI_ROOT/C-1/stock-target-reference.json" \
+  --stock-reference "$SR_PHASE4_BI_ROOT/C-2/stock-target-reference.json" \
+  --target-regression "$SR_PHASE4_BI_ROOT/C-1/patched-target-regression.json" \
+  --target-regression "$SR_PHASE4_BI_ROOT/C-2/patched-target-regression.json" \
+  --serial-run "$SR_PHASE4_BI_ROOT/D-1/serial-run.json" \
+  --serial-run "$SR_PHASE4_BI_ROOT/D-2/serial-run.json" \
+  --round-events "$SR_PHASE4_BI_ROOT/D-1/round-events.jsonl" \
+  --round-events "$SR_PHASE4_BI_ROOT/D-2/round-events.jsonl" \
+  --target-diagnostics "$SR_PHASE4_BI_ROOT/C-1/target-diagnostics.jsonl" \
+  --target-diagnostics "$SR_PHASE4_BI_ROOT/C-2/target-diagnostics.jsonl" \
+  --serial-diagnostics "$SR_PHASE4_BI_ROOT/D-1/target-diagnostics.jsonl" \
+  --serial-diagnostics "$SR_PHASE4_BI_ROOT/D-2/target-diagnostics.jsonl" \
+  --output "$SR_PHASE4_BI_ROOT/validation.json" \
+  --markdown-output "$SR_PHASE4_BI_ROOT/summary.md"
+validation_status="$?"
+set -e
+cat "$SR_PHASE4_BI_ROOT/summary.md"
+```
+
+If `validation_status=0`, stop with Outcome A. If it is nonzero because C differs from D, create
+the first-divergence proof before running controls:
+
+```bash
+specrhythm phase4-divergence-diagnose \
+  --stock-diagnostics "$SR_PHASE4_BI_ROOT/C-1/target-diagnostics.jsonl" \
+  --serial-diagnostics "$SR_PHASE4_BI_ROOT/D-1/target-diagnostics.jsonl" \
+  --serial-run "$SR_PHASE4_BI_ROOT/D-1/serial-run.json" \
+  --output "$SR_PHASE4_BI_ROOT/first-divergence.json" || true
+cat "$SR_PHASE4_BI_ROOT/first-divergence.json"
+```
+
+Do not run the following K=1/2/4 matrix unless C != D. First freeze only the divergent request;
+no prompt or output limit is rewritten.
+
+```bash
+python - "$SR_R3_SMOKE" "$SR_PHASE4_BI_ROOT/D-1/serial-run.json" \
+  "$SR_PHASE4_BI_ROOT/divergent-request.jsonl" <<'PY'
+import json
+import sys
+run = json.load(open(sys.argv[2], encoding="utf-8"))
+item = next(row for row in run["comparison"]["requests"]
+            if row["first_divergence_position"] is not None)
+request_id = item["request_id"]
+rows = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
+row = next(row for row in rows if row["request_id"] == request_id)
+with open(sys.argv[3], "x", encoding="utf-8") as handle:
+    handle.write(json.dumps(row, sort_keys=True, separators=(",", ":")) + "\n")
+print(request_id)
+PY
+
+for k in 1 2 4; do
+  control_dir="$SR_PHASE4_BI_ROOT/controls/K$k"
+  mkdir -p "$control_dir"
+  CUDA_VISIBLE_DEVICES=1,2 VLLM_USE_V2_MODEL_RUNNER=0 VLLM_BATCH_INVARIANT=1 \
+  specrhythm phase4-fixed-control-run \
+    --config configs/phase4a_target_fair_1d2v.yaml \
+    --workload "$SR_PHASE4_BI_ROOT/divergent-request.jsonl" \
+    --environment "$SR_PHASE4_BI_ROOT/environment.json" \
+    --topology "$SR_PHASE4_BI_ROOT/topology.json" \
+    --patch-manifest "$SR_PHASE4_BI_ROOT/vllm-base-and-patch-manifest.json" \
+    --proposer local-static --proposal-budget "$k" \
+    --target-diagnostics "$control_dir/local-diagnostics.jsonl" \
+    --output "$control_dir/local-run.json"
+
+  specrhythm phase4-fixed-proposal-service \
+    --socket "$control_dir/fixed.sock" >"$control_dir/fixed-service.log" 2>&1 &
+  fixed_pid="$!"
+  for _ in $(seq 1 60); do
+    test -S "$control_dir/fixed.sock" && break
+    kill -0 "$fixed_pid" 2>/dev/null || { cat "$control_dir/fixed-service.log"; exit 1; }
+    sleep 1
+  done
+  CUDA_VISIBLE_DEVICES=1,2 VLLM_USE_V2_MODEL_RUNNER=0 VLLM_BATCH_INVARIANT=1 \
+  specrhythm phase4-fixed-control-run \
+    --config configs/phase4a_target_fair_1d2v.yaml \
+    --workload "$SR_PHASE4_BI_ROOT/divergent-request.jsonl" \
+    --environment "$SR_PHASE4_BI_ROOT/environment.json" \
+    --topology "$SR_PHASE4_BI_ROOT/topology.json" \
+    --patch-manifest "$SR_PHASE4_BI_ROOT/vllm-base-and-patch-manifest.json" \
+    --proposer remote-fixed --proposal-budget "$k" \
+    --remote-socket "$control_dir/fixed.sock" \
+    --target-diagnostics "$control_dir/remote-diagnostics.jsonl" \
+    --output "$control_dir/remote-run.json"
+  wait "$fixed_pid"
+done
+
+specrhythm phase4-fixed-control-validate \
+  --local-run "$SR_PHASE4_BI_ROOT/controls/K1/local-run.json" \
+  --local-run "$SR_PHASE4_BI_ROOT/controls/K2/local-run.json" \
+  --local-run "$SR_PHASE4_BI_ROOT/controls/K4/local-run.json" \
+  --remote-run "$SR_PHASE4_BI_ROOT/controls/K1/remote-run.json" \
+  --remote-run "$SR_PHASE4_BI_ROOT/controls/K2/remote-run.json" \
+  --remote-run "$SR_PHASE4_BI_ROOT/controls/K4/remote-run.json" \
+  --local-diagnostics "$SR_PHASE4_BI_ROOT/controls/K1/local-diagnostics.jsonl" \
+  --local-diagnostics "$SR_PHASE4_BI_ROOT/controls/K2/local-diagnostics.jsonl" \
+  --local-diagnostics "$SR_PHASE4_BI_ROOT/controls/K4/local-diagnostics.jsonl" \
+  --remote-diagnostics "$SR_PHASE4_BI_ROOT/controls/K1/remote-diagnostics.jsonl" \
+  --remote-diagnostics "$SR_PHASE4_BI_ROOT/controls/K2/remote-diagnostics.jsonl" \
+  --remote-diagnostics "$SR_PHASE4_BI_ROOT/controls/K4/remote-diagnostics.jsonl" \
+  --output "$SR_PHASE4_BI_ROOT/fixed-control-validation.json"
+```
+
+Outcome B requires both `first-divergence.json.valid=true` and
+`fixed-control-validation.json.local_remote_all_equal=true`; exact C/D correctness still has not
+passed. Otherwise classify Outcome C and return to integration debugging.
+
+---
+
+# Phase 4A.1 default-mode A/B provenance (3×A800)
 
 This runbook executes a five-request GPU correctness smoke. It does not benchmark performance,
 replay arrivals, report SLO/goodput/speedup, or implement Dual-Batch, Eager, packed trees, TP3, or

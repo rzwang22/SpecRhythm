@@ -1,5 +1,5 @@
 diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
-index e9b23f1..96162ed 100644
+index e9b23f1..baab434 100644
 --- a/vllm/v1/worker/gpu_model_runner.py
 +++ b/vllm/v1/worker/gpu_model_runner.py
 @@ -4334,0 +4335,15 @@ class GPUModelRunner(
@@ -18,21 +18,7 @@ index e9b23f1..96162ed 100644
 +                        scheduler_output.scheduled_spec_decode_tokens.copy()
 +                    ),
 +                )
-@@ -4418,0 +4434,13 @@ class GPUModelRunner(
-+        from specrhythm.phase4.vllm_diagnostics import capture_target_forward
-+
-+        capture_target_forward(
-+            self,
-+            scheduler_output=scheduler_output,
-+            logits=logits,
-+            spec_decode_metadata=spec_decode_metadata,
-+            logits_indices=logits_indices,
-+            positions=positions,
-+            num_scheduled_tokens=num_scheduled_tokens_np.tolist(),
-+            common_attention_metadata=spec_decode_common_attn_metadata,
-+        )
-+
-@@ -4636,0 +4665,16 @@ class GPUModelRunner(
+@@ -4636,0 +4652,16 @@ class GPUModelRunner(
 +            if (
 +                spec_config is not None
 +                and spec_config.method == "custom_class"
@@ -49,5 +35,5 @@ index e9b23f1..96162ed 100644
 +                            scheduler_output.scheduled_spec_decode_tokens.copy()
 +                        ),
 +                    )
-@@ -4948,0 +4993 @@ class GPUModelRunner(
+@@ -4948,0 +4980 @@ class GPUModelRunner(
 +                request_ids=self.input_batch.req_ids.copy(),

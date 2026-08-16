@@ -154,6 +154,7 @@ def collect_environment(vllm_source: Path) -> dict[str, Any]:
         "transformers": transformers,
         "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES"),
         "attention_backend_env": os.environ.get("VLLM_ATTENTION_BACKEND"),
+        "batch_invariant_env": os.environ.get("VLLM_BATCH_INVARIANT"),
         "errors": errors,
     }
     report["available"] = not errors
@@ -326,8 +327,34 @@ def build_runtime_manifest(
     topology_path: Path,
     worker_ranks: Sequence[Mapping[str, Any]],
     attention_backend: Optional[str],
+    correctness_mode: str = "default",
+    mode_setup: Optional[Mapping[str, Any]] = None,
+    batch_invariant_validation: Optional[Mapping[str, Any]] = None,
 ) -> dict[str, Any]:
     engine = config.draft if role == "draft" else config.target
+    requested = correctness_mode == "batch-invariant"
+    validation = (
+        dict(batch_invariant_validation)
+        if batch_invariant_validation is not None
+        else {
+            "batch_invariant_requested": requested,
+            "batch_invariant_effective": False,
+            "batch_invariant_validation": {
+                "valid": not requested,
+                "errors": (
+                    [] if not requested else ["worker evidence was not supplied"]
+                ),
+                "fail_closed": True,
+            },
+        }
+    )
+    all_reduce_backends = sorted(
+        {
+            str(backend)
+            for row in worker_ranks
+            for backend in row.get("all_reduce_backends", ())
+        }
+    )
     return {
         "schema_version": "specrhythm.phase4-runtime-manifest.v1",
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -346,6 +373,46 @@ def build_runtime_manifest(
             "vllm_dbo_enabled": False,
             "specrhythm_dual_batch_implemented": False,
             "attention_backend": attention_backend,
+            "all_reduce_backends": all_reduce_backends,
+        },
+        "correctness": {
+            "mode": correctness_mode,
+            "VLLM_BATCH_INVARIANT": "1" if requested else "0",
+            "batch_invariant_requested": validation.get(
+                "batch_invariant_requested", requested
+            ),
+            "batch_invariant_effective": validation.get(
+                "batch_invariant_effective", False
+            ),
+            "batch_invariant_validation": validation.get(
+                "batch_invariant_validation"
+            ),
+            "configured_before_worker_creation": bool(
+                mode_setup
+                and mode_setup.get("configured_before_vllm_import") is True
+            ),
+            "pinned_vllm_hardware_contract": "NVIDIA compute capability >= 9.0",
+            "deterministic_sampling": config.sampling.do_sample is False,
+            "worker_configuration_evidence": [
+                {
+                    key: row.get(key)
+                    for key in (
+                        "global_rank",
+                        "batch_invariant_env_raw",
+                        "batch_invariant_env_resolved",
+                        "batch_invariant_effective",
+                        "compute_capability",
+                        "documented_hardware_supported",
+                        "disable_custom_all_reduce",
+                        "all_reduce_backends",
+                        "attention_batch_invariance",
+                        "cascade_attention_enabled",
+                        "vllm_dbo_enabled",
+                        "dtype",
+                    )
+                }
+                for row in worker_ranks
+            ],
         },
         "engine": {
             "physical_gpu_ids": list(engine.physical_gpu_ids),
@@ -420,6 +487,26 @@ def validate_runtime_manifest(value: Mapping[str, Any], config: Phase4Config) ->
     inputs = value.get("inputs")
     if not isinstance(inputs, Mapping) or inputs.get("config_sha256") != sha256_file(config.path):
         errors.append("runtime config checksum does not match the checked config")
+    correctness = value.get("correctness")
+    if not isinstance(correctness, Mapping):
+        errors.append("runtime correctness configuration is missing")
+    else:
+        requested = correctness.get("batch_invariant_requested")
+        effective = correctness.get("batch_invariant_effective")
+        validation = correctness.get("batch_invariant_validation")
+        if requested not in (True, False):
+            errors.append("runtime batch-invariant requested flag is invalid")
+        if effective not in (True, False):
+            errors.append("runtime batch-invariant effective flag is invalid")
+        if correctness.get("configured_before_worker_creation") is not True:
+            errors.append("correctness mode was not configured before worker creation")
+        if not isinstance(validation, Mapping) or validation.get("valid") is not True:
+            errors.append("runtime batch-invariant validation did not pass")
+        if requested is True and effective is not True:
+            errors.append("requested batch-invariant mode is not proven effective")
+        expected_env = "1" if requested is True else "0"
+        if correctness.get("VLLM_BATCH_INVARIANT") != expected_env:
+            errors.append("runtime batch-invariant environment setting is inconsistent")
     for row in rows:
         if not isinstance(row, Mapping):
             errors.append("invalid worker rank record")

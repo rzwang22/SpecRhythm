@@ -16,8 +16,12 @@ from typing import Any, Mapping, Optional
 BASE_COMMIT = "752a3a504485790a2e8491cacbb35c137339ad34"
 TARGET_FILE = Path("vllm/v1/worker/gpu_model_runner.py")
 BASE_SHA256 = "6c92ded8468f44d6df863a617ce588f132fa6df7031feecc0cc421702a41610e"
-PATCHED_SHA256 = "ba307cbfdfa9079c04e1bf9bb6387eb923cbabb1eea811e720a94897ea6483fa"
+PATCHED_SHA256 = "a99c410cd791f20071bb17b8a619e5b309427b50ed864b8753d066c1dc4b150c"
 PATCH = Path(__file__).parent / "patches" / "0001-custom-proposer-request-and-verify-hooks.patch"
+LEGACY_PATCHED_SHA256 = (
+    "ba307cbfdfa9079c04e1bf9bb6387eb923cbabb1eea811e720a94897ea6483fa"
+)
+LEGACY_PATCH = Path(__file__).parent / "patches" / "0000-phase4a1-legacy-hooks.patch"
 
 
 def sha256(path: Path) -> str:
@@ -28,13 +32,15 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def run_patch(root: Path, *, reverse: bool, dry_run: bool) -> subprocess.CompletedProcess[str]:
+def run_patch(
+    root: Path, *, patch: Path, reverse: bool, dry_run: bool
+) -> subprocess.CompletedProcess[str]:
     command = ["patch", "--batch", "--fuzz=0", "-p1", "-d", str(root)]
     if dry_run:
         command.append("--dry-run")
     if reverse:
         command.append("--reverse")
-    command.extend(("-i", str(PATCH)))
+    command.extend(("-i", str(patch)))
     return subprocess.run(command, capture_output=True, text=True, check=False)
 
 
@@ -85,17 +91,23 @@ def main() -> int:
     if not target.is_file():
         raise SystemExit(f"missing installed vLLM file: {target}")
     before = sha256(target)
-    expected = PATCHED_SHA256 if args.operation == "restore" else BASE_SHA256
-    if before != expected:
+    expected = (
+        {PATCHED_SHA256, LEGACY_PATCHED_SHA256}
+        if args.operation == "restore"
+        else {BASE_SHA256}
+    )
+    if before not in expected:
         raise SystemExit(
-            f"refusing {args.operation}: {TARGET_FILE} SHA256 is {before}, expected {expected}"
+            f"refusing {args.operation}: {TARGET_FILE} SHA256 is {before}, "
+            f"expected one of {sorted(expected)}"
         )
     reverse = args.operation == "restore"
-    check = run_patch(root, reverse=reverse, dry_run=True)
+    active_patch = LEGACY_PATCH if before == LEGACY_PATCHED_SHA256 else PATCH
+    check = run_patch(root, patch=active_patch, reverse=reverse, dry_run=True)
     if check.returncode != 0:
         raise SystemExit(check.stdout + check.stderr)
     if args.operation in {"apply", "restore"}:
-        applied = run_patch(root, reverse=reverse, dry_run=False)
+        applied = run_patch(root, patch=active_patch, reverse=reverse, dry_run=False)
         if applied.returncode != 0:
             raise SystemExit(applied.stdout + applied.stderr)
     after = sha256(target)
@@ -111,8 +123,8 @@ def main() -> int:
         "vllm_version": "0.25.1",
         "vllm_base_commit": BASE_COMMIT,
         "verified_source_commit": commit,
-        "patch_file": PATCH.name,
-        "patch_sha256": sha256(PATCH),
+        "patch_file": active_patch.name,
+        "patch_sha256": sha256(active_patch),
         "patch_scope": [str(TARGET_FILE)],
         "python_only": True,
         "cpp_cuda_modified": False,

@@ -551,6 +551,12 @@ def build_parser() -> argparse.ArgumentParser:
     phase4_smoke.add_argument("--topology", required=True)
     phase4_smoke.add_argument("--runtime-manifest", required=True)
     phase4_smoke.add_argument("--frozen-hf-target-dir")
+    phase4_smoke.add_argument(
+        "--correctness-mode",
+        choices=("default", "batch-invariant"),
+        default="default",
+    )
+    phase4_smoke.add_argument("--target-diagnostics")
     phase4_smoke.add_argument("--output", required=True)
 
     phase4_validate = subparsers.add_parser(
@@ -576,6 +582,12 @@ def build_parser() -> argparse.ArgumentParser:
     phase4_reference.add_argument("--topology", required=True)
     phase4_reference.add_argument("--runtime-manifest", required=True)
     phase4_reference.add_argument("--legacy-hf-target-dir")
+    phase4_reference.add_argument(
+        "--correctness-mode",
+        choices=("default", "batch-invariant"),
+        default="default",
+    )
+    phase4_reference.add_argument("--target-diagnostics")
     phase4_reference.add_argument("--output", required=True)
 
     phase4_regression = subparsers.add_parser(
@@ -590,6 +602,12 @@ def build_parser() -> argparse.ArgumentParser:
     phase4_regression.add_argument("--reference", required=True)
     phase4_regression.add_argument("--patch-manifest", required=True)
     phase4_regression.add_argument("--legacy-hf-target-dir")
+    phase4_regression.add_argument(
+        "--correctness-mode",
+        choices=("default", "batch-invariant"),
+        default="default",
+    )
+    phase4_regression.add_argument("--target-diagnostics")
     phase4_regression.add_argument("--output", required=True)
 
     phase4_draft_service = subparsers.add_parser(
@@ -617,6 +635,12 @@ def build_parser() -> argparse.ArgumentParser:
     phase4_serial.add_argument("--round-events", required=True)
     phase4_serial.add_argument("--transport-events", required=True)
     phase4_serial.add_argument("--plugin-report", required=True)
+    phase4_serial.add_argument(
+        "--correctness-mode",
+        choices=("default", "batch-invariant"),
+        default="default",
+    )
+    phase4_serial.add_argument("--target-diagnostics")
     phase4_serial.add_argument("--output", required=True)
 
     phase4_serial_validate = subparsers.add_parser(
@@ -634,6 +658,84 @@ def build_parser() -> argparse.ArgumentParser:
     )
     phase4_serial_validate.add_argument("--output", required=True)
     phase4_serial_validate.add_argument("--markdown-output", required=True)
+
+    phase4_bi_probe = subparsers.add_parser(
+        "phase4-batch-invariant-preflight",
+        help="fail-closed hardware preflight before creating any vLLM worker",
+    )
+    phase4_bi_probe.add_argument(
+        "--correctness-mode",
+        choices=("default", "batch-invariant"),
+        default="batch-invariant",
+    )
+    phase4_bi_probe.add_argument("--output", required=True)
+
+    phase4_bi_validate = subparsers.add_parser(
+        "phase4-batch-invariant-validate",
+        help="validate two independent C stock and D Serial correctness runs",
+    )
+    phase4_bi_validate.add_argument("--stock-reference", action="append", required=True)
+    phase4_bi_validate.add_argument(
+        "--target-regression", action="append", required=True
+    )
+    phase4_bi_validate.add_argument("--serial-run", action="append", required=True)
+    phase4_bi_validate.add_argument("--round-events", action="append", required=True)
+    phase4_bi_validate.add_argument(
+        "--target-diagnostics", action="append", required=True
+    )
+    phase4_bi_validate.add_argument(
+        "--serial-diagnostics", action="append", required=True
+    )
+    phase4_bi_validate.add_argument("--output", required=True)
+    phase4_bi_validate.add_argument("--markdown-output", required=True)
+
+    phase4_fixed_service = subparsers.add_parser(
+        "phase4-fixed-proposal-service",
+        help="serve the fixed diagnostic proposal over a local Unix socket",
+    )
+    phase4_fixed_service.add_argument("--socket", required=True)
+
+    phase4_fixed_run = subparsers.add_parser(
+        "phase4-fixed-control-run",
+        help="run one single-request K=1/2/4 local or remote fixed-proposal control",
+    )
+    phase4_fixed_run.add_argument("--config", required=True)
+    phase4_fixed_run.add_argument("--workload", required=True)
+    phase4_fixed_run.add_argument("--environment", required=True)
+    phase4_fixed_run.add_argument("--topology", required=True)
+    phase4_fixed_run.add_argument("--patch-manifest", required=True)
+    phase4_fixed_run.add_argument(
+        "--proposer", choices=("local-static", "remote-fixed"), required=True
+    )
+    phase4_fixed_run.add_argument(
+        "--proposal-budget", type=int, choices=(1, 2, 4), required=True
+    )
+    phase4_fixed_run.add_argument("--remote-socket")
+    phase4_fixed_run.add_argument("--target-diagnostics", required=True)
+    phase4_fixed_run.add_argument("--output", required=True)
+
+    phase4_fixed_validate = subparsers.add_parser(
+        "phase4-fixed-control-validate",
+        help="compare local-static and remote-fixed controls for K=1/2/4",
+    )
+    phase4_fixed_validate.add_argument("--local-run", action="append", required=True)
+    phase4_fixed_validate.add_argument("--remote-run", action="append", required=True)
+    phase4_fixed_validate.add_argument(
+        "--local-diagnostics", action="append", required=True
+    )
+    phase4_fixed_validate.add_argument(
+        "--remote-diagnostics", action="append", required=True
+    )
+    phase4_fixed_validate.add_argument("--output", required=True)
+
+    phase4_divergence = subparsers.add_parser(
+        "phase4-divergence-diagnose",
+        help="prove prefix/logits/position/KV mapping at the first C/D divergence",
+    )
+    phase4_divergence.add_argument("--stock-diagnostics", required=True)
+    phase4_divergence.add_argument("--serial-diagnostics", required=True)
+    phase4_divergence.add_argument("--serial-run", required=True)
+    phase4_divergence.add_argument("--output", required=True)
     return parser
 
 
@@ -734,8 +836,20 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     if args.frozen_hf_target_dir
                     else None
                 ),
+                correctness_mode=args.correctness_mode,
+                diagnostics_path=(
+                    Path(args.target_diagnostics).resolve()
+                    if args.target_diagnostics
+                    else None
+                ),
             )
-        except (FileNotFoundError, ImportError, RuntimeError, ValueError) as error:
+        except (
+            FileExistsError,
+            FileNotFoundError,
+            ImportError,
+            RuntimeError,
+            ValueError,
+        ) as error:
             raise SystemExit(f"Phase-4 stock smoke failed: {error}") from error
         _write_json(report, args.output)
         return 0
@@ -786,6 +900,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     if args.legacy_hf_target_dir
                     else None
                 ),
+                correctness_mode=args.correctness_mode,
+                diagnostics_path=(
+                    Path(args.target_diagnostics).resolve()
+                    if args.target_diagnostics
+                    else None
+                ),
             )
         except (
             FileExistsError,
@@ -813,6 +933,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 legacy_hf_target_dir=(
                     Path(args.legacy_hf_target_dir).resolve()
                     if args.legacy_hf_target_dir
+                    else None
+                ),
+                correctness_mode=args.correctness_mode,
+                diagnostics_path=(
+                    Path(args.target_diagnostics).resolve()
+                    if args.target_diagnostics
                     else None
                 ),
             )
@@ -843,7 +969,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if args.command == "phase4-serial-run":
         from specrhythm.phase4.config import load_phase4_config
         from specrhythm.phase4.serial_runner import run_serial_disaggregated
-
         output_path = Path(args.output).resolve()
         if output_path.exists():
             raise SystemExit(f"refusing to overwrite Serial run artifact {output_path}")
@@ -862,6 +987,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 transport_events_path=Path(args.transport_events).resolve(),
                 plugin_report_path=Path(args.plugin_report).resolve(),
                 git_commit=_current_git_commit() or "unknown",
+                correctness_mode=args.correctness_mode,
+                diagnostics_path=(
+                    Path(args.target_diagnostics).resolve()
+                    if args.target_diagnostics
+                    else None
+                ),
             )
         except (
             FileExistsError,
@@ -908,6 +1039,140 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         markdown = Path(args.markdown_output).resolve()
         markdown.parent.mkdir(parents=True, exist_ok=True)
         markdown.write_text(serial_summary_markdown(report, runs), encoding="utf-8")
+        return 0 if report["valid"] else 1
+    if args.command == "phase4-batch-invariant-preflight":
+        from specrhythm.phase4.batch_invariant import (
+            probe_batch_invariant_hardware,
+        )
+
+        try:
+            report = probe_batch_invariant_hardware(args.correctness_mode)
+        except (RuntimeError, ValueError) as error:
+            report = {
+                "schema_version": "specrhythm.phase4-batch-invariant-preflight.v1",
+                "valid": False,
+                "batch_invariant_effective": False,
+                "errors": [str(error)],
+            }
+        _write_json(report, args.output)
+        return 0 if report["valid"] else 2
+    if args.command == "phase4-batch-invariant-validate":
+        from specrhythm.phase4.correctness_validation import (
+            correctness_markdown,
+            validate_batch_invariant_experiment,
+        )
+
+        try:
+            report = validate_batch_invariant_experiment(
+                stock_reference_paths=[
+                    Path(path).resolve() for path in args.stock_reference
+                ],
+                target_regression_paths=[
+                    Path(path).resolve() for path in args.target_regression
+                ],
+                serial_run_paths=[Path(path).resolve() for path in args.serial_run],
+                round_event_paths=[Path(path).resolve() for path in args.round_events],
+                target_diagnostic_paths=[
+                    Path(path).resolve() for path in args.target_diagnostics
+                ],
+                serial_diagnostic_paths=[
+                    Path(path).resolve() for path in args.serial_diagnostics
+                ],
+            )
+        except (FileNotFoundError, json.JSONDecodeError, RuntimeError, ValueError) as error:
+            report = {
+                "schema_version": "specrhythm.phase4a1.1-batch-invariant-validation.v1",
+                "valid": False,
+                "outcome": "invalid-artifacts",
+                "errors": [str(error)],
+            }
+        _write_json(report, args.output)
+        markdown = Path(args.markdown_output).resolve()
+        markdown.parent.mkdir(parents=True, exist_ok=True)
+        markdown.write_text(correctness_markdown(report), encoding="utf-8")
+        return 0 if report["valid"] else 1
+    if args.command == "phase4-fixed-proposal-service":
+        from specrhythm.phase4.fixed_control import run_fixed_proposal_service
+
+        try:
+            run_fixed_proposal_service(Path(args.socket).resolve())
+        except (FileExistsError, RuntimeError, ValueError) as error:
+            raise SystemExit(f"fixed-proposal service failed: {error}") from error
+        return 0
+    if args.command == "phase4-fixed-control-run":
+        from specrhythm.phase4.config import load_phase4_config
+        from specrhythm.phase4.serial_runner import run_fixed_proposal_control
+
+        output_path = Path(args.output).resolve()
+        if output_path.exists():
+            raise SystemExit(f"refusing to overwrite fixed control {output_path}")
+        try:
+            report = run_fixed_proposal_control(
+                load_phase4_config(args.config),
+                workload_path=Path(args.workload).resolve(),
+                environment_path=Path(args.environment).resolve(),
+                topology_path=Path(args.topology).resolve(),
+                patch_manifest_path=Path(args.patch_manifest).resolve(),
+                diagnostics_path=Path(args.target_diagnostics).resolve(),
+                git_commit=_current_git_commit() or "unknown",
+                proposer=args.proposer,
+                proposal_budget=args.proposal_budget,
+                remote_socket_path=(
+                    Path(args.remote_socket).resolve() if args.remote_socket else None
+                ),
+            )
+        except (
+            FileExistsError,
+            FileNotFoundError,
+            ImportError,
+            RuntimeError,
+            ValueError,
+        ) as error:
+            raise SystemExit(f"fixed-proposal control failed: {error}") from error
+        _write_json(report, output_path)
+        return 0
+    if args.command == "phase4-fixed-control-validate":
+        from specrhythm.phase4.correctness_validation import (
+            validate_fixed_control_matrix,
+        )
+
+        try:
+            report = validate_fixed_control_matrix(
+                local_run_paths=[Path(path).resolve() for path in args.local_run],
+                remote_run_paths=[Path(path).resolve() for path in args.remote_run],
+                local_diagnostic_paths=[
+                    Path(path).resolve() for path in args.local_diagnostics
+                ],
+                remote_diagnostic_paths=[
+                    Path(path).resolve() for path in args.remote_diagnostics
+                ],
+            )
+        except (FileNotFoundError, json.JSONDecodeError, RuntimeError, ValueError) as error:
+            report = {
+                "schema_version": "specrhythm.phase4-fixed-control-matrix.v1",
+                "valid": False,
+                "errors": [str(error)],
+            }
+        _write_json(report, args.output)
+        return 0 if report["valid"] else 1
+    if args.command == "phase4-divergence-diagnose":
+        from specrhythm.phase4.correctness_validation import (
+            diagnose_first_divergence,
+        )
+
+        try:
+            report = diagnose_first_divergence(
+                stock_diagnostics_path=Path(args.stock_diagnostics).resolve(),
+                serial_diagnostics_path=Path(args.serial_diagnostics).resolve(),
+                serial_run_path=Path(args.serial_run).resolve(),
+            )
+        except (FileNotFoundError, json.JSONDecodeError, RuntimeError, ValueError) as error:
+            report = {
+                "schema_version": "specrhythm.phase4-first-divergence.v1",
+                "valid": False,
+                "errors": [str(error)],
+            }
+        _write_json(report, args.output)
         return 0 if report["valid"] else 1
     if args.command == "gpu-probe":
         from specrhythm.phase3.probe import probe_gpu_environment
