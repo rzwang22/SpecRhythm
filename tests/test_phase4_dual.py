@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Any, Mapping, Sequence, Tuple
@@ -427,6 +428,7 @@ def test_target_failure_terminates_draft_without_unbounded_wait(tmp_path):
             "DRAFT_LOG": str(tmp_path / "draft.log"),
             "PHASE4B_CLEANUP_POLLS": "5",
             "PHASE4B_CLEANUP_SLEEP_SECONDS": "0.01",
+            "PHASE4B_PYTHON": sys.executable,
         }
     )
     completed = subprocess.run(

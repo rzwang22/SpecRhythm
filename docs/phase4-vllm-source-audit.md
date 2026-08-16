@@ -81,18 +81,28 @@ path. `EngineCore.post_step()` normally receives proposals from the worker only 
 step. A synchronous remote proposer therefore cannot implement Dual-Batch: it blocks Target on
 Draft and remains Serial.
 
-The pinned release already exposes `SchedulerConfig.scheduler_cls`. Phase 4B uses that supported
-extension for a narrow readiness gate: poll completed GPU-0 work, validate the proposal parent,
-assign `request.spec_token_ids`, temporarily defer non-ready decode requests, then invoke
-`super().schedule()`. It does not replace queues, allocation, preemption, paged KV, attention or
-rejection sampling. Heavy Draft work is moved to a single background queue in the separate Draft
-process, so the scheduler's Unix-socket poll never holds the Draft model lock or waits for a
-forward.
+The pinned release exposes `SchedulerConfig.scheduler_cls`, but the first GPU construction run
+proved that its existing cadence field is not an external-readiness API: `schedule()` increments
+`current_step` before checking `next_decode_eligible_step`. The earlier adapter's `current_step+1`
+mutation therefore allowed one ordinary Target decode for a request still waiting on Draft.
 
-The existing `0001` worker patch already provides the two remaining requirements: stable request
-IDs at the custom proposer callback and optional verify start/end observers. Therefore no
-`0002` patch is needed. Patch scope remains one Python file,
-`vllm/v1/worker/gpu_model_runner.py`; C++/CUDA/Triton, scheduler source, sampler, logits,
-attention mask and KV policy remain unchanged. Dual mode itself is fail-closed behind
-`SR_PHASE4_DUAL_BATCH=1` and an explicit custom scheduler/proposer configuration. Default and
-Target-only behavior are unchanged.
+Phase 4B.0a instead adds a default-off hook in the stock running-request loop, before any token
+budget or KV allocation. The out-of-tree scheduler supplies a request-level predicate that allows
+setup prefill, a matching unconsumed proposal, or a legal terminal Target tail. A denied request is
+skipped with the stock loop's normal `req_index += 1`, so later ready work remains schedulable.
+The adapter no longer writes `next_decode_eligible_step`; queue order, allocation, preemption,
+paged KV, attention, rejection sampling and internal cadence remain owned by vLLM.
+
+The worker observer remains independent patch `0001`. The explicit scheduler hook is patch
+`0002-scheduler-request-admissibility-hook.patch`, applied second and restored first. Its exact
+base/patched scheduler SHA256 values are enforced alongside the worker file by
+`integrations/vllm/manage_patch.py`. Neither patch changes C++/CUDA/Triton, sampler, logits,
+attention, model weights or TP partitioning. The hook is absent from the stock scheduler class and
+therefore inert unless the explicit Phase-4B subclass implements it. Dual mode remains fail-closed
+behind `SR_PHASE4_DUAL_BATCH=1`; default and Target-only behavior are unchanged.
+
+Target process ownership is separate from scheduler semantics. Phase 4B.0a launches the Target
+coordinator with Python `start_new_session=True`, records its PID/PGID/session and all observed
+members, propagates the coordinator exit code, and checks the complete owned group. A wrapper that
+exits while an EngineCore/worker descendant remains is a failed run. Cleanup signals only the
+recorded PGID (TERM, then bounded KILL) and leaves an active-run guard if cleanup validation fails.

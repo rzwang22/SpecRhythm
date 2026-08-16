@@ -44,6 +44,9 @@ from specrhythm.phase4.vllm_installation import locate_installed_vllm_file
 PATCHED_VLLM_RUNNER_SHA256 = (
     "a99c410cd791f20071bb17b8a619e5b309427b50ed864b8753d066c1dc4b150c"
 )
+PATCHED_VLLM_SCHEDULER_SHA256 = (
+    "ffaefd61869589f086e6acdf9a0c4f55f80d5dad145ca3f6fff2379f7a4e2455"
+)
 
 
 def load_patch_manifest(path: Path, config: Phase4Config) -> dict[str, Any]:
@@ -87,6 +90,32 @@ def validate_installed_patched_runner(patch_manifest: Mapping[str, Any]) -> dict
             f"found SHA256 {actual}"
         )
     return {"file": str(relative), "sha256": actual, "matches_manifest": True}
+
+
+def validate_installed_patch_stack(patch_manifest: Mapping[str, Any]) -> dict[str, Any]:
+    """Require both the worker hooks and Phase-4B scheduler hook."""
+
+    runner = validate_installed_patched_runner(patch_manifest)
+    if patch_manifest.get("patch_stack_applied") is not True:
+        raise RuntimeError("Phase-4B requires the complete ordered vLLM patch stack")
+    relative = Path("vllm/v1/core/sched/scheduler.py")
+    path = locate_installed_vllm_file(relative)
+    actual = sha256_file(path)
+    expected = str(patch_manifest.get("scheduler_file_sha256_after", ""))
+    if actual != expected or actual != PATCHED_VLLM_SCHEDULER_SHA256:
+        raise RuntimeError(
+            "installed vLLM scheduler does not match the recorded Phase-4B patch; "
+            f"found SHA256 {actual}"
+        )
+    return {
+        "ordered_patch_stack_valid": True,
+        "runner": runner,
+        "scheduler": {
+            "file": str(relative),
+            "sha256": actual,
+            "matches_manifest": True,
+        },
+    }
 
 
 def validate_engine_residency(

@@ -12,6 +12,15 @@ import time
 from pathlib import Path
 from typing import Any, Mapping
 
+from specrhythm.phase4.admissibility import (
+    AdmissibilityDecision,
+    AdmissibilitySnapshot,
+    ExecutionPhase,
+    ProposalEvidence,
+    SchedulerRequestState,
+    decide_admissibility,
+    decision_event,
+)
 from specrhythm.phase4.dual import DualProposal
 from specrhythm.phase4.dual_service import DualDraftClient
 from specrhythm.phase4.request_identity import (
@@ -60,6 +69,13 @@ class DualBatchScheduler(Scheduler):
         # cadence fields remain internal-ID keyed.
         self._dual_tail_ready: set[str] = set()
         self._dual_proposals: dict[str, DualProposal] = {}
+        self._dual_consumed_proposals: set[str] = set()
+        self._dual_drafting: set[str] = set()
+        self._dual_decisions: dict[str, tuple[AdmissibilitySnapshot, AdmissibilityDecision]] = {}
+        ttl_seconds = float(os.environ.get("SR_PHASE4_PROPOSAL_TTL_SECONDS", "0"))
+        if ttl_seconds < 0:
+            raise RuntimeError("proposal TTL must be non-negative")
+        self._dual_proposal_ttl_ns = int(ttl_seconds * 1_000_000_000)
         existing_cycles = self._dual_events.read()
         self._dual_cycle_id = 1 + max(
             (int(row.get("cycle_id", -1)) for row in existing_cycles), default=-1
@@ -90,28 +106,19 @@ class DualBatchScheduler(Scheduler):
             raise RuntimeError(f"asynchronous Draft failure: {failures}")
         for result in response.get("ready", ()):
             self._accept_ready_result(result)
+        pending = response.get("pending_request_ids", ())
+        self._dual_drafting = {str(item) for item in pending}
+        self._dual_decisions = {
+            str(request.request_id): self._decision_for(request)
+            for request in self.requests.values()
+        }
 
-        # The stock scheduler already has a cadence gate.  Temporarily move
-        # ineligible decode requests beyond this step and restore the original
-        # values afterward.  No stock queue/KV/allocation behavior is replaced.
-        deferred: dict[str, int] = {}
-        for request in self.running:
-            stable_id = self._dual_identity.stable_id(str(request.request_id))
-            bootstrap = request.num_output_tokens == 0
-            eligible = bootstrap or bool(request.spec_token_ids)
-            eligible = eligible or stable_id in self._dual_tail_ready
-            if not eligible:
-                deferred[request.request_id] = request.next_decode_eligible_step
-                request.next_decode_eligible_step = max(
-                    request.next_decode_eligible_step, self.current_step + 1
-                )
-        try:
-            output = super().schedule(*args, **kwargs)
-        finally:
-            for request_id, original in deferred.items():
-                request = self.requests.get(request_id)
-                if request is not None:
-                    request.next_decode_eligible_step = original
+        # The independent pinned-vLLM scheduler patch invokes
+        # _request_admissible_for_schedule immediately before stock allocation.
+        # Queue traversal, token budgets, KV allocation, preemption and cadence
+        # remain stock behavior.  In particular, this does not mutate
+        # next_decode_eligible_step or depend on current_step arithmetic.
+        output = super().schedule(*args, **kwargs)
 
         scheduled_ids = tuple(output.num_scheduled_tokens)
         verified_ids = tuple(output.scheduled_spec_decode_tokens)
@@ -123,8 +130,34 @@ class DualBatchScheduler(Scheduler):
             self._dual_identity.stable_id(str(request_id))
             for request_id in verified_ids
         )
+        decision_rows = []
+        for internal_id, (snapshot, decision) in self._dual_decisions.items():
+            scheduled = internal_id in scheduled_ids
+            scheduled_count = int(output.num_scheduled_tokens.get(internal_id, 0))
+            positions = (
+                range(
+                    snapshot.num_computed_tokens,
+                    snapshot.num_computed_tokens + scheduled_count,
+                )
+                if scheduled
+                else ()
+            )
+            decision_rows.append(
+                decision_event(
+                    snapshot,
+                    decision,
+                    cycle_id=self._dual_cycle_id,
+                    scheduler_step=int(self.current_step),
+                    scheduled=scheduled,
+                    target_input_positions=positions,
+                )
+            )
         for stable_id in stable_scheduled_ids:
             self._dual_tail_ready.discard(stable_id)
+        for stable_id in stable_verified_ids:
+            proposal = self._dual_proposals.get(stable_id)
+            if proposal is not None:
+                self._dual_consumed_proposals.add(proposal.proposal_id)
         self._dual_events.append(
             {
                 "schema_version": "specrhythm.phase4b-scheduler-cycle.v1",
@@ -141,12 +174,91 @@ class DualBatchScheduler(Scheduler):
                     for item in stable_verified_ids
                     if item in self._dual_proposals
                 ],
+                "request_admissibility": decision_rows,
+                "admissibility_hook": "explicit-request-predicate",
+                "cadence_field_used_for_draft_readiness": False,
                 "scheduler_class": type(self).__name__,
                 "stock_scheduler_delegated": True,
             }
         )
         self._dual_cycle_id += 1
         return output
+
+    def _request_admissible_for_schedule(self, request: Any) -> bool:
+        """Pinned scheduler hook; default stock schedulers have no such hook."""
+
+        internal_id = str(request.request_id)
+        snapshot_and_decision = self._dual_decisions.get(internal_id)
+        if snapshot_and_decision is None:
+            snapshot_and_decision = self._decision_for(request)
+            self._dual_decisions[internal_id] = snapshot_and_decision
+        return snapshot_and_decision[1].admissible
+
+    def _decision_for(
+        self, request: Any
+    ) -> tuple[AdmissibilitySnapshot, AdmissibilityDecision]:
+        internal_id = str(request.request_id)
+        stable_id = self._dual_identity.stable_id(internal_id)
+        prompt_count = int(
+            getattr(request, "num_prompt_tokens", len(request.prompt_token_ids))
+        )
+        computed = int(request.num_computed_tokens)
+        phase = (
+            ExecutionPhase.SETUP_PREFILL
+            if computed < prompt_count
+            else ExecutionPhase.TIMED_DECODE
+        )
+        proposal = self._dual_proposals.get(stable_id)
+        prefix = tuple(int(item) for item in request.all_token_ids)
+        expected_version = 1 if proposal is None else proposal.prefix_version
+        expected_round = 0 if proposal is None else proposal.round_id
+        if request.is_finished():
+            state = SchedulerRequestState.TERMINAL
+        elif phase is ExecutionPhase.SETUP_PREFILL:
+            state = SchedulerRequestState.WAITING_DRAFT
+        elif stable_id in self._dual_tail_ready:
+            state = SchedulerRequestState.TARGET_TAIL_READY
+        elif request.spec_token_ids and proposal is not None:
+            state = SchedulerRequestState.VERIFY_READY
+        elif stable_id in self._dual_drafting:
+            state = SchedulerRequestState.DRAFTING
+        else:
+            state = SchedulerRequestState.WAITING_DRAFT
+        evidence = None
+        if proposal is not None:
+            expires = (
+                proposal.created_timestamp_ns + self._dual_proposal_ttl_ns
+                if self._dual_proposal_ttl_ns
+                else None
+            )
+            evidence = ProposalEvidence(
+                request_id=proposal.request_id,
+                internal_request_id=internal_id,
+                prefix_version=proposal.prefix_version,
+                prefix_token_count=proposal.prefix_token_count,
+                prefix_token_sha256=proposal.prefix_token_sha256,
+                round_id=proposal.round_id,
+                proposal_token_ids=proposal.proposal_token_ids,
+                ready_timestamp_ns=proposal.created_timestamp_ns,
+                expires_timestamp_ns=expires,
+                consumed=proposal.proposal_id in self._dual_consumed_proposals,
+            )
+        snapshot = AdmissibilitySnapshot(
+            internal_request_id=internal_id,
+            stable_request_id=stable_id,
+            state=state,
+            execution_phase=phase,
+            prefix_version=expected_version,
+            round_id=expected_round,
+            prefix_token_count=len(prefix),
+            prefix_token_sha256=token_prefix_hash(prefix),
+            num_computed_tokens=computed,
+            num_output_tokens=int(request.num_output_tokens),
+            spec_token_ids=tuple(int(item) for item in request.spec_token_ids),
+            proposal=evidence,
+            now_ns=time.monotonic_ns(),
+        )
+        return snapshot, decide_admissibility(snapshot)
 
     def _accept_ready_result(self, result: Mapping[str, Any]) -> None:
         request_id = str(result.get("request_id", ""))
@@ -162,6 +274,7 @@ class DualBatchScheduler(Scheduler):
             if result.get("target_tail") is not True:
                 raise RuntimeError("ready Draft result contains neither proposal nor tail")
             self._dual_tail_ready.add(request_id)
+            self._dual_drafting.discard(request_id)
             return
         if not isinstance(proposal_value, Mapping):
             raise RuntimeError("ready proposal payload is not an object")
@@ -198,6 +311,7 @@ class DualBatchScheduler(Scheduler):
             raise RuntimeError("stale proposal rejected before verification: " + ", ".join(errors))
         request.spec_token_ids = list(proposal.proposal_token_ids)
         self._dual_proposals[request_id] = proposal
+        self._dual_drafting.discard(request_id)
 
     def _bind_vllm_requests(self) -> None:
         """Bind opaque scheduler IDs from token prefixes; never parse ID text."""

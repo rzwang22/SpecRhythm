@@ -55,27 +55,30 @@ phase4b_run_target_with_cleanup () {
     return 2
   }
 
-  phase4b_isolated=0
-  if command -v setsid >/dev/null 2>&1; then
-    setsid "$@" >"$phase4b_target_log" 2>&1 &
-    phase4b_target_pid="$!"
-    phase4b_isolated=1
-  else
-    "$@" >"$phase4b_target_log" 2>&1 &
-    phase4b_target_pid="$!"
+  phase4b_lifecycle_artifact="${PHASE4B_LIFECYCLE_ARTIFACT:-${phase4b_target_log}.lifecycle.json}"
+  phase4b_guard="${PHASE4B_RUN_GUARD:-${phase4b_lifecycle_artifact}.active}"
+  phase4b_lifecycle_args=(
+    -m specrhythm.phase4.process_lifecycle
+    --artifact "$phase4b_lifecycle_artifact"
+    --target-log "$phase4b_target_log"
+    --guard "$phase4b_guard"
+    --draft-pid "$phase4b_draft_pid"
+  )
+  if test -n "${SR_PHASE4_DUAL_DRAFT_SOCKET:-}"; then
+    phase4b_lifecycle_args+=(--draft-socket "$SR_PHASE4_DUAL_DRAFT_SOCKET")
   fi
-  if wait "$phase4b_target_pid"; then
+  phase4b_lifecycle_args+=(-- "$@")
+  phase4b_python="${PHASE4B_PYTHON:-}"
+  if test -z "$phase4b_python"; then
+    phase4b_python="$(command -v python || command -v python3)"
+  fi
+  if "$phase4b_python" "${phase4b_lifecycle_args[@]}"; then
     phase4b_target_status=0
   else
     phase4b_target_status="$?"
   fi
 
   if test "$phase4b_target_status" -ne 0; then
-    if test "$phase4b_isolated" -eq 1; then
-      kill -TERM -- "-$phase4b_target_pid" 2>/dev/null || true
-    elif command -v pkill >/dev/null 2>&1; then
-      pkill -TERM -P "$phase4b_target_pid" 2>/dev/null || true
-    fi
     phase4b_terminate_and_wait "$phase4b_draft_pid"
     echo "Target failed with status $phase4b_target_status" >&2
     tail -n 200 "$phase4b_target_log" >&2 || true

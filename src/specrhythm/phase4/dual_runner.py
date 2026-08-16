@@ -29,7 +29,7 @@ from specrhythm.phase4.reference import (
 )
 from specrhythm.phase4.serial_runner import (
     load_patch_manifest,
-    validate_installed_patched_runner,
+    validate_installed_patch_stack,
 )
 from specrhythm.phase4.stock_vllm import (
     _serialize_outputs,
@@ -87,7 +87,7 @@ def run_dual_batch(
     reference = load_reference(reference_path)
     require_reference_for_mode(reference, "batch-invariant")
     patch_manifest = load_patch_manifest(patch_manifest_path, config)
-    installed_runner = validate_installed_patched_runner(patch_manifest)
+    installed_runner = validate_installed_patch_stack(patch_manifest)
     environment = _load_object(environment_path)
     topology = _load_object(topology_path)
     environment_validation = validate_environment(environment, config)
