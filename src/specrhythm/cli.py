@@ -528,6 +528,22 @@ def build_parser() -> argparse.ArgumentParser:
     )
     phase4_dual_contract.add_argument("--output", required=True)
 
+    phase4_decode_ready_contract = subparsers.add_parser(
+        "phase4-decode-ready-contract-dry-run",
+        help="validate ResidentWarmStart contracts without CUDA or vLLM",
+    )
+    phase4_decode_ready_contract.add_argument("--output", required=True)
+
+    phase4_gate_a_validate = subparsers.add_parser(
+        "phase4-gate-a-validate",
+        help="validate A-waiting/B-prefill admissibility and owned-process cleanup",
+    )
+    phase4_gate_a_validate.add_argument("--scheduler-events", required=True)
+    phase4_gate_a_validate.add_argument("--lifecycle")
+    phase4_gate_a_validate.add_argument("--waiting-request-id", required=True)
+    phase4_gate_a_validate.add_argument("--prefill-request-id", required=True)
+    phase4_gate_a_validate.add_argument("--output", required=True)
+
     phase4_probe = subparsers.add_parser(
         "phase4-probe",
         help="validate the frozen vLLM environment and three-GPU topology",
@@ -740,6 +756,81 @@ def build_parser() -> argparse.ArgumentParser:
     phase4_dual_validate.add_argument("--output", required=True)
     phase4_dual_validate.add_argument("--markdown-output", required=True)
 
+    phase4_resident_target = subparsers.add_parser(
+        "phase4-resident-target-run",
+        help="run the Phase-4B.0b real-KV decode-only Target correctness gate",
+    )
+    for name in (
+        "config",
+        "workload",
+        "environment",
+        "topology",
+        "reference",
+        "patch-manifest",
+        "draft-socket",
+        "draft-ready",
+        "context",
+        "decode-ready-manifest",
+        "timing-events",
+        "target-diagnostics",
+        "plugin-report",
+        "first-forward",
+        "output",
+    ):
+        phase4_resident_target.add_argument(f"--{name}", required=True)
+    phase4_resident_target.add_argument(
+        "--request-count", type=int, choices=(2, 5), required=True
+    )
+    phase4_resident_target.add_argument(
+        "--correctness-mode",
+        choices=("default", "batch-invariant"),
+        default="batch-invariant",
+    )
+
+    phase4_resident_serial = subparsers.add_parser(
+        "phase4-resident-serial-run",
+        help="run the Phase-4B.0b real-KV decode-only Serial correctness gate",
+    )
+    for name in (
+        "config",
+        "workload",
+        "environment",
+        "topology",
+        "runtime-manifest",
+        "reference",
+        "patch-manifest",
+        "draft-socket",
+        "draft-ready",
+        "round-events",
+        "transport-events",
+        "plugin-report",
+        "context",
+        "decode-ready-manifest",
+        "timing-events",
+        "target-diagnostics",
+        "first-forward",
+        "output",
+    ):
+        phase4_resident_serial.add_argument(f"--{name}", required=True)
+    phase4_resident_serial.add_argument(
+        "--request-count", type=int, choices=(2, 5), required=True
+    )
+    phase4_resident_serial.add_argument(
+        "--correctness-mode",
+        choices=("default", "batch-invariant"),
+        default="batch-invariant",
+    )
+
+    phase4_resident_validate = subparsers.add_parser(
+        "phase4-resident-validate",
+        help="compare decode-only Target and Serial resident correctness artifacts",
+    )
+    phase4_resident_validate.add_argument("--target", required=True)
+    phase4_resident_validate.add_argument("--serial", required=True)
+    phase4_resident_validate.add_argument("--target-manifest", required=True)
+    phase4_resident_validate.add_argument("--serial-manifest", required=True)
+    phase4_resident_validate.add_argument("--output", required=True)
+
     phase4_bi_probe = subparsers.add_parser(
         "phase4-batch-invariant-preflight",
         help="fail-closed hardware preflight before creating any vLLM worker",
@@ -875,6 +966,28 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
         _write_json(run_dual_contract_dry_run(), args.output)
         return 0
+    if args.command == "phase4-decode-ready-contract-dry-run":
+        from specrhythm.phase4.decode_ready import run_decode_ready_contract_dry_run
+
+        _write_json(run_decode_ready_contract_dry_run(), args.output)
+        return 0
+    if args.command == "phase4-gate-a-validate":
+        from specrhythm.phase4.admissibility import validate_gate_a_construction
+        from specrhythm.phase4.transport import CheckpointJsonl
+
+        lifecycle = (
+            json.loads(Path(args.lifecycle).read_text(encoding="utf-8"))
+            if args.lifecycle
+            else None
+        )
+        report = validate_gate_a_construction(
+            CheckpointJsonl(Path(args.scheduler_events).resolve()).read(),
+            waiting_request_id=args.waiting_request_id,
+            prefill_request_id=args.prefill_request_id,
+            lifecycle=lifecycle,
+        )
+        _write_json(report, args.output)
+        return 0 if report["valid"] else 1
     if args.command == "phase4-probe":
         from specrhythm.phase4.config import load_phase4_config
         from specrhythm.phase4.manifest import (
@@ -1227,6 +1340,119 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             }
             _write_json(report, args.output)
             return 1
+        return 0 if report["valid"] else 1
+    if args.command == "phase4-resident-target-run":
+        from specrhythm.phase4.config import load_phase4_config
+        from specrhythm.phase4.resident_runner import run_resident_target
+
+        try:
+            report = run_resident_target(
+                load_phase4_config(args.config),
+                workload_path=Path(args.workload).resolve(),
+                request_count=args.request_count,
+                environment_path=Path(args.environment).resolve(),
+                topology_path=Path(args.topology).resolve(),
+                reference_path=Path(args.reference).resolve(),
+                patch_manifest_path=Path(args.patch_manifest).resolve(),
+                draft_socket_path=Path(args.draft_socket).resolve(),
+                draft_ready_path=Path(args.draft_ready).resolve(),
+                context_path=Path(args.context).resolve(),
+                decode_ready_manifest_path=Path(args.decode_ready_manifest).resolve(),
+                timing_events_path=Path(args.timing_events).resolve(),
+                target_diagnostics_path=Path(args.target_diagnostics).resolve(),
+                plugin_report_path=Path(args.plugin_report).resolve(),
+                first_forward_path=Path(args.first_forward).resolve(),
+                output_path=Path(args.output).resolve(),
+                git_commit=_current_git_commit() or "unknown",
+                correctness_mode=args.correctness_mode,
+            )
+        except (
+            FileExistsError,
+            FileNotFoundError,
+            ImportError,
+            RuntimeError,
+            ValueError,
+        ) as error:
+            raise SystemExit(f"Phase-4 resident Target failed: {error}") from error
+        return 0 if report["valid"] else 1
+    if args.command == "phase4-resident-serial-run":
+        from specrhythm.phase4.config import load_phase4_config
+        from specrhythm.phase4.manifest import atomic_write_json
+        from specrhythm.phase4.resident_runner import build_decode_ready_context
+        from specrhythm.phase4.serial_runner import (
+            load_patch_manifest,
+            run_serial_disaggregated,
+        )
+
+        try:
+            config = load_phase4_config(args.config)
+            patch_manifest_path = Path(args.patch_manifest).resolve()
+            patch_manifest = load_patch_manifest(patch_manifest_path, config)
+            context_path = Path(args.context).resolve()
+            if context_path.exists():
+                raise FileExistsError(f"refusing to overwrite resident context {context_path}")
+            atomic_write_json(
+                context_path,
+                build_decode_ready_context(
+                    config,
+                    patch_manifest=patch_manifest,
+                    workload_path=Path(args.workload).resolve(),
+                    git_commit=_current_git_commit() or "unknown",
+                    correctness_mode=args.correctness_mode,
+                ),
+            )
+            report = run_serial_disaggregated(
+                config,
+                workload_path=Path(args.workload).resolve(),
+                environment_path=Path(args.environment).resolve(),
+                topology_path=Path(args.topology).resolve(),
+                runtime_manifest_path=Path(args.runtime_manifest).resolve(),
+                reference_path=Path(args.reference).resolve(),
+                patch_manifest_path=patch_manifest_path,
+                draft_socket_path=Path(args.draft_socket).resolve(),
+                draft_ready_path=Path(args.draft_ready).resolve(),
+                round_events_path=Path(args.round_events).resolve(),
+                transport_events_path=Path(args.transport_events).resolve(),
+                plugin_report_path=Path(args.plugin_report).resolve(),
+                git_commit=_current_git_commit() or "unknown",
+                correctness_mode=args.correctness_mode,
+                diagnostics_path=Path(args.target_diagnostics).resolve(),
+                request_count=args.request_count,
+                decode_ready_context_path=context_path,
+                decode_ready_manifest_path=Path(
+                    args.decode_ready_manifest
+                ).resolve(),
+                decode_ready_timing_path=Path(args.timing_events).resolve(),
+                first_forward_path=Path(args.first_forward).resolve(),
+            )
+            _write_json(report, args.output)
+        except (
+            FileExistsError,
+            FileNotFoundError,
+            ImportError,
+            RuntimeError,
+            ValueError,
+        ) as error:
+            raise SystemExit(f"Phase-4 resident Serial failed: {error}") from error
+        return 0 if report["valid"] else 1
+    if args.command == "phase4-resident-validate":
+        from specrhythm.phase4.resident_runner import validate_resident_pair
+
+        try:
+            report = validate_resident_pair(
+                target_path=Path(args.target).resolve(),
+                serial_path=Path(args.serial).resolve(),
+                target_manifest_path=Path(args.target_manifest).resolve(),
+                serial_manifest_path=Path(args.serial_manifest).resolve(),
+            )
+        except (FileNotFoundError, json.JSONDecodeError, ValueError) as error:
+            report = {
+                "schema_version": "specrhythm.phase4b-resident-pair-validation.v1",
+                "valid": False,
+                "errors": [str(error)],
+                "performance_result": False,
+            }
+        _write_json(report, args.output)
         return 0 if report["valid"] else 1
     if args.command == "phase4-batch-invariant-preflight":
         from specrhythm.phase4.batch_invariant import (

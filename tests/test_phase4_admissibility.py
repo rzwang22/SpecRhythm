@@ -16,6 +16,7 @@ from specrhythm.phase4.admissibility import (
     decision_event,
     select_admissible,
     validate_admissibility_events,
+    validate_gate_a_construction,
 )
 from specrhythm.phase4.process_lifecycle import (
     run_owned_target,
@@ -150,6 +151,45 @@ def test_ready_proposal_is_immediately_admissible_and_events_are_auditable():
     assert validate_admissibility_events([row]) == []
 
 
+def test_gate_a_artifact_proves_waiting_a_does_not_block_prefill_b():
+    waiting = snapshot(SchedulerRequestState.WAITING_DRAFT)
+    prefill = snapshot(
+        SchedulerRequestState.WAITING_DRAFT,
+        request_id="B",
+        internal_id="opaque-B",
+        phase=ExecutionPhase.SETUP_PREFILL,
+    )
+    cycle = {
+        "cycle_id": 3,
+        "scheduled_request_ids": ["B"],
+        "request_admissibility": [
+            decision_event(
+                waiting,
+                decide_admissibility(waiting),
+                cycle_id=3,
+                scheduler_step=4,
+                scheduled=False,
+            ),
+            decision_event(
+                prefill,
+                decide_admissibility(prefill),
+                cycle_id=3,
+                scheduler_step=4,
+                scheduled=True,
+                target_input_positions=(0, 1),
+            ),
+        ],
+    }
+    report = validate_gate_a_construction(
+        [cycle],
+        waiting_request_id="A",
+        prefill_request_id="B",
+        lifecycle={"cleanup_valid": True, "remaining_owned_pids": []},
+    )
+    assert report["valid"] is True
+    assert report["matching_cycle_ids"] == [3]
+
+
 def test_scheduler_adapter_has_no_step_based_draft_readiness_workaround():
     root = Path(__file__).parents[1]
     source = (root / "src/specrhythm/phase4/vllm_dual_scheduler.py").read_text(
@@ -162,7 +202,7 @@ def test_scheduler_adapter_has_no_step_based_draft_readiness_workaround():
         / "integrations/vllm/patches/0002-scheduler-request-admissibility-hook.patch"
     ).read_text(encoding="utf-8")
     assert "req_index += 1" in patch
-    assert "token_budget" in patch
+    assert "consumes no budget or KV allocation" in patch
     guard = (root / "src/specrhythm/phase4/vllm_dual.py").read_text(encoding="utf-8")
     assert "unproposed Target decode advanced a live request" in guard
 

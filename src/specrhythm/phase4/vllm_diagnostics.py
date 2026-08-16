@@ -105,6 +105,9 @@ def validate_target_diagnostic(value: Mapping[str, Any]) -> list[str]:
         "sequence_length",
         "logits_position_mapping",
         "position_ids",
+        "target_input_token_ids",
+        "target_forward_start_ns",
+        "target_forward_end_ns",
         "top_raw_logits",
         "top_target_logprobs",
         "target_verification_shape",
@@ -125,6 +128,13 @@ def validate_target_diagnostic(value: Mapping[str, Any]) -> list[str]:
     if isinstance(positions, list) and positions:
         if positions != list(range(positions[0], positions[0] + len(positions))):
             errors.append("position IDs are not contiguous")
+    inputs = value.get("target_input_token_ids")
+    if not isinstance(inputs, list) or len(inputs) != value.get("query_length"):
+        errors.append("Target input-token count differs from query length")
+    start = value.get("target_forward_start_ns")
+    end = value.get("target_forward_end_ns")
+    if not isinstance(start, int) or not isinstance(end, int) or not 0 <= start < end:
+        errors.append("Target forward timestamps are invalid")
     if value.get("target_kv_contains_rejected_or_future_tokens") is not False:
         errors.append("target KV contains rejected or future tokens")
     if value.get("causal_attention") is not True:
@@ -287,6 +297,8 @@ def capture_target_forward(
     positions: Any,
     num_scheduled_tokens: Sequence[int],
     common_attention_metadata: Any,
+    target_forward_start_ns: int,
+    target_forward_end_ns: int,
 ) -> None:
     """GPU-only hook called from the pinned vLLM Target runner patch."""
 
@@ -395,6 +407,12 @@ def capture_target_forward(
             for item in positions_cpu[flat_offset : flat_offset + query_length]
         ]
         computed = int(runner.input_batch.num_computed_tokens_cpu[index])
+        target_input_token_ids = [
+            int(item)
+            for item in runner.input_batch.token_ids_cpu[
+                index, computed : computed + query_length
+            ].tolist()
+        ]
         attention_query_start = None
         attention_sequence_length = None
         attention_causal = True
@@ -459,6 +477,9 @@ def capture_target_forward(
             "sequence_length": computed + query_length,
             "logits_position_mapping": mapping,
             "position_ids": position_slice,
+            "target_input_token_ids": target_input_token_ids,
+            "target_forward_start_ns": int(target_forward_start_ns),
+            "target_forward_end_ns": int(target_forward_end_ns),
             "attention_mask_proof": {
                 "causal": attention_causal,
                 "query_start_range": attention_query_start,

@@ -133,10 +133,10 @@ def run_owned_target(
         and coordinator_reaped
         and not remaining
         and draft_shutdown["valid"]
-        and not leaked_after_coordinator_exit
     )
+    run_valid = cleanup_valid and coordinator_status == 0 and not leaked_after_coordinator_exit
     effective_status = coordinator_status if coordinator_status not in {None, 0} else 0
-    if effective_status == 0 and not cleanup_valid:
+    if effective_status == 0 and not run_valid:
         effective_status = 125
     ended_ns = time.monotonic_ns()
     report = {
@@ -165,6 +165,7 @@ def run_owned_target(
         "remaining_owned_pids": [int(row["pid"]) for row in remaining],
         "launch_error": launch_error,
         "cleanup_valid": cleanup_valid,
+        "run_valid": run_valid,
     }
     _atomic_json(artifact_path, report)
     if cleanup_valid:

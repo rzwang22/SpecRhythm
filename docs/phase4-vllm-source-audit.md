@@ -94,9 +94,12 @@ The adapter no longer writes `next_decode_eligible_step`; queue order, allocatio
 paged KV, attention, rejection sampling and internal cadence remain owned by vLLM.
 
 The worker observer remains independent patch `0001`. The explicit scheduler hook is patch
-`0002-scheduler-request-admissibility-hook.patch`, applied second and restored first. Its exact
-base/patched scheduler SHA256 values are enforced alongside the worker file by
-`integrations/vllm/manage_patch.py`. Neither patch changes C++/CUDA/Triton, sampler, logits,
+`0002-scheduler-request-admissibility-hook.patch`, applied second. Phase 4B.0b adds
+`0003-target-forward-timing-observer.patch` after `0001`; it brackets the existing model forward
+with monotonic timestamps and passes them to the already observational diagnostic function.
+Restore order is `0003`, `0002`, `0001`. Exact original/intermediate/final SHA256 values are
+enforced for both source files by
+`integrations/vllm/manage_patch.py`. No patch changes C++/CUDA/Triton, sampler, logits,
 attention, model weights or TP partitioning. The hook is absent from the stock scheduler class and
 therefore inert unless the explicit Phase-4B subclass implements it. Dual mode remains fail-closed
 behind `SR_PHASE4_DUAL_BATCH=1`; default and Target-only behavior are unchanged.

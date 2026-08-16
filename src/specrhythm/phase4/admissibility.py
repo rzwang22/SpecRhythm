@@ -232,6 +232,68 @@ def validate_admissibility_events(rows: Sequence[Mapping[str, Any]]) -> list[str
     return errors
 
 
+def validate_gate_a_construction(
+    cycle_rows: Sequence[Mapping[str, Any]],
+    *,
+    waiting_request_id: str,
+    prefill_request_id: str,
+    lifecycle: Optional[Mapping[str, Any]] = None,
+) -> dict[str, Any]:
+    """Validate the real two-request A-waiting/B-prefill construction artifact."""
+
+    errors = []
+    matches = []
+    flattened = []
+    for cycle in cycle_rows:
+        rows = cycle.get("request_admissibility")
+        if not isinstance(rows, list):
+            errors.append("scheduler cycle lacks request-level admissibility rows")
+            continue
+        flattened.extend(row for row in rows if isinstance(row, Mapping))
+        by_id = {str(row.get("request_id", "")): row for row in rows}
+        waiting = by_id.get(waiting_request_id)
+        prefill = by_id.get(prefill_request_id)
+        if waiting is None or prefill is None:
+            continue
+        scheduled = set(cycle.get("scheduled_request_ids", ()))
+        if (
+            waiting.get("specrhythm_state") in {"WAITING_DRAFT", "DRAFTING"}
+            and waiting.get("execution_phase") == "timed-decode"
+            and waiting.get("admissible") is False
+            and waiting.get("scheduled") is False
+            and not waiting.get("target_input_token_positions")
+            and prefill.get("execution_phase") == "setup-prefill"
+            and prefill.get("admissible") is True
+            and prefill.get("scheduled") is True
+            and prefill.get("scheduled_operation") == "prefill"
+            and scheduled == {prefill_request_id}
+        ):
+            matches.append(int(cycle.get("cycle_id", -1)))
+    event_errors = validate_admissibility_events(flattened)
+    errors.extend(event_errors)
+    if not matches:
+        errors.append("no A-waiting/B-prefill scheduler construction was observed")
+    lifecycle_valid = None
+    if lifecycle is not None:
+        lifecycle_valid = lifecycle.get("cleanup_valid") is True and not lifecycle.get(
+            "remaining_owned_pids"
+        )
+        if not lifecycle_valid:
+            errors.append("Target/Draft process lifecycle cleanup is invalid")
+    return {
+        "schema_version": "specrhythm.phase4b-gate-a-validation.v1",
+        "valid": not errors,
+        "errors": errors,
+        "waiting_request_id": waiting_request_id,
+        "prefill_request_id": prefill_request_id,
+        "matching_cycle_ids": matches,
+        "waiting_request_advanced": False if matches else None,
+        "head_of_line_blocking_observed": False if matches else None,
+        "lifecycle_valid": lifecycle_valid,
+        "performance_result": False,
+    }
+
+
 def _deny(
     reason: str,
     proposal_present: bool,

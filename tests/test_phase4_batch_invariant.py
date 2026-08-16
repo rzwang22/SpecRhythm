@@ -83,6 +83,9 @@ def diagnostic(*, proposal=(10, 11), prefix=(1, 2), kv_length=2):
         "sequence_length": kv_length + len(proposal) + 1,
         "logits_position_mapping": mapping,
         "position_ids": list(range(kv_length, kv_length + len(proposal) + 1)),
+        "target_input_token_ids": [prefix[-1], *proposal],
+        "target_forward_start_ns": 10,
+        "target_forward_end_ns": 20,
         "attention_mask_proof": {
             "causal": True,
             "query_start_range": [0, len(proposal) + 1],

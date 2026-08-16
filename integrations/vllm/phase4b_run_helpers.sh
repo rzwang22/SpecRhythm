@@ -64,8 +64,9 @@ phase4b_run_target_with_cleanup () {
     --guard "$phase4b_guard"
     --draft-pid "$phase4b_draft_pid"
   )
-  if test -n "${SR_PHASE4_DUAL_DRAFT_SOCKET:-}"; then
-    phase4b_lifecycle_args+=(--draft-socket "$SR_PHASE4_DUAL_DRAFT_SOCKET")
+  phase4b_draft_socket="${SR_PHASE4_DUAL_DRAFT_SOCKET:-${SR_PHASE4_DRAFT_SOCKET:-}}"
+  if test -n "$phase4b_draft_socket"; then
+    phase4b_lifecycle_args+=(--draft-socket "$phase4b_draft_socket")
   fi
   phase4b_lifecycle_args+=(-- "$@")
   phase4b_python="${PHASE4B_PYTHON:-}"

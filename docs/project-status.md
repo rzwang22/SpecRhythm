@@ -1,6 +1,6 @@
 # SpecRhythm project status
 
-Last updated: 2026-08-16
+Last updated: 2026-08-17
 
 Maintenance rule: every code-changing PR updates this file with its scope, status, evidence,
 known limitations, and next gate before that PR is considered complete.
@@ -34,7 +34,7 @@ claims.
 | [#1 workload-v0.1](https://github.com/rzwang22/SpecRhythm/pull/1) | merged | strict Mooncake replay, R3 proxy config, validator, manifest, fixture tests and docs | workload plumbing only; proxy payload and illustrative acceptance |
 | [#2 simulator-semantics-v0.2](https://github.com/rzwang22/SpecRhythm/pull/2) | frozen draft; Phase 2 complete, not merged | proposal lifecycle, deterministic tree oracle, tree-aware allocators, base-preserving residual controls, Phase-2 nested search pools and common-snapshot oracle replay, path-aware eager and accounting | pure-Python proxy and oracle upper bounds only; no deployable oracle, measured search cost, GPU integration, or performance claim |
 | [#3 gpu-integration-v0.1](https://github.com/rzwang22/SpecRhythm/pull/3) | draft; Phase 3B.1 and corrected-20 Phase 3C.2 complete; Phase 3C.3 corrected-100 awaiting server run | hardened multi-rank primitives, corrected R3-real traces, common-prefix replay, request-bootstrap statistics, 2x shell decomposition and diagnostic learned ranker | user-run 3×A800 correctness artifacts plus Mac CPU tests; no packed-tree/serving engine, Dual-Batch, SLO, calibrated latency or speedup claim |
-| [#4 vllm-serving-v0.1](https://github.com/rzwang22/SpecRhythm/pull/4) | draft; Phase 4A.1.1 Outcome A frozen; first Phase 4B.1 L2 bring-up exposed and now fixes an internal/stable request-ID adapter bug; fresh L2 reruns pending | stock reference, persistent Draft KV, Serial runner, batch-invariant proof, ready-only scheduler plugin, asynchronous Draft service, prompt-token identity bridge, prefix-versioned proposals and keyed Dual validator | failed L2 is integration-failure provenance only; no Phase 4B GPU Outcome, performance, packed tree, residual selection, eager, shaping, SLO or goodput claim |
+| [#4 vllm-serving-v0.1](https://github.com/rzwang22/SpecRhythm/pull/4) | draft; Phase 4A.1.1 Outcome A frozen; Phase 4B.0a/0b CPU implementation complete, A800 Gate A/B pending | explicit ready-only scheduler predicate, owned process lifecycle, resident real-KV decode-ready provider/manifest, Target/Serial comparator and first-forward proof | `96842c8` identity passed but scheduler/cleanup failed; current work has no GPU Gate PASS, Dual-Batch Outcome, performance, packed tree, eager, SLO or goodput claim |
 
 ## Phase 4A.0–4A.1: vLLM freeze and Serial Disaggregated correctness
 
@@ -99,10 +99,35 @@ conclusion is frozen and is not reinterpreted by Phase 4B. See
 
 ## Phase 4B.0–4B.1: Dual-Batch contracts and GPU correctness readiness
 
-Phase 4B adds a linear, non-eager Dual-Batch control plane without changing vLLM rejection,
-attention, paged-KV, allocation, or default scheduling semantics. The existing pinned `0001`
-worker observer patch is sufficient: vLLM's supported `scheduler_cls` extension provides the
-ready-only decode gate, so no `0002`, C++/CUDA/Triton change, or scheduler rewrite is introduced.
+Phase 4B adds a linear, non-eager serving control plane without changing vLLM rejection,
+attention, paged-KV, model, TP or default scheduling semantics. The user's A800 artifact at
+`96842c8a1e6ffd70c5c1321eecd7384ad74cf542` proved stable/internal identity mapping, but it also
+proved two failures: the cadence-based readiness workaround allowed an unproposed Target decode,
+and the shell wrapper did not prove that EngineCore/TP descendants had exited. That artifact is
+integration-failure provenance, not a GPU correctness result.
+
+Phase 4B.0a replaces cadence mutation with an explicit request-level predicate in independent
+patch `0002`. Waiting/Drafting decode is forbidden; a matching prefix-version/hash/round proposal
+or legal Target tail is allowed; setup prefill is separate. A blocked request consumes no stock
+token/KV budget and does not prevent later work. Scheduler artifacts record the decision for every
+request/cycle. Target launch now owns one session/PGID, propagates the coordinator exit code,
+records descendants and TERM/KILL actions, verifies Draft/socket cleanup, and blocks the next run
+after invalid cleanup.
+
+Phase 4B.0b establishes `DecodeReadyProvider -> DecodeReadyManifest -> consumer` and implements
+only `ResidentWarmStartProvider`. Untimed real-KV setup performs Target prompt prefill plus exactly
+one bootstrap, then initializes Draft through the same committed prefix. Manifest validation and
+a TP barrier precede `measurement_start_ns`; initial proposal generation is forbidden before it.
+The first Target forward must consume `[bootstrap]` for Target-only or
+`[bootstrap]+proposal` for Serial at exact contiguous positions. A third observer patch records
+actual forward boundaries and inputs.
+
+Phase 4 main evaluation is decode-only. Resident warm start is real-KV decode-stage isolation,
+not an end-to-end PD deployment. KVConnector handoff remains a future provider and is not
+implemented. CPU contract tests pass locally; the coding agent has not run CUDA. The next gate is
+the ordered 3×A800 Gate A construction/cleanup test, then two- and five-request resident Target
+and Serial equality. Do not run 100 requests or Phase 4B.1 Dual-Batch correctness before both
+gates pass.
 
 GPU 0 runs one persistent Draft service. Heavy Draft model work is serialized on its background
 worker queue; Unix-socket calls only enqueue work or poll completed proposals. The Target
@@ -111,21 +136,11 @@ vLLM scheduler. Every proposal carries a canonical ID, round, prefix version/cou
 KV lengths and token list. A mismatch fails before verification; one request cannot own two
 proposals or be drafted through an unverified prefix.
 
-The runner and read-only validator emit state, proposal, verification, transport, Target
-diagnostic, cycle and overlap artifacts. CUDA-event evidence is retained per Target TP rank and
-on Draft GPU 0; shared host monotonic intervals establish only whether disjoint Draft and Verify
-sets overlapped. Two-, five-, and 100-request corrected workloads are the server gates. The Mac
-agent did not execute Phase 4B on GPU. The user's first real L2 request reached Target TP2 but
-stopped before correctness or overlap evaluation because vLLM decorated the internal request ID
-and the proposer incorrectly used it as a frozen workload key. The adapter now binds opaque
-internal IDs to stable workload IDs solely through unique frozen prompt-token prefixes, enforces
-one-to-one identity in both proposer and scheduler, and records both domains at adapter events.
-The failed DB-1 directory is not resumable evidence. A bounded shell helper checks Target status
-before waiting for Draft and retains short `/tmp` sockets. Fresh L2 DB-1/DB-2 plus read-only
-validation are the only next gate; existing immutable stock references remain reusable when their
-hashes and configs are unchanged. No Outcome A/B/C is currently claimed. Even Outcome A
-would establish correctness and overlap existence only—not speedup, goodput, SLO attainment,
-throughput, latency improvement, or production readiness. See
+The older Dual runner and validator remain in the Draft PR for the later Phase 4B.1 gate, but this
+round does not execute or reinterpret them. No Outcome A/B/C is currently claimed. Even a future
+Outcome A would establish correctness and overlap existence only—not speedup, goodput, SLO
+attainment, throughput, latency improvement, or production readiness. See
+[phase4b-decode-ready.md](phase4b-decode-ready.md) and
 [phase4b-dual-batch.md](phase4b-dual-batch.md).
 
 ## Phase 3.0: GPU readiness and real-trace runner

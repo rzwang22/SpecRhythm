@@ -15,14 +15,18 @@ scheduler, attention, C++ or CUDA semantics.
 running-request allocation path. When absent, stock behavior is unchanged. The Phase-4B scheduler
 uses it to skip a request waiting for Draft without consuming token/KV budget or blocking later
 ready requests. It does not overload vLLM's `next_decode_eligible_step` cadence field.
+3. `0003-target-forward-timing-observer.patch` changes the already-`0001`-patched
+`gpu_model_runner.py`. It records host monotonic boundaries immediately around the existing model
+forward and passes them, plus existing input metadata, to the Target-only diagnostic hook. It is
+observational and does not synchronize, alter logits, or change execution semantics.
 
 The patch is required because the public custom proposer signature at this commit does not expose
 stable request identity or exact Target-forward boundaries. The out-of-tree proposer uses the
 hooks only for stable IPC correlation and strict-serial correctness timestamps.
 
-Phase 4B reuses the same hooks for per-rank verification evidence. It does not add a second patch:
-the pinned release's public `scheduler_cls` extension is sufficient for the out-of-tree ready-only
-gate. The Dual-Batch adapter remains outside vLLM source and is explicitly enabled only for the
+Phase 4B reuses the worker hooks for per-rank verification evidence, adds the minimal default-off
+scheduler hook in `0002`, and adds observational forward timestamps in `0003`. The Dual-Batch
+policy and predicate remain outside vLLM source and are explicitly enabled only for the
 correctness run.
 
 Run `python integrations/vllm/manage_patch.py check ...` before applying the stack. The manager

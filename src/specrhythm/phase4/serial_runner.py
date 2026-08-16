@@ -42,7 +42,7 @@ from specrhythm.phase4.vllm_diagnostics import validate_kv_monotonicity
 from specrhythm.phase4.vllm_installation import locate_installed_vllm_file
 
 PATCHED_VLLM_RUNNER_SHA256 = (
-    "a99c410cd791f20071bb17b8a619e5b309427b50ed864b8753d066c1dc4b150c"
+    "5cd618de8826e15ef00ca1735101a29af06029b7ce9d54cede00bf2b401cc257"
 )
 PATCHED_VLLM_SCHEDULER_SHA256 = (
     "ffaefd61869589f086e6acdf9a0c4f55f80d5dad145ca3f6fff2379f7a4e2455"
@@ -201,6 +201,11 @@ def run_serial_disaggregated(
     git_commit: str,
     correctness_mode: str = "default",
     diagnostics_path: Optional[Path] = None,
+    request_count: Optional[int] = None,
+    decode_ready_context_path: Optional[Path] = None,
+    decode_ready_manifest_path: Optional[Path] = None,
+    decode_ready_timing_path: Optional[Path] = None,
+    first_forward_path: Optional[Path] = None,
 ) -> dict[str, Any]:
     """Run one real GPU correctness pass; no performance metrics are derived."""
 
@@ -232,13 +237,32 @@ def run_serial_disaggregated(
         or not isinstance(draft_provenance, Mapping)
     ):
         raise RuntimeError("Draft service residency/KV evidence is invalid")
+    resident_paths = (
+        decode_ready_context_path,
+        decode_ready_manifest_path,
+        decode_ready_timing_path,
+        first_forward_path,
+    )
+    resident_mode = any(path is not None for path in resident_paths)
+    if resident_mode and any(path is None for path in resident_paths):
+        raise ValueError(
+            "resident Serial requires context, manifest, timing and first-forward paths"
+        )
+    if resident_mode:
+        installed_runner = validate_installed_patch_stack(patch_manifest)
     artifact_paths = [round_events_path, transport_events_path, plugin_report_path]
+    artifact_paths.extend(path for path in resident_paths[1:] if path is not None)
     if diagnostics_path is not None:
         artifact_paths.append(diagnostics_path)
     for path in artifact_paths:
         if path.exists():
             raise FileExistsError(f"refusing to overwrite Serial checkpoint artifact {path}")
-    requests = load_smoke_requests(workload_path, config.smoke_request_count)
+    effective_count = request_count or config.smoke_request_count
+    requests = load_smoke_requests(
+        workload_path,
+        effective_count,
+        require_task_mixture=effective_count == 5,
+    )
     try:
         import torch
         from vllm import LLM, SamplingParams
@@ -253,8 +277,31 @@ def run_serial_disaggregated(
             "SR_PHASE4_ROUND_EVENTS": str(round_events_path),
             "SR_PHASE4_TRANSPORT_EVENTS": str(transport_events_path),
             "SR_PHASE4_PLUGIN_REPORT": str(plugin_report_path),
+            "SR_PHASE4_REQUEST_COUNT": str(effective_count),
         }
     )
+    if resident_mode:
+        assert decode_ready_context_path is not None
+        assert decode_ready_manifest_path is not None
+        assert decode_ready_timing_path is not None
+        os.environ.update(
+            {
+                "SR_PHASE4_DECODE_READY_MODE": "1",
+                "SR_PHASE4_DECODE_READY_CONTEXT": str(decode_ready_context_path),
+                "SR_PHASE4_DECODE_READY_MANIFEST": str(decode_ready_manifest_path),
+                "SR_PHASE4_DECODE_READY_TIMING_EVENTS": str(
+                    decode_ready_timing_path
+                ),
+            }
+        )
+    else:
+        for name in (
+            "SR_PHASE4_DECODE_READY_MODE",
+            "SR_PHASE4_DECODE_READY_CONTEXT",
+            "SR_PHASE4_DECODE_READY_MANIFEST",
+            "SR_PHASE4_DECODE_READY_TIMING_EVENTS",
+        ):
+            os.environ.pop(name, None)
     if diagnostics_path is not None:
         os.environ["SR_PHASE4_TARGET_DIAGNOSTICS"] = str(diagnostics_path)
     else:
@@ -309,6 +356,8 @@ def run_serial_disaggregated(
         for request in requests
     ]
     generation_start = time.monotonic_ns()
+    if resident_mode:
+        os.environ["SR_PHASE4_SETUP_START_NS"] = str(generation_start)
     outputs = llm.generate(prompts, parameters, use_tqdm=False)
     torch.cuda.synchronize()
     generation_end = time.monotonic_ns()
@@ -487,13 +536,150 @@ def run_serial_disaggregated(
             "performance_claim_allowed": False,
         },
     }
+    resident_errors = []
+    if resident_mode:
+        assert decode_ready_manifest_path is not None
+        assert first_forward_path is not None
+        from specrhythm.phase4.decode_ready import (
+            build_first_target_forward_contract,
+            compare_raw_and_decode_outputs,
+            load_decode_ready_manifest,
+            validate_measurement_boundary,
+        )
+        from specrhythm.phase4.resident_runner import _decode_rows, _reference_rows
+
+        manifest = load_decode_ready_manifest(
+            json.loads(decode_ready_manifest_path.read_text(encoding="utf-8"))
+        )
+        diagnostics = CheckpointJsonl(diagnostics_path).read() if diagnostics_path else []
+        contracts = []
+        first_round_by_request = {
+            str(row.get("request_id", "")): row
+            for row in round_rows
+            if row.get("round_id") == 0
+        }
+        for ready in manifest.requests:
+            matches = [
+                row
+                for row in diagnostics
+                if row.get("request_id") == ready.request_id
+                and row.get("committed_prefix_sha256")
+                == ready.logical_committed_prefix_sha256
+                and row.get("proposal_token_ids")
+            ]
+            if not matches:
+                resident_errors.append(
+                    f"{ready.request_id}: first resident Serial verify is missing"
+                )
+                continue
+            observed = matches[0]
+            round_row = first_round_by_request.get(ready.request_id)
+            if round_row is None:
+                resident_errors.append(
+                    f"{ready.request_id}: first resident Serial round is missing"
+                )
+                continue
+            try:
+                contract = build_first_target_forward_contract(
+                    ready,
+                    consumer="serial",
+                    proposal_token_ids=observed["proposal_token_ids"],
+                    target_forward_start_ns=int(observed["target_forward_start_ns"]),
+                    target_forward_end_ns=int(observed["target_forward_end_ns"]),
+                    output_logits_positions=observed.get("position_ids", ()),
+                    accepted_draft_tokens=int(
+                        round_row.get("accepted_draft_tokens", 0)
+                    ),
+                    post_forward_committed_token_ids=round_row.get(
+                        "committed_token_ids", ()
+                    ),
+                    post_forward_target_kv_token_count=(
+                        int(round_row.get("logical_target_kv_length", 0)) - 1
+                    ),
+                    post_forward_prefix_version=ready.prefix_version + 1,
+                )
+            except (KeyError, TypeError, ValueError) as error:
+                resident_errors.append(f"{ready.request_id}: {error}")
+                continue
+            if observed.get("target_input_token_ids") != contract[
+                "verification_input_token_ids"
+            ]:
+                resident_errors.append(
+                    f"{ready.request_id}: Serial verification input differs"
+                )
+            if observed.get("position_ids") != contract["input_positions"]:
+                resident_errors.append(
+                    f"{ready.request_id}: Serial verification positions differ"
+                )
+            if observed.get("physical_kv_num_computed_tokens") != (
+                ready.target_materialized_kv_token_count
+            ):
+                resident_errors.append(
+                    f"{ready.request_id}: Serial computed-token/KV count differs"
+                )
+            contracts.append(contract)
+        atomic_write_json(
+            first_forward_path,
+            {
+                "schema_version": "specrhythm.phase4b-first-target-forwards.v1",
+                "consumer": "serial",
+                "valid": not resident_errors,
+                "errors": resident_errors,
+                "requests": contracts,
+            },
+        )
+        first_draft_starts = [
+            int(row.get("timeline", {}).get("draft_start_ns", 0))
+            for row in round_rows
+            if row.get("round_id") == 0
+            and isinstance(row.get("timeline"), Mapping)
+        ]
+        boundary_errors = validate_measurement_boundary(
+            manifest,
+            first_draft_start_ns=min(first_draft_starts) if first_draft_starts else None,
+            first_draft_end_ns=min(
+                (
+                    int(row.get("timeline", {}).get("draft_end_ns", 0))
+                    for row in round_rows
+                    if row.get("round_id") == 0
+                    and isinstance(row.get("timeline"), Mapping)
+                ),
+                default=None,
+            ),
+            first_target_decode_start_ns=(
+                min(int(row["target_forward_start_ns"]) for row in contracts)
+                if contracts
+                else None
+            ),
+            proposal_created_timestamps_ns=first_draft_starts,
+        )
+        resident_errors.extend(boundary_errors)
+        decode_rows = _decode_rows(serialized, manifest)
+        raw_decode = compare_raw_and_decode_outputs(
+            _reference_rows(reference, requests), decode_rows, manifest
+        )
+        if not raw_decode["valid"]:
+            resident_errors.extend(raw_decode["errors"])
+        result.update(
+            {
+                "provider_kind": "resident-warm-start",
+                "decode_only_outputs": decode_rows,
+                "raw_vs_decode": raw_decode,
+                "decode_ready_manifest_sha256": manifest.manifest_sha256,
+                "first_target_forward_valid": not resident_errors,
+                "measurement_boundary_valid": not boundary_errors,
+                "end_to_end_pd_deployment": False,
+                "kv_connector_handoff": False,
+                "resident_errors": resident_errors,
+            }
+        )
     result["valid"] = bool(
         comparison["all_sequences_equal"]
         and result["strict_serial_timeline"]["validated_in_runner"]
         and accounting["valid"]
         and not kv_errors
         and batch_validation["batch_invariant_validation"]["valid"]
-    )
+    ) and not resident_errors
     return result
 
 

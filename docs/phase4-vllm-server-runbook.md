@@ -602,7 +602,10 @@ sha256sum "$SR_PHASE4_RUN/stock-target-reference.json" | \
 
 An HF mismatch is advisory. A repeated stock-vLLM mismatch is fatal.
 
-## 7. Apply the pinned one-file Python hook patch
+## 7. Archived Phase-4A patch command
+
+This earlier section predates the ordered Phase-4B patch stack. For new Phase-4B work, use
+[phase4b-gate-runbook.md](phase4b-gate-runbook.md), which validates and records all three patches.
 
 ```bash
 python integrations/vllm/manage_patch.py apply \
@@ -809,7 +812,12 @@ and `review-bundle.sha256`. This is the historical Phase 4A stop boundary; the s
 Phase 4B protocol below supersedes only the old prohibition on starting Dual-Batch. It still does
 not authorize an arrival replay, latency/capacity sweep, Eager, or packed-tree experiment.
 
-# Phase 4B.1 1D+2V Dual-Batch correctness runbook
+# Archived Phase 4B prototype procedure — do not execute
+
+The commands below preserve the pre-4B.0a prototype for provenance only. They contain the old
+mixed Prefill/Decode flow and do not enforce the current decode-ready boundary. The active,
+ordered 3×A800 procedure is [phase4b-gate-runbook.md](phase4b-gate-runbook.md): Gate A first,
+then two- and five-request Gate B only. Do not run the archived L2/L5/L100 procedure.
 
 This is a new result root. It does not mutate the frozen Phase 4A Outcome-A artifacts. It proves
 correctness and the existence of GPU overlap only; it is not a performance experiment.
@@ -951,7 +959,8 @@ for level in 2 5 100; do
 done
 ```
 
-Apply/check the existing one-file patch. No `0002` exists in Phase 4B.
+Archived note: this command block predates the ordered `0001`/`0002`/`0003` patch stack and must
+not be used for a new run. Follow the active Gate runbook instead.
 
 ```bash
 python integrations/vllm/manage_patch.py apply \

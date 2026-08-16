@@ -51,17 +51,19 @@ enqueue work, poll completed work, or return already-claimed metadata. Consequen
 scheduler poll never waits for Draft GPU execution.
 
 The Target uses vLLM's supported `scheduler_cls` extension. The plugin injects completed proposal
-tokens into `request.spec_token_ids`, temporarily defers decode requests without a ready proposal,
+tokens into `request.spec_token_ids`, rejects decode requests without a valid ready proposal via
+the explicit request-level admissibility hook,
 then calls the stock scheduler. Allocation, preemption, continuous batching, paged KV, attention,
 rejection sampling and output commit remain stock vLLM behavior. Bootstrap is Target-only; after
 it commits, Draft jobs become eligible. A proposal-free final token is explicitly admitted as a
 Target tail.
 
-The pinned `0001-custom-proposer-request-and-verify-hooks.patch` remains the only upstream patch.
-It supplies the opaque vLLM request IDs and Target verify observers in `gpu_model_runner.py`; the
-SpecRhythm adapter performs the explicit prompt-token identity translation. Phase 4B
-does not add `0002`: the source audit found that `scheduler_cls` is sufficient. The patch is
-default-inactive and has no Target-only effect.
+The pinned `0001-custom-proposer-request-and-verify-hooks.patch` supplies opaque vLLM request IDs
+and Target verify observers in `gpu_model_runner.py`; the SpecRhythm adapter performs explicit
+prompt-token identity translation. Independent `0002` adds the default-off stock-loop
+admissibility hook and `0003` records Target-forward timing. The out-of-tree `scheduler_cls`
+supplies the actual predicate. The patch stack is default-inactive and has no Target-only semantic
+effect.
 
 ## Dynamic microbatches and overlap proof
 

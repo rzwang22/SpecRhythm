@@ -106,8 +106,9 @@ class DualBatchScheduler(Scheduler):
             raise RuntimeError(f"asynchronous Draft failure: {failures}")
         for result in response.get("ready", ()):
             self._accept_ready_result(result)
-        pending = response.get("pending_request_ids", ())
-        self._dual_drafting = {str(item) for item in pending}
+        if available:
+            pending = response.get("pending_request_ids", ())
+            self._dual_drafting = {str(item) for item in pending}
         self._dual_decisions = {
             str(request.request_id): self._decision_for(request)
             for request in self.requests.values()

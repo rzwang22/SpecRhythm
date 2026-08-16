@@ -16,7 +16,8 @@ from typing import Any, Mapping, Optional
 BASE_COMMIT = "752a3a504485790a2e8491cacbb35c137339ad34"
 TARGET_FILE = Path("vllm/v1/worker/gpu_model_runner.py")
 BASE_SHA256 = "6c92ded8468f44d6df863a617ce588f132fa6df7031feecc0cc421702a41610e"
-PATCHED_SHA256 = "a99c410cd791f20071bb17b8a619e5b309427b50ed864b8753d066c1dc4b150c"
+WORKER_HOOKS_SHA256 = "a99c410cd791f20071bb17b8a619e5b309427b50ed864b8753d066c1dc4b150c"
+PATCHED_SHA256 = "5cd618de8826e15ef00ca1735101a29af06029b7ce9d54cede00bf2b401cc257"
 PATCH = Path(__file__).parent / "patches" / "0001-custom-proposer-request-and-verify-hooks.patch"
 SCHEDULER_FILE = Path("vllm/v1/core/sched/scheduler.py")
 SCHEDULER_BASE_SHA256 = (
@@ -29,6 +30,9 @@ SCHEDULER_PATCH = (
     Path(__file__).parent
     / "patches"
     / "0002-scheduler-request-admissibility-hook.patch"
+)
+TIMING_PATCH = (
+    Path(__file__).parent / "patches" / "0003-target-forward-timing-observer.patch"
 )
 LEGACY_PATCHED_SHA256 = (
     "ba307cbfdfa9079c04e1bf9bb6387eb923cbabb1eea811e720a94897ea6483fa"
@@ -112,7 +116,12 @@ def main() -> int:
         }
     else:
         expected = {
-            str(TARGET_FILE): {BASE_SHA256, PATCHED_SHA256, LEGACY_PATCHED_SHA256},
+            str(TARGET_FILE): {
+                BASE_SHA256,
+                WORKER_HOOKS_SHA256,
+                PATCHED_SHA256,
+                LEGACY_PATCHED_SHA256,
+            },
             str(SCHEDULER_FILE): {SCHEDULER_BASE_SHA256, SCHEDULER_PATCHED_SHA256},
         }
     for relative, allowed in expected.items():
@@ -124,15 +133,21 @@ def main() -> int:
     active_runner_patch = (
         LEGACY_PATCH if before[str(TARGET_FILE)] == LEGACY_PATCHED_SHA256 else PATCH
     )
-    operations = [(TARGET_FILE, active_runner_patch), (SCHEDULER_FILE, SCHEDULER_PATCH)]
+    operations = [
+        (TARGET_FILE, active_runner_patch),
+        (SCHEDULER_FILE, SCHEDULER_PATCH),
+        (TARGET_FILE, TIMING_PATCH),
+    ]
     if args.operation == "restore":
-        operations = list(reversed(operations))
-        operations = [
-            (relative, patch)
-            for relative, patch in operations
-            if before[str(relative)]
-            in {PATCHED_SHA256, LEGACY_PATCHED_SHA256, SCHEDULER_PATCHED_SHA256}
-        ]
+        operations = []
+        if before[str(TARGET_FILE)] == PATCHED_SHA256:
+            operations.append((TARGET_FILE, TIMING_PATCH))
+        if before[str(SCHEDULER_FILE)] == SCHEDULER_PATCHED_SHA256:
+            operations.append((SCHEDULER_FILE, SCHEDULER_PATCH))
+        if before[str(TARGET_FILE)] in {PATCHED_SHA256, WORKER_HOOKS_SHA256}:
+            operations.append((TARGET_FILE, PATCH))
+        elif before[str(TARGET_FILE)] == LEGACY_PATCHED_SHA256:
+            operations.append((TARGET_FILE, LEGACY_PATCH))
     for _relative, patch in operations:
         check = run_patch(
             root, patch=patch, reverse=args.operation == "restore", dry_run=True
@@ -172,7 +187,7 @@ def main() -> int:
             "patch_sha256": sha256(active_runner_patch),
             "target_file": str(TARGET_FILE),
             "original_source_sha256": BASE_SHA256,
-            "patched_source_sha256": PATCHED_SHA256,
+            "patched_source_sha256": WORKER_HOOKS_SHA256,
         },
         {
             "order": 2,
@@ -181,6 +196,14 @@ def main() -> int:
             "target_file": str(SCHEDULER_FILE),
             "original_source_sha256": SCHEDULER_BASE_SHA256,
             "patched_source_sha256": SCHEDULER_PATCHED_SHA256,
+        },
+        {
+            "order": 3,
+            "patch_file": TIMING_PATCH.name,
+            "patch_sha256": sha256(TIMING_PATCH),
+            "target_file": str(TARGET_FILE),
+            "original_source_sha256": WORKER_HOOKS_SHA256,
+            "patched_source_sha256": PATCHED_SHA256,
         },
     ]
     report = {

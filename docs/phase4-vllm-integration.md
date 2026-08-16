@@ -248,7 +248,7 @@ reports_speedup=false
 
 Wall-clock phase observations exist only to prove non-overlap. They are not benchmark samples and
 must not be used as a simulator latency surface or performance conclusion.
-# Phase 4B.0/4B.1 integration boundary
+# Phase 4B.0a/4B.0b integration boundary
 
 Phase 4B adds a third, explicitly named `dual-batch` mode alongside `target-only` and
 `serial-disaggregated`. Its Target callback does not synchronously request Draft work. GPU-0
@@ -256,12 +256,33 @@ model work runs on the asynchronous Draft service; a vLLM `scheduler_cls` plugin
 completed proposals and delegates the actual batch to the stock scheduler. Draft and Verify
 request sets must be disjoint in every overlap event.
 
-The existing `0001` patch remains sufficient and no new upstream patch is added. Proposal parent
-version/count/SHA256 checks run before verification, one request has at most one proposal, and
-Draft cannot pass an unverified prefix. Batch-invariant mode and per-rank worker evidence remain
-mandatory; vLLM DBO remains disabled.
+The first A800 construction run proved that `next_decode_eligible_step` cannot represent external
+Draft readiness because the pinned scheduler increments its step before testing that cadence
+field. Phase 4B.0a therefore adds a default-off request predicate immediately before stock
+running-request allocation. WAITING/DRAFTING decode requests are skipped without token/KV budget;
+matching unconsumed proposals and legal Target tails are allowed; setup prefill is classified
+separately. The loop continues to later requests, so waiting A cannot head-of-line block prefill B.
+The original `unproposed Target decode advanced a live request` guard remains fail closed.
 
-Phase 4B.1 artifacts can establish exact-token/termination correctness and the existence of real
-GPU0 versus GPU1–2 overlap. They cannot establish speedup, throughput, goodput, SLO attainment,
-latency improvement or production readiness. The detailed state, KV and outcome definitions are
-in [phase4b-dual-batch.md](phase4b-dual-batch.md).
+The ordered Python patch stack is now `0001` worker identity/verify hooks, `0002` scheduler
+admissibility, then `0003` Target-forward timing observation. Exact original/intermediate/final
+hashes are checked and restoration is reverse-order. No attention, sampler, model, TP,
+C++/CUDA/Triton or DBO behavior changes.
+
+Phase 4B.0b introduces `DecodeReadyProvider -> DecodeReadyManifest -> consumer`. The implemented
+`ResidentWarmStartProvider` performs real Target prompt prefill plus exactly one bootstrap token,
+initializes Draft KV to the same full committed prefix, validates every request, crosses a global
+TP barrier, then starts measurement. No initial proposal may exist before that boundary. Target
+keeps KV for the prompt and the bootstrap as its pending input; Draft keeps KV for
+`prompt+bootstrap`. Target-only and Serial consume that state without full-prefix replay.
+
+Phase 4 main evaluation is decode-only. Resident warm start isolates the decode stage with real
+KV but is not an end-to-end prefill/decode deployment. `KVConnectorHandoffProvider` is the future
+end-to-end path and is not implemented in this phase. See
+[phase4b-decode-ready.md](phase4b-decode-ready.md).
+
+The Mac agent validates only CPU contracts. Server Gate A must first prove explicit scheduler
+admission and owned-process cleanup. Gate B may then compare fresh two- and five-request raw
+Target, resident Target and resident Serial token/termination results. Phase 4B.0b does not run or
+claim Dual-Batch Outcome A. No artifact in this phase establishes speedup, throughput, goodput,
+SLO attainment, latency improvement or production readiness.
