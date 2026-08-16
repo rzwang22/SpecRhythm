@@ -105,12 +105,16 @@ def load_smoke_requests(
         task: sum(request.task_class == task for request in requests)
         for task in ("code", "chat", "summarization")
     }
-    if require_task_mixture and task_counts != {
-        "code": 3,
-        "chat": 1,
-        "summarization": 1,
-    }:
-        raise ValueError("R3-real five-request smoke must have a 3/1/1 task mixture")
+    expected_mixture = {
+        5: {"code": 3, "chat": 1, "summarization": 1},
+        100: {"code": 60, "chat": 20, "summarization": 20},
+    }.get(expected_count)
+    if require_task_mixture and expected_mixture is None:
+        raise ValueError("task-mixture validation is defined only for 5 or 100 requests")
+    if expected_mixture is not None and require_task_mixture and task_counts != expected_mixture:
+        raise ValueError(
+            f"R3-real {expected_count}-request workload has wrong task mixture: {task_counts}"
+        )
     return requests
 
 
@@ -431,8 +435,9 @@ def run_stock_smoke(
     frozen_target_dir: Optional[Path] = None,
     correctness_mode: str = "default",
     diagnostics_path: Optional[Path] = None,
+    request_count: Optional[int] = None,
 ) -> dict[str, Any]:
-    """Bring up one independent stock vLLM engine and run the same five requests twice."""
+    """Bring up one independent stock vLLM engine and repeat a frozen workload."""
 
     mode_evidence = configure_before_worker_creation(correctness_mode)
     if role not in {"draft", "target"}:
@@ -465,7 +470,12 @@ def run_stock_smoke(
             f"{role} requires CUDA_VISIBLE_DEVICES="
             + ",".join(str(item) for item in engine.physical_gpu_ids)
         )
-    requests = load_smoke_requests(workload_path, config.smoke_request_count)
+    effective_count = request_count or config.smoke_request_count
+    requests = load_smoke_requests(
+        workload_path,
+        effective_count,
+        require_task_mixture=effective_count in {5, 100},
+    )
     try:
         import torch
         from vllm import LLM, SamplingParams

@@ -248,3 +248,20 @@ reports_speedup=false
 
 Wall-clock phase observations exist only to prove non-overlap. They are not benchmark samples and
 must not be used as a simulator latency surface or performance conclusion.
+# Phase 4B.0/4B.1 integration boundary
+
+Phase 4B adds a third, explicitly named `dual-batch` mode alongside `target-only` and
+`serial-disaggregated`. Its Target callback does not synchronously request Draft work. GPU-0
+model work runs on the asynchronous Draft service; a vLLM `scheduler_cls` plugin consumes only
+completed proposals and delegates the actual batch to the stock scheduler. Draft and Verify
+request sets must be disjoint in every overlap event.
+
+The existing `0001` patch remains sufficient and no new upstream patch is added. Proposal parent
+version/count/SHA256 checks run before verification, one request has at most one proposal, and
+Draft cannot pass an unverified prefix. Batch-invariant mode and per-rank worker evidence remain
+mandatory; vLLM DBO remains disabled.
+
+Phase 4B.1 artifacts can establish exact-token/termination correctness and the existence of real
+GPU0 versus GPU1–2 overlap. They cannot establish speedup, throughput, goodput, SLO attainment,
+latency improvement or production readiness. The detailed state, KV and outcome definitions are
+in [phase4b-dual-batch.md](phase4b-dual-batch.md).

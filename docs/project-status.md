@@ -34,7 +34,7 @@ claims.
 | [#1 workload-v0.1](https://github.com/rzwang22/SpecRhythm/pull/1) | merged | strict Mooncake replay, R3 proxy config, validator, manifest, fixture tests and docs | workload plumbing only; proxy payload and illustrative acceptance |
 | [#2 simulator-semantics-v0.2](https://github.com/rzwang22/SpecRhythm/pull/2) | frozen draft; Phase 2 complete, not merged | proposal lifecycle, deterministic tree oracle, tree-aware allocators, base-preserving residual controls, Phase-2 nested search pools and common-snapshot oracle replay, path-aware eager and accounting | pure-Python proxy and oracle upper bounds only; no deployable oracle, measured search cost, GPU integration, or performance claim |
 | [#3 gpu-integration-v0.1](https://github.com/rzwang22/SpecRhythm/pull/3) | draft; Phase 3B.1 and corrected-20 Phase 3C.2 complete; Phase 3C.3 corrected-100 awaiting server run | hardened multi-rank primitives, corrected R3-real traces, common-prefix replay, request-bootstrap statistics, 2x shell decomposition and diagnostic learned ranker | user-run 3×A800 correctness artifacts plus Mac CPU tests; no packed-tree/serving engine, Dual-Batch, SLO, calibrated latency or speedup claim |
-| [#4 vllm-serving-v0.1](https://github.com/rzwang22/SpecRhythm/pull/4) | draft; A800 C/D completed with exact target/serial trajectories and identical keyed round semantics; validator no longer conflates cross-request event interleaving with semantics; awaiting immutable-artifact validator replay | frozen stock reference, persistent Draft KV, stock Target verifier, strict Serial runner, import-free runner provenance, CC≥8.0 and per-rank batch-invariant proof, keyed round comparator, Target-only divergence logs, C/D validator and K=1/2/4 fixed controls | observed evidence predicts Outcome A but is not recorded as passed until corrected validator output is returned; no performance, Dual-Batch, packed tree, eager, SLO or goodput claim |
+| [#4 vllm-serving-v0.1](https://github.com/rzwang22/SpecRhythm/pull/4) | draft; Phase 4A.1.1 Outcome A frozen; Phase 4B.0 contracts and Phase 4B.1 1D+2V GPU correctness readiness implemented locally, awaiting 3×A800 runs | stock reference, persistent Draft KV, Serial runner, batch-invariant proof, ready-only scheduler plugin, asynchronous Draft service, prefix-versioned proposals and keyed Dual validator | no Phase 4B GPU Outcome yet; no performance, packed tree, residual selection, eager, shaping, SLO or goodput claim |
 
 ## Phase 4A.0–4A.1: vLLM freeze and Serial Disaggregated correctness
 
@@ -88,15 +88,37 @@ set the minimum NVIDIA compute capability to 8.0. A800 therefore passes the hard
 but that preflight intentionally leaves `batch_invariant_effective=false`. The first C attempt on
 `a7fe058d` stopped before engine creation because stock runner verification imported vLLM before
 mode configuration; the runner verifier now uses package metadata without importing vLLM. The
-subsequent C1/C2/D1/D2 artifacts completed and report exact Target-only repeats, exact Serial
-repeats, D==C, valid diagnostics, and identical semantics for all 24 keyed rounds. Their raw
-cross-request event order differs, which is scheduler interleaving rather than a semantic change.
-The immediate next gate is a validator-only replay against those immutable artifacts. Outcome A
-is recorded only if that corrected replay returns `valid=true`; otherwise the keyed mismatch or
-artifact error must be investigated without rerunning or rewriting C/D. See
+subsequent C1/C2/D1/D2 artifacts and corrected immutable-artifact validator completed with
+`outcome=A`, `valid=true`, exact Target-only repeats, exact Serial repeats, D==C, valid
+diagnostics, and identical semantics for all 24 keyed rounds. Their raw cross-request event order
+differs, which is scheduler interleaving rather than a semantic change. This Phase 4A.1.1
+conclusion is frozen and is not reinterpreted by Phase 4B. See
 [phase4-vllm-integration.md](phase4-vllm-integration.md),
 [phase4-vllm-source-audit.md](phase4-vllm-source-audit.md), and
 [phase4-vllm-server-runbook.md](phase4-vllm-server-runbook.md).
+
+## Phase 4B.0–4B.1: Dual-Batch contracts and GPU correctness readiness
+
+Phase 4B adds a linear, non-eager Dual-Batch control plane without changing vLLM rejection,
+attention, paged-KV, allocation, or default scheduling semantics. The existing pinned `0001`
+worker observer patch is sufficient: vLLM's supported `scheduler_cls` extension provides the
+ready-only decode gate, so no `0002`, C++/CUDA/Triton change, or scheduler rewrite is introduced.
+
+GPU 0 runs one persistent Draft service. Heavy Draft model work is serialized on its background
+worker queue; Unix-socket calls only enqueue work or poll completed proposals. The Target
+scheduler on GPUs 1–2 injects only ready proposals and delegates actual scheduling to the stock
+vLLM scheduler. Every proposal carries a canonical ID, round, prefix version/count/SHA256, Draft
+KV lengths and token list. A mismatch fails before verification; one request cannot own two
+proposals or be drafted through an unverified prefix.
+
+The runner and read-only validator emit state, proposal, verification, transport, Target
+diagnostic, cycle and overlap artifacts. CUDA-event evidence is retained per Target TP rank and
+on Draft GPU 0; shared host monotonic intervals establish only whether disjoint Draft and Verify
+sets overlapped. Two-, five-, and 100-request corrected workloads are the server gates. The Mac
+agent did not execute Phase 4B on GPU, so no Outcome A/B/C is currently claimed. Even Outcome A
+would establish correctness and overlap existence only—not speedup, goodput, SLO attainment,
+throughput, latency improvement, or production readiness. See
+[phase4b-dual-batch.md](phase4b-dual-batch.md).
 
 ## Phase 3.0: GPU readiness and real-trace runner
 

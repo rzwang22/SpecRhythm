@@ -522,6 +522,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     phase4_contract.add_argument("--output", required=True)
 
+    phase4_dual_contract = subparsers.add_parser(
+        "phase4-dual-contract-dry-run",
+        help="exercise Phase-4B state/queue contracts without CUDA or vLLM",
+    )
+    phase4_dual_contract.add_argument("--output", required=True)
+
     phase4_probe = subparsers.add_parser(
         "phase4-probe",
         help="validate the frozen vLLM environment and three-GPU topology",
@@ -557,6 +563,7 @@ def build_parser() -> argparse.ArgumentParser:
         default="default",
     )
     phase4_smoke.add_argument("--target-diagnostics")
+    phase4_smoke.add_argument("--request-count", type=int)
     phase4_smoke.add_argument("--output", required=True)
 
     phase4_validate = subparsers.add_parser(
@@ -588,6 +595,7 @@ def build_parser() -> argparse.ArgumentParser:
         default="default",
     )
     phase4_reference.add_argument("--target-diagnostics")
+    phase4_reference.add_argument("--request-count", type=int)
     phase4_reference.add_argument("--output", required=True)
 
     phase4_regression = subparsers.add_parser(
@@ -658,6 +666,79 @@ def build_parser() -> argparse.ArgumentParser:
     )
     phase4_serial_validate.add_argument("--output", required=True)
     phase4_serial_validate.add_argument("--markdown-output", required=True)
+
+    phase4_dual_service = subparsers.add_parser(
+        "phase4-dual-draft-service",
+        help="run the asynchronous persistent GPU-0 Phase-4B Draft service",
+    )
+    phase4_dual_service.add_argument("--config", required=True)
+    phase4_dual_service.add_argument("--socket", required=True)
+    phase4_dual_service.add_argument("--event-log", required=True)
+    phase4_dual_service.add_argument("--transport-events", required=True)
+    phase4_dual_service.add_argument("--ready", required=True)
+
+    phase4_dual_run = subparsers.add_parser(
+        "phase4-dual-batch-run",
+        help=(
+            "run 1D+2V Dual-Batch GPU correctness/overlap-existence collection; "
+            "does not report serving performance"
+        ),
+    )
+    phase4_dual_run.add_argument("--config", required=True)
+    phase4_dual_run.add_argument("--workload", required=True)
+    phase4_dual_run.add_argument("--request-count", type=int, required=True)
+    phase4_dual_run.add_argument("--environment", required=True)
+    phase4_dual_run.add_argument("--topology", required=True)
+    phase4_dual_run.add_argument("--runtime-manifest", required=True)
+    phase4_dual_run.add_argument("--reference", required=True)
+    phase4_dual_run.add_argument("--patch-manifest", required=True)
+    phase4_dual_run.add_argument("--draft-socket", required=True)
+    phase4_dual_run.add_argument("--draft-ready", required=True)
+    phase4_dual_run.add_argument("--scheduler-events", required=True)
+    phase4_dual_run.add_argument("--request-state-events", required=True)
+    phase4_dual_run.add_argument("--proposal-events", required=True)
+    phase4_dual_run.add_argument("--verification-events", required=True)
+    phase4_dual_run.add_argument("--draft-work-events", required=True)
+    phase4_dual_run.add_argument("--transport-events", required=True)
+    phase4_dual_run.add_argument("--target-diagnostics", required=True)
+    phase4_dual_run.add_argument("--plugin-report", required=True)
+    phase4_dual_run.add_argument("--output-checkpoint", required=True)
+    phase4_dual_run.add_argument("--cycle-events", required=True)
+    phase4_dual_run.add_argument("--overlap-events", required=True)
+    phase4_dual_run.add_argument("--microbatch-size", type=int, default=1)
+    phase4_dual_run.add_argument("--cohort-size", type=int)
+    phase4_dual_run.add_argument("--resume", action="store_true")
+    phase4_dual_run.add_argument("--output", required=True)
+
+    phase4_dual_validate = subparsers.add_parser(
+        "phase4-dual-batch-validate",
+        help="read-only validation of two Phase-4B Dual-Batch correctness runs",
+    )
+    phase4_dual_validate.add_argument(
+        "--stock-reference", action="append", required=True
+    )
+    phase4_dual_validate.add_argument("--target-regression", required=True)
+    phase4_dual_validate.add_argument("--run", action="append", required=True)
+    phase4_dual_validate.add_argument(
+        "--request-state-events", action="append", required=True
+    )
+    phase4_dual_validate.add_argument(
+        "--proposal-events", action="append", required=True
+    )
+    phase4_dual_validate.add_argument(
+        "--cycle-events", action="append", required=True
+    )
+    phase4_dual_validate.add_argument(
+        "--overlap-events", action="append", required=True
+    )
+    phase4_dual_validate.add_argument(
+        "--draft-work-events", action="append", required=True
+    )
+    phase4_dual_validate.add_argument(
+        "--target-diagnostics", action="append", required=True
+    )
+    phase4_dual_validate.add_argument("--output", required=True)
+    phase4_dual_validate.add_argument("--markdown-output", required=True)
 
     phase4_bi_probe = subparsers.add_parser(
         "phase4-batch-invariant-preflight",
@@ -789,6 +870,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
         _write_json(run_fake_contract(), args.output)
         return 0
+    if args.command == "phase4-dual-contract-dry-run":
+        from specrhythm.phase4.dual import run_dual_contract_dry_run
+
+        _write_json(run_dual_contract_dry_run(), args.output)
+        return 0
     if args.command == "phase4-probe":
         from specrhythm.phase4.config import load_phase4_config
         from specrhythm.phase4.manifest import (
@@ -842,6 +928,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     if args.target_diagnostics
                     else None
                 ),
+                request_count=args.request_count,
             )
         except (
             FileExistsError,
@@ -906,6 +993,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     if args.target_diagnostics
                     else None
                 ),
+                request_count=args.request_count,
             )
         except (
             FileExistsError,
@@ -1039,6 +1127,106 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         markdown = Path(args.markdown_output).resolve()
         markdown.parent.mkdir(parents=True, exist_ok=True)
         markdown.write_text(serial_summary_markdown(report, runs), encoding="utf-8")
+        return 0 if report["valid"] else 1
+    if args.command == "phase4-dual-draft-service":
+        from specrhythm.phase4.config import load_phase4_config
+        from specrhythm.phase4.dual_service import run_dual_draft_service
+
+        try:
+            run_dual_draft_service(
+                load_phase4_config(args.config),
+                socket_path=Path(args.socket).resolve(),
+                event_log_path=Path(args.event_log).resolve(),
+                transport_log_path=Path(args.transport_events).resolve(),
+                ready_path=Path(args.ready).resolve(),
+            )
+        except (
+            FileExistsError,
+            FileNotFoundError,
+            ImportError,
+            RuntimeError,
+            ValueError,
+        ) as error:
+            raise SystemExit(f"Phase-4B Draft service failed: {error}") from error
+        return 0
+    if args.command == "phase4-dual-batch-run":
+        from specrhythm.phase4.config import load_phase4_config
+        from specrhythm.phase4.dual_runner import run_dual_batch
+
+        try:
+            report = run_dual_batch(
+                load_phase4_config(args.config),
+                workload_path=Path(args.workload).resolve(),
+                request_count=args.request_count,
+                environment_path=Path(args.environment).resolve(),
+                topology_path=Path(args.topology).resolve(),
+                runtime_manifest_path=Path(args.runtime_manifest).resolve(),
+                reference_path=Path(args.reference).resolve(),
+                patch_manifest_path=Path(args.patch_manifest).resolve(),
+                draft_socket_path=Path(args.draft_socket).resolve(),
+                draft_ready_path=Path(args.draft_ready).resolve(),
+                scheduler_events_path=Path(args.scheduler_events).resolve(),
+                request_state_events_path=Path(args.request_state_events).resolve(),
+                proposal_events_path=Path(args.proposal_events).resolve(),
+                verification_events_path=Path(args.verification_events).resolve(),
+                draft_work_events_path=Path(args.draft_work_events).resolve(),
+                transport_events_path=Path(args.transport_events).resolve(),
+                target_diagnostics_path=Path(args.target_diagnostics).resolve(),
+                plugin_report_path=Path(args.plugin_report).resolve(),
+                output_checkpoint_path=Path(args.output_checkpoint).resolve(),
+                cycle_events_path=Path(args.cycle_events).resolve(),
+                overlap_events_path=Path(args.overlap_events).resolve(),
+                output_path=Path(args.output).resolve(),
+                git_commit=_current_git_commit() or "unknown",
+                microbatch_size=args.microbatch_size,
+                cohort_size=args.cohort_size,
+                resume=args.resume,
+            )
+        except (
+            FileExistsError,
+            FileNotFoundError,
+            ImportError,
+            RuntimeError,
+            ValueError,
+        ) as error:
+            raise SystemExit(f"Phase-4B Dual-Batch run failed: {error}") from error
+        return 0 if report.get("exact_sequence_match") is True else 1
+    if args.command == "phase4-dual-batch-validate":
+        from specrhythm.phase4.dual_validation import validate_dual_batch_runs
+
+        try:
+            report = validate_dual_batch_runs(
+                stock_references=[Path(path).resolve() for path in args.stock_reference],
+                target_regression_path=Path(args.target_regression).resolve(),
+                run_paths=[Path(path).resolve() for path in args.run],
+                state_event_paths=[
+                    Path(path).resolve() for path in args.request_state_events
+                ],
+                proposal_event_paths=[
+                    Path(path).resolve() for path in args.proposal_events
+                ],
+                cycle_event_paths=[Path(path).resolve() for path in args.cycle_events],
+                overlap_event_paths=[
+                    Path(path).resolve() for path in args.overlap_events
+                ],
+                draft_work_event_paths=[
+                    Path(path).resolve() for path in args.draft_work_events
+                ],
+                target_diagnostic_paths=[
+                    Path(path).resolve() for path in args.target_diagnostics
+                ],
+                output_path=Path(args.output).resolve(),
+                markdown_path=Path(args.markdown_output).resolve(),
+            )
+        except (FileNotFoundError, json.JSONDecodeError, RuntimeError, ValueError) as error:
+            report = {
+                "schema_version": "specrhythm.phase4b-dual-batch-validation.v1",
+                "valid": False,
+                "outcome": "invalid-artifacts",
+                "errors": [str(error)],
+            }
+            _write_json(report, args.output)
+            return 1
         return 0 if report["valid"] else 1
     if args.command == "phase4-batch-invariant-preflight":
         from specrhythm.phase4.batch_invariant import (

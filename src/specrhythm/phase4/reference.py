@@ -205,6 +205,7 @@ def freeze_stock_reference(
     legacy_hf_target_dir: Optional[Path] = None,
     correctness_mode: str = "default",
     diagnostics_path: Optional[Path] = None,
+    request_count: Optional[int] = None,
 ) -> dict[str, Any]:
     if output_path.exists():
         raise FileExistsError("stock target reference already exists and is immutable")
@@ -224,6 +225,7 @@ def freeze_stock_reference(
         frozen_target_dir=legacy_hf_target_dir,
         correctness_mode=correctness_mode,
         diagnostics_path=diagnostics_path,
+        request_count=request_count,
     )
     reference = build_stock_reference(
         smoke,

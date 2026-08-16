@@ -13,6 +13,11 @@ The patch is required because the public custom proposer signature at this commi
 stable request identity or exact Target-forward boundaries. The out-of-tree proposer uses the
 hooks only for stable IPC correlation and strict-serial correctness timestamps.
 
+Phase 4B reuses the same hooks for per-rank verification evidence. It does not add a second patch:
+the pinned release's public `scheduler_cls` extension is sufficient for the out-of-tree ready-only
+gate. The Dual-Batch adapter remains outside vLLM source and is explicitly enabled only for the
+correctness run.
+
 Run `python integrations/vllm/manage_patch.py check ...` before applying it. The manager checks
 the exact base/installed file SHA256, applies the patch without fuzzy matching, records patch and
 file checksums, and can restore the stock file. Do not apply it to another vLLM commit.

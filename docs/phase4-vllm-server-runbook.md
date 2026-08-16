@@ -805,5 +805,360 @@ find "$SR_PHASE4_RUN" -maxdepth 2 -type f -print | sort
 ```
 
 Return `summary.md`, `validation.json`, both Serial JSON files, both round-event logs, the bundle,
-and `review-bundle.sha256`. Stop after this correctness run. Do not start a 100-request workload,
-arrival replay, latency/capacity sweep, Dual-Batch, Eager, or packed-tree experiment.
+and `review-bundle.sha256`. This is the historical Phase 4A stop boundary; the separately headed
+Phase 4B protocol below supersedes only the old prohibition on starting Dual-Batch. It still does
+not authorize an arrival replay, latency/capacity sweep, Eager, or packed-tree experiment.
+
+# Phase 4B.1 1D+2V Dual-Batch correctness runbook
+
+This is a new result root. It does not mutate the frozen Phase 4A Outcome-A artifacts. It proves
+correctness and the existence of GPU overlap only; it is not a performance experiment.
+
+## 1. Exact code, environment, models and corrected workloads
+
+```bash
+set -euo pipefail
+cd /root/autodl-tmp/src/SpecRhythm
+git fetch origin codex/vllm-serving-v0.1
+git switch --detach origin/codex/vllm-serving-v0.1
+export SR_PHASE4B_COMMIT="$(git rev-parse HEAD)"
+test -z "$(git status --short)"
+
+conda activate /root/autodl-tmp/envs/specrhythm-phase4-vllm-0.25.1
+python --version
+python -m pip install -e '.[dev]' --no-deps
+
+export SR_DRAFT_MODEL="/root/autodl-tmp/models/Qwen3-0.6B"
+export SR_TARGET_MODEL="/root/autodl-tmp/models/Qwen3-32B"
+export SR_VLLM_SOURCE="/root/autodl-tmp/src/vllm-v0.25.1"
+export SR_PHASE3C_COMMIT="34c7ea9836c2595c8a8aeaeb5680709520edd3d8"
+export SR_PHASE3C_RUN="/root/autodl-tmp/SpecRhythm-data/results/phase3c/$SR_PHASE3C_COMMIT/corrected-multiround-100"
+export SR_R3_100="$SR_PHASE3C_RUN/workload.jsonl"
+export SR_PHASE4B_ROOT="/root/autodl-tmp/SpecRhythm-data/results/phase4/$SR_PHASE4B_COMMIT/dual-batch-1d2v-$(date -u +%Y%m%dT%H%M%SZ)"
+
+test -f "$SR_DRAFT_MODEL/config.json"
+test -f "$SR_TARGET_MODEL/config.json"
+test -f "$SR_R3_100"
+test "$(wc -l < "$SR_R3_100")" -eq 100
+test ! -e "$SR_PHASE4B_ROOT"
+mkdir -p "$SR_PHASE4B_ROOT/workloads"
+
+git -C "$SR_VLLM_SOURCE" checkout --detach \
+  752a3a504485790a2e8491cacbb35c137339ad34
+test "$(git -C "$SR_VLLM_SOURCE" rev-parse HEAD)" = \
+  "752a3a504485790a2e8491cacbb35c137339ad34"
+
+export SR_VLLM_ROOT="$(python - <<'PY'
+from importlib import metadata
+print(metadata.distribution("vllm").locate_file(""))
+PY
+)"
+
+nvidia-smi -L | tee "$SR_PHASE4B_ROOT/nvidia-smi-L.txt"
+nvidia-smi topo -m | tee "$SR_PHASE4B_ROOT/nvidia-smi-topo.txt"
+specrhythm phase4-dual-contract-dry-run \
+  --output "$SR_PHASE4B_ROOT/dual-contract-dry-run.json"
+```
+
+Build the two-request construction workload and frozen 3/1/1 five-request workload from the
+corrected 100 rows. Prompt text and token IDs are unchanged. Only the construction test caps its
+output length at eight tokens so it remains short; its own Target-only reference uses the same
+cap.
+
+```bash
+python - "$SR_R3_100" \
+  "$SR_PHASE4B_ROOT/workloads/r3-corrected-2.jsonl" \
+  "$SR_PHASE4B_ROOT/workloads/r3-corrected-5.jsonl" <<'PY'
+import json
+import sys
+
+rows = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8") if line.strip()]
+assert len(rows) == 100
+assert {task: sum(row["task_class"] == task for row in rows)
+        for task in ("code", "chat", "summarization")} == {
+            "code": 60, "chat": 20, "summarization": 20,
+        }
+
+two = []
+for task in ("code", "chat"):
+    row = dict(next(item for item in rows if item["task_class"] == task))
+    row["maximum_new_tokens"] = min(row["maximum_new_tokens"], 8)
+    two.append(row)
+
+needed = {"code": 3, "chat": 1, "summarization": 1}
+five = []
+for row in rows:
+    task = row["task_class"]
+    if needed.get(task, 0):
+        five.append(row)
+        needed[task] -= 1
+    if not any(needed.values()):
+        break
+
+for path, selected in ((sys.argv[2], two), (sys.argv[3], five)):
+    with open(path, "x", encoding="utf-8") as handle:
+        for row in selected:
+            handle.write(json.dumps(row, sort_keys=True, separators=(",", ":")) + "\n")
+    assert all(row["prompt_length"] == len(row["prompt_token_ids"]) for row in selected)
+PY
+
+cp --reflink=auto "$SR_R3_100" "$SR_PHASE4B_ROOT/workloads/r3-corrected-100.jsonl" 2>/dev/null || \
+cp "$SR_R3_100" "$SR_PHASE4B_ROOT/workloads/r3-corrected-100.jsonl"
+find "$SR_PHASE4B_ROOT/workloads" -type f -print0 | sort -z | xargs -0 sha256sum \
+  > "$SR_PHASE4B_ROOT/workload-sha256-before.txt"
+```
+
+## 2. Restore stock vLLM, probe, and freeze two references per workload
+
+```bash
+python integrations/vllm/manage_patch.py restore \
+  --vllm-root "$SR_VLLM_ROOT" --source "$SR_VLLM_SOURCE" || \
+python integrations/vllm/manage_patch.py check \
+  --vllm-root "$SR_VLLM_ROOT" --source "$SR_VLLM_SOURCE"
+
+env -u CUDA_VISIBLE_DEVICES VLLM_BATCH_INVARIANT=1 specrhythm phase4-probe \
+  --config configs/phase4b_dual_batch_1d2v.yaml \
+  --vllm-source "$SR_VLLM_SOURCE" \
+  --environment-output "$SR_PHASE4B_ROOT/environment.json" \
+  --topology-output "$SR_PHASE4B_ROOT/topology.json" \
+  --validation-output "$SR_PHASE4B_ROOT/probe-validation.json"
+
+CUDA_VISIBLE_DEVICES=1,2 VLLM_USE_V2_MODEL_RUNNER=0 VLLM_BATCH_INVARIANT=1 \
+specrhythm phase4-batch-invariant-preflight \
+  --correctness-mode batch-invariant \
+  --output "$SR_PHASE4B_ROOT/batch-invariant-preflight.json"
+
+for level in 2 5 100; do
+  workload="$SR_PHASE4B_ROOT/workloads/r3-corrected-$level.jsonl"
+  for run_id in 1 2; do
+    ref_dir="$SR_PHASE4B_ROOT/L$level/reference-$run_id"
+    mkdir -p "$ref_dir"
+    CUDA_VISIBLE_DEVICES=1,2 VLLM_USE_V2_MODEL_RUNNER=0 VLLM_BATCH_INVARIANT=1 \
+    specrhythm phase4-stock-reference \
+      --config configs/phase4b_dual_batch_1d2v.yaml \
+      --correctness-mode batch-invariant \
+      --request-count "$level" \
+      --workload "$workload" \
+      --environment "$SR_PHASE4B_ROOT/environment.json" \
+      --topology "$SR_PHASE4B_ROOT/topology.json" \
+      --runtime-manifest "$ref_dir/runtime-manifest.json" \
+      --output "$ref_dir/stock-target-reference.json" \
+      2>&1 | tee "$ref_dir/stock-reference.log"
+    chmod a-w "$ref_dir/stock-target-reference.json"
+  done
+done
+```
+
+Apply/check the existing one-file patch. No `0002` exists in Phase 4B.
+
+```bash
+python integrations/vllm/manage_patch.py apply \
+  --vllm-root "$SR_VLLM_ROOT" \
+  --source "$SR_VLLM_SOURCE" \
+  --manifest "$SR_PHASE4B_ROOT/vllm-base-and-patch-manifest.json"
+python integrations/vllm/manage_patch.py restore \
+  --vllm-root "$SR_VLLM_ROOT" --source "$SR_VLLM_SOURCE"
+python integrations/vllm/manage_patch.py apply \
+  --vllm-root "$SR_VLLM_ROOT" \
+  --source "$SR_VLLM_SOURCE" \
+  --manifest "$SR_PHASE4B_ROOT/vllm-base-and-patch-manifest.json"
+
+CUDA_VISIBLE_DEVICES=1,2 VLLM_USE_V2_MODEL_RUNNER=0 VLLM_BATCH_INVARIANT=1 \
+specrhythm phase4-target-regression \
+  --config configs/phase4b_dual_batch_1d2v.yaml \
+  --correctness-mode batch-invariant \
+  --workload "$SR_PHASE4B_ROOT/workloads/r3-corrected-5.jsonl" \
+  --environment "$SR_PHASE4B_ROOT/environment.json" \
+  --topology "$SR_PHASE4B_ROOT/topology.json" \
+  --runtime-manifest "$SR_PHASE4B_ROOT/patched-target-runtime.json" \
+  --reference "$SR_PHASE4B_ROOT/L5/reference-1/stock-target-reference.json" \
+  --patch-manifest "$SR_PHASE4B_ROOT/vllm-base-and-patch-manifest.json" \
+  --target-diagnostics "$SR_PHASE4B_ROOT/patched-target-diagnostics.jsonl" \
+  --output "$SR_PHASE4B_ROOT/patched-target-regression.json"
+```
+
+## 3. Run one resumable Dual-Batch collection
+
+The function starts a fresh persistent Draft service. If a Target process is interrupted, kill
+the old service, start it again with the same paths, and rerun the Target command with `--resume`.
+Only completed request checkpoints are skipped; no in-flight proposal is reconstructed.
+
+```bash
+run_dual_once () {
+  level="$1"
+  run_id="$2"
+  cohort_size="$3"
+  run_dir="$SR_PHASE4B_ROOT/L$level/DB-$run_id"
+  mkdir -p "$run_dir"
+
+  CUDA_VISIBLE_DEVICES=0 VLLM_USE_V2_MODEL_RUNNER=0 VLLM_BATCH_INVARIANT=1 \
+  specrhythm phase4-dual-draft-service \
+    --config configs/phase4b_dual_batch_1d2v.yaml \
+    --socket "$run_dir/draft.sock" \
+    --event-log "$run_dir/draft-work-events.jsonl" \
+    --transport-events "$run_dir/transport-events.jsonl" \
+    --ready "$run_dir/draft-service-ready.json" \
+    >"$run_dir/draft-service.log" 2>&1 &
+  draft_pid="$!"
+
+  for _ in $(seq 1 600); do
+    test -f "$run_dir/draft-service-ready.json" && test -S "$run_dir/draft.sock" && break
+    kill -0 "$draft_pid" 2>/dev/null || { cat "$run_dir/draft-service.log"; return 1; }
+    sleep 1
+  done
+  test -S "$run_dir/draft.sock"
+
+  set +e
+  CUDA_VISIBLE_DEVICES=1,2 VLLM_USE_V2_MODEL_RUNNER=0 VLLM_BATCH_INVARIANT=1 \
+  specrhythm phase4-dual-batch-run \
+    --config configs/phase4b_dual_batch_1d2v.yaml \
+    --workload "$SR_PHASE4B_ROOT/workloads/r3-corrected-$level.jsonl" \
+    --request-count "$level" \
+    --environment "$SR_PHASE4B_ROOT/environment.json" \
+    --topology "$SR_PHASE4B_ROOT/topology.json" \
+    --runtime-manifest "$run_dir/runtime-manifest.json" \
+    --reference "$SR_PHASE4B_ROOT/L$level/reference-1/stock-target-reference.json" \
+    --patch-manifest "$SR_PHASE4B_ROOT/vllm-base-and-patch-manifest.json" \
+    --draft-socket "$run_dir/draft.sock" \
+    --draft-ready "$run_dir/draft-service-ready.json" \
+    --scheduler-events "$run_dir/scheduler-events.jsonl" \
+    --request-state-events "$run_dir/request-state-events.jsonl" \
+    --proposal-events "$run_dir/proposal-events.jsonl" \
+    --verification-events "$run_dir/verification-events.jsonl" \
+    --draft-work-events "$run_dir/draft-work-events.jsonl" \
+    --transport-events "$run_dir/transport-events.jsonl" \
+    --target-diagnostics "$run_dir/target-diagnostics.jsonl" \
+    --plugin-report "$run_dir/dual-proposer-report.json" \
+    --output-checkpoint "$run_dir/output-checkpoint.jsonl" \
+    --cycle-events "$run_dir/dual-cycle-events.jsonl" \
+    --overlap-events "$run_dir/overlap-events.jsonl" \
+    --microbatch-size 1 \
+    --cohort-size "$cohort_size" \
+    --resume \
+    --output "$run_dir/dual-batch-run.json" \
+    >"$run_dir/target.log" 2>&1
+  target_status="$?"
+  set -e
+
+  if test "$target_status" -ne 0; then
+    kill "$draft_pid" 2>/dev/null || true
+    wait "$draft_pid" 2>/dev/null || true
+    tail -n 200 "$run_dir/target.log"
+    return "$target_status"
+  fi
+  wait "$draft_pid"
+  test -f "$run_dir/dual-batch-run.json"
+}
+
+# Level 1: two short requests. Review the cycle log before continuing.
+run_dual_once 2 1 2
+run_dual_once 2 2 2
+
+# Level 2: two independent corrected 3/1/1 runs.
+run_dual_once 5 1 5
+run_dual_once 5 2 5
+
+# Level 3: request-level resume checkpoints every ten requests.
+run_dual_once 100 1 10
+run_dual_once 100 2 10
+```
+
+## 4. Read-only validation for levels 2, 5 and 100
+
+```bash
+validate_dual_level () {
+  level="$1"
+  validation_dir="$SR_PHASE4B_ROOT/L$level/validation"
+  mkdir -p "$validation_dir"
+
+  find "$SR_PHASE4B_ROOT/L$level" -type f ! -path '*/validation/*' -print0 | \
+    sort -z | xargs -0 sha256sum > "$validation_dir/input-sha256-before.txt"
+
+  set +e
+  specrhythm phase4-dual-batch-validate \
+    --stock-reference "$SR_PHASE4B_ROOT/L$level/reference-1/stock-target-reference.json" \
+    --stock-reference "$SR_PHASE4B_ROOT/L$level/reference-2/stock-target-reference.json" \
+    --target-regression "$SR_PHASE4B_ROOT/patched-target-regression.json" \
+    --run "$SR_PHASE4B_ROOT/L$level/DB-1/dual-batch-run.json" \
+    --run "$SR_PHASE4B_ROOT/L$level/DB-2/dual-batch-run.json" \
+    --request-state-events "$SR_PHASE4B_ROOT/L$level/DB-1/request-state-events.jsonl" \
+    --request-state-events "$SR_PHASE4B_ROOT/L$level/DB-2/request-state-events.jsonl" \
+    --proposal-events "$SR_PHASE4B_ROOT/L$level/DB-1/proposal-events.jsonl" \
+    --proposal-events "$SR_PHASE4B_ROOT/L$level/DB-2/proposal-events.jsonl" \
+    --cycle-events "$SR_PHASE4B_ROOT/L$level/DB-1/dual-cycle-events.jsonl" \
+    --cycle-events "$SR_PHASE4B_ROOT/L$level/DB-2/dual-cycle-events.jsonl" \
+    --overlap-events "$SR_PHASE4B_ROOT/L$level/DB-1/overlap-events.jsonl" \
+    --overlap-events "$SR_PHASE4B_ROOT/L$level/DB-2/overlap-events.jsonl" \
+    --draft-work-events "$SR_PHASE4B_ROOT/L$level/DB-1/draft-work-events.jsonl" \
+    --draft-work-events "$SR_PHASE4B_ROOT/L$level/DB-2/draft-work-events.jsonl" \
+    --target-diagnostics "$SR_PHASE4B_ROOT/L$level/DB-1/target-diagnostics.jsonl" \
+    --target-diagnostics "$SR_PHASE4B_ROOT/L$level/DB-2/target-diagnostics.jsonl" \
+    --output "$validation_dir/validation.json" \
+    --markdown-output "$validation_dir/summary.md"
+  validator_status="$?"
+  set -e
+
+  find "$SR_PHASE4B_ROOT/L$level" -type f ! -path '*/validation/*' -print0 | \
+    sort -z | xargs -0 sha256sum > "$validation_dir/input-sha256-after.txt"
+  diff -u "$validation_dir/input-sha256-before.txt" \
+    "$validation_dir/input-sha256-after.txt"
+  cat "$validation_dir/summary.md"
+  return "$validator_status"
+}
+
+validate_dual_level 2
+validate_dual_level 5
+validate_dual_level 100
+
+find "$SR_PHASE4B_ROOT/workloads" -type f -print0 | sort -z | xargs -0 sha256sum \
+  > "$SR_PHASE4B_ROOT/workload-sha256-after.txt"
+diff -u "$SR_PHASE4B_ROOT/workload-sha256-before.txt" \
+  "$SR_PHASE4B_ROOT/workload-sha256-after.txt"
+```
+
+Outcome A requires the five- and 100-request validators to be valid, exact, state/KV/accounting
+clean, batch-invariant on every TP rank, and positive-overlap. Outcome B is exact but has no
+positive overlap. Outcome C is any correctness failure. Stop on B or C; do not tune timing or
+start a performance run.
+
+## 5. Review bundle
+
+```bash
+python - "$SR_PHASE4B_ROOT" <<'PY'
+import hashlib
+import json
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+files = []
+for path in sorted(root.rglob("*")):
+    if path.is_file() and path.stat().st_size < 128 * 1024 * 1024:
+        files.append({
+            "path": str(path.relative_to(root)),
+            "size": path.stat().st_size,
+            "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        })
+manifest = {
+    "schema_version": "specrhythm.phase4b-review-bundle.v1",
+    "specrhythm_commit": pathlib.Path("/root/autodl-tmp/src/SpecRhythm/.git/HEAD").read_text().strip(),
+    "performance_result": False,
+    "files": files,
+}
+(root / "review-manifest.json").write_text(
+    json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+)
+PY
+
+tar -C "$SR_PHASE4B_ROOT" -czf "$SR_PHASE4B_ROOT/review-bundle.tar.gz" \
+  review-manifest.json environment.json topology.json probe-validation.json \
+  batch-invariant-preflight.json vllm-base-and-patch-manifest.json \
+  patched-target-regression.json workload-sha256-before.txt workload-sha256-after.txt \
+  L2 L5 L100
+sha256sum "$SR_PHASE4B_ROOT/review-bundle.tar.gz" | \
+  tee "$SR_PHASE4B_ROOT/review-bundle.sha256"
+```
+
+Return all three `validation.json`/`summary.md` pairs, both five-request and both 100-request run
+JSONs, overlap/cycle logs, `review-manifest.json`, and the bundle checksum. Then stop. Do not run
+Phase 4B.2, packed trees, residual selection, Eager, Shaping, TP3/TP4 or four-GPU evaluation.
