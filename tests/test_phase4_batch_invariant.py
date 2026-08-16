@@ -11,6 +11,7 @@ import pytest
 
 from specrhythm.phase4.batch_invariant import (
     configure_before_worker_creation,
+    pinned_vllm_hardware_supported,
     probe_batch_invariant_hardware,
     require_matching_reference_mode,
     validate_batch_invariant_ranks,
@@ -31,7 +32,7 @@ from specrhythm.phase4.vllm_diagnostics import (
 from specrhythm.phase4.vllm_remote import _assert_target_information_isolated
 
 
-def rank_evidence(rank=0, *, requested=True, capability="9.0", effective=True):
+def rank_evidence(rank=0, *, requested=True, capability="8.0", effective=True):
     return {
         "global_rank": rank,
         "batch_invariant_env_raw": "1" if requested else "0",
@@ -40,7 +41,7 @@ def rank_evidence(rank=0, *, requested=True, capability="9.0", effective=True):
         "batch_invariant_effective": effective,
         "batch_invariant_validation": {"valid": effective, "reasons": []},
         "compute_capability": capability,
-        "documented_hardware_supported": capability >= "9.0",
+        "documented_hardware_supported": pinned_vllm_hardware_supported(capability),
         "disable_custom_all_reduce": requested,
         "all_reduce_backends": ["PYNCCL"],
         "attention_batch_invariance": [
@@ -119,6 +120,53 @@ def test_batch_invariant_preflight_is_explicit_without_cuda(monkeypatch):
     assert report["errors"] == ["CUDA is unavailable"]
 
 
+@pytest.mark.parametrize(
+    ("capability", "supported"),
+    [("7.5", False), ("8.0", True), ("9.0", True)],
+)
+def test_pinned_vllm_compute_capability_boundary(capability, supported):
+    assert pinned_vllm_hardware_supported(capability) is supported
+
+
+def test_a800_preflight_proceeds_but_requires_initialized_worker_evidence(
+    monkeypatch,
+):
+    monkeypatch.delenv("VLLM_BATCH_INVARIANT", raising=False)
+    fake_torch = SimpleNamespace(
+        cuda=SimpleNamespace(
+            is_available=lambda: True,
+            device_count=lambda: 2,
+            get_device_capability=lambda _index: (8, 0),
+            get_device_name=lambda _index: "NVIDIA A800-SXM4-80GB",
+        )
+    )
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    report = probe_batch_invariant_hardware("batch-invariant")
+    assert report["valid"] is True
+    assert report["errors"] == []
+    assert all(row["documented_hardware_supported"] for row in report["devices"])
+    assert report["batch_invariant_effective"] is False
+    assert report["effective_requires_initialized_worker_evidence"] is True
+
+
+def test_pre_ampere_preflight_fails_at_the_correct_pinned_boundary(monkeypatch):
+    monkeypatch.delenv("VLLM_BATCH_INVARIANT", raising=False)
+    fake_torch = SimpleNamespace(
+        cuda=SimpleNamespace(
+            is_available=lambda: True,
+            device_count=lambda: 1,
+            get_device_capability=lambda _index: (7, 5),
+            get_device_name=lambda _index: "Pre-Ampere test device",
+        )
+    )
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    report = probe_batch_invariant_hardware("batch-invariant")
+    assert report["valid"] is False
+    assert report["devices"][0]["documented_hardware_supported"] is False
+    assert any("compute capability >= 8.0" in error for error in report["errors"])
+    assert report["batch_invariant_effective"] is False
+
+
 def test_target_only_and_serial_reference_mode_must_match():
     reference = {"target_runtime_configuration": {"correctness_mode": "default"}}
     require_matching_reference_mode(reference, "default")
@@ -131,11 +179,46 @@ def test_requested_effective_validation_fails_closed_and_checks_ranks():
     assert validate_batch_invariant_ranks(rows, requested=True)[
         "batch_invariant_effective"
     ]
-    rows[1] = rank_evidence(1, capability="8.0", effective=False)
+    rows[1] = rank_evidence(1, capability="7.5", effective=False)
     rows[1]["batch_invariant_validation"]["reasons"] = ["unsupported hardware"]
     report = validate_batch_invariant_ranks(rows, requested=True)
     assert not report["batch_invariant_effective"]
     assert any("cannot prove" in error for error in report["batch_invariant_validation"]["errors"])
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("batch_invariant_env_resolved", False, "did not resolve"),
+        ("documented_hardware_supported", False, "hardware contract"),
+        ("disable_custom_all_reduce", False, "custom all-reduce"),
+        ("cascade_attention_enabled", True, "cascade attention"),
+        ("vllm_dbo_enabled", True, "DBO"),
+    ],
+)
+def test_requested_batch_invariance_requires_every_worker_condition(
+    field, value, message
+):
+    row = rank_evidence()
+    row[field] = value
+    report = validate_batch_invariant_ranks([row], requested=True)
+    assert report["batch_invariant_effective"] is False
+    assert any(
+        message in error for error in report["batch_invariant_validation"]["errors"]
+    )
+
+
+def test_requested_batch_invariance_requires_attention_backend_evidence():
+    row = rank_evidence()
+    row["attention_batch_invariance"] = [
+        {"backend": "OTHER", "supports_batch_invariance": False}
+    ]
+    report = validate_batch_invariant_ranks([row], requested=True)
+    assert report["batch_invariant_effective"] is False
+    assert any(
+        "every active attention backend" in error
+        for error in report["batch_invariant_validation"]["errors"]
+    )
 
 
 def test_divergent_position_proposal_logits_mapping():

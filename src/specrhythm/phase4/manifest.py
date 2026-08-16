@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
 
+from specrhythm.phase4.batch_invariant import PINNED_VLLM_HARDWARE_CONTRACT
 from specrhythm.phase4.config import Phase4Config
 
 
@@ -391,7 +392,7 @@ def build_runtime_manifest(
                 mode_setup
                 and mode_setup.get("configured_before_vllm_import") is True
             ),
-            "pinned_vllm_hardware_contract": "NVIDIA compute capability >= 9.0",
+            "pinned_vllm_hardware_contract": PINNED_VLLM_HARDWARE_CONTRACT,
             "deterministic_sampling": config.sampling.do_sample is False,
             "worker_configuration_evidence": [
                 {

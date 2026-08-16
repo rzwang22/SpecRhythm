@@ -24,15 +24,11 @@ export SR_PHASE4_BI_ROOT="/root/autodl-tmp/SpecRhythm-data/results/phase4/$SR_PH
 test ! -e "$SR_PHASE4_BI_ROOT"
 mkdir -p "$SR_PHASE4_BI_ROOT"
 
-set +e
 CUDA_VISIBLE_DEVICES=1,2 VLLM_USE_V2_MODEL_RUNNER=0 VLLM_BATCH_INVARIANT=1 \
 specrhythm phase4-batch-invariant-preflight \
   --correctness-mode batch-invariant \
   --output "$SR_PHASE4_BI_ROOT/batch-invariant-preflight.json"
-preflight_status="$?"
-set -e
 cat "$SR_PHASE4_BI_ROOT/batch-invariant-preflight.json"
-test "$preflight_status" -eq 2
 python - "$SR_PHASE4_BI_ROOT/batch-invariant-preflight.json" <<'PY'
 import json
 import sys
@@ -40,27 +36,26 @@ value = json.load(open(sys.argv[1], encoding="utf-8"))
 assert value["cuda_available"] is True, value
 assert value["batch_invariant_requested"] is True, value
 assert value["batch_invariant_effective"] is False, value
+assert value["effective_requires_initialized_worker_evidence"] is True, value
 assert value["devices"] and all(
     row["compute_capability"] == "8.0" for row in value["devices"]
 ), value
-assert any("compute capability >= 9.0" in item for item in value["errors"]), value
+assert all(row["documented_hardware_supported"] is True for row in value["devices"]), value
+assert value["pinned_vllm_hardware_contract"].endswith(">= 8.0"), value
+assert value["valid"] is True and value["errors"] == [], value
 PY
 ```
 
-On the current A800 server this is the expected, evidence-backed result: every visible GPU is
-compute capability 8.0, while pinned vLLM v0.25.1 documents the mode only for capability at least
-9.0. Stop and return `batch-invariant-preflight.json`. Do not set an override, run C/D anyway, or
-interpret `VLLM_BATCH_INVARIANT=1` as effective.
+On the current A800 server this preflight must return zero because every visible GPU has compute
+capability 8.0, which satisfies the exact pinned vLLM v0.25.1 hardware requirement. This is only
+permission to initialize C/D workers. `batch_invariant_effective` deliberately remains false in
+the preflight: hardware capability and an environment request are not runtime proof.
 
-The remainder of this section is for a supported NVIDIA capability ≥9.0 host only. It must begin
-with the same preflight returning zero:
-
-```bash
-CUDA_VISIBLE_DEVICES=1,2 VLLM_USE_V2_MODEL_RUNNER=0 VLLM_BATCH_INVARIANT=1 \
-specrhythm phase4-batch-invariant-preflight \
-  --correctness-mode batch-invariant \
-  --output "$SR_PHASE4_BI_ROOT/batch-invariant-preflight.json"
-```
+Every initialized TP rank in C and D must independently prove that
+`VLLM_BATCH_INVARIANT` resolved true, every active attention backend reports batch-invariance
+support, custom all-reduce is disabled, cascade attention is disabled, and DBO is disabled. A
+missing or inconsistent field fails closed. Do not proceed past a worker-validation failure and
+do not relabel the preflight as effective evidence.
 
 Reuse the exact five-request file from A/B without modifying it. Point `SR_PHASE4_AB_RUN` at the
 old default-mode result directory; checksums are retained as provenance, while all C/D outputs go

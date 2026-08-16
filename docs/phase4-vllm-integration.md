@@ -53,10 +53,12 @@ fields. A requested mode without consistent, complete rank evidence fails; setti
 environment variable alone is never sufficient.
 
 The pinned vLLM v0.25.1 source explicitly documents batch invariance as requiring NVIDIA compute
-capability at least 9.0. The available A800 is compute capability 8.0. Consequently, the formal
-preflight must fail on the current 3×A800 server and the repository must not label an A800 C/D
-run effective. There is no override or silent fallback. A supported-Hopper-or-newer run may
-continue to C/D only after the preflight and initialized-rank validation both pass.
+capability at least 8.0, and its FlashAttention backend both supports batch invariance and accepts
+compute capability 8.0 or newer. The available A800 therefore passes the hardware preflight. The
+preflight still reports `batch_invariant_effective=false`: C/D may be labelled effective only
+after every initialized TP rank proves the resolved environment flag, attention-backend support,
+custom-all-reduce disablement, cascade-attention disablement, and DBO disablement. There is no
+override or silent fallback for missing worker evidence.
 
 The four conceptual experiments remain distinct and use fresh artifact directories:
 
@@ -64,7 +66,7 @@ The four conceptual experiments remain distinct and use fresh artifact directori
 | --- | --- | --- | --- |
 | A | stock Target-only | default | retained provenance; never rewritten |
 | B | Serial Disaggregated | default | retained failed exact comparison |
-| C | stock Target-only, twice | batch-invariant | gated by hardware/rank proof |
+| C | stock Target-only, twice | batch-invariant | A800 hardware-supported; requires rank proof |
 | D | Serial Disaggregated, twice | batch-invariant | compared only with C |
 
 Outcome A requires both C repeats, both D repeats, termination, accounting, strict timeline, KV

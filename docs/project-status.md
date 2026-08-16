@@ -34,7 +34,7 @@ claims.
 | [#1 workload-v0.1](https://github.com/rzwang22/SpecRhythm/pull/1) | merged | strict Mooncake replay, R3 proxy config, validator, manifest, fixture tests and docs | workload plumbing only; proxy payload and illustrative acceptance |
 | [#2 simulator-semantics-v0.2](https://github.com/rzwang22/SpecRhythm/pull/2) | frozen draft; Phase 2 complete, not merged | proposal lifecycle, deterministic tree oracle, tree-aware allocators, base-preserving residual controls, Phase-2 nested search pools and common-snapshot oracle replay, path-aware eager and accounting | pure-Python proxy and oracle upper bounds only; no deployable oracle, measured search cost, GPU integration, or performance claim |
 | [#3 gpu-integration-v0.1](https://github.com/rzwang22/SpecRhythm/pull/3) | draft; Phase 3B.1 and corrected-20 Phase 3C.2 complete; Phase 3C.3 corrected-100 awaiting server run | hardened multi-rank primitives, corrected R3-real traces, common-prefix replay, request-bootstrap statistics, 2x shell decomposition and diagnostic learned ranker | user-run 3×A800 correctness artifacts plus Mac CPU tests; no packed-tree/serving engine, Dual-Batch, SLO, calibrated latency or speedup claim |
-| [#4 vllm-serving-v0.1](https://github.com/rzwang22/SpecRhythm/pull/4) | draft; Phase 4A.1 default A/B exposed one exact-token mismatch; Phase 4A.1.1 hardening implemented, awaiting hardware-gate evidence | frozen stock reference, persistent Draft KV, stock Target verifier, strict Serial runner, per-rank batch-invariant proof, Target-only divergence logs, C/D validator and K=1/2/4 fixed controls | user-run default A/B is correctness provenance, not a pass; pinned vLLM requires CC≥9.0 for formal batch invariance, while current A800 is CC8.0; no performance, Dual-Batch, packed tree, eager, SLO or goodput claim |
+| [#4 vllm-serving-v0.1](https://github.com/rzwang22/SpecRhythm/pull/4) | draft; Phase 4A.1 default A/B exposed one exact-token mismatch; corrected Phase 4A.1.1 preflight now awaits A800 C/D worker evidence | frozen stock reference, persistent Draft KV, stock Target verifier, strict Serial runner, CC≥8.0 preflight, per-rank batch-invariant proof, Target-only divergence logs, C/D validator and K=1/2/4 fixed controls | user-run default A/B is correctness provenance, not a pass; A800 CC8.0 passes only the hardware gate and must still prove all worker conditions; no performance, Dual-Batch, packed tree, eager, SLO or goodput claim |
 
 ## Phase 4A.0–4A.1: vLLM freeze and Serial Disaggregated correctness
 
@@ -83,13 +83,14 @@ evidence, actual proposal/logits/position mappings, rejected-KV rollback validat
 single-request local/remote fixed-proposal controls. Existing A/B artifacts remain immutable
 default-mode provenance.
 
-The pinned vLLM `envs.py` states that `VLLM_BATCH_INVARIANT=1` requires NVIDIA compute capability
-at least 9.0. A800 reports 8.0, so the new 3×A800 preflight is expected to fail closed and must not
-be relabeled as an effective C/D run. The immediate next gate is that user-run preflight artifact.
-If supported hardware becomes available, run C and D twice; Outcome A requires exact D==C. If
-not, execute the K=1/2/4 controls: correct mapping plus local==remote is Outcome B (upstream
-execution-shape limitation, still no correctness pass), while any mapping/control difference is
-Outcome C (integration bug). See
+At the exact pinned vLLM commit, the batch-invariance documentation and FlashAttention backend
+set the minimum NVIDIA compute capability to 8.0. A800 therefore passes the hardware preflight,
+but that preflight intentionally leaves `batch_invariant_effective=false`. The immediate next gate
+is two C and two D runs whose initialized TP ranks each prove the resolved environment setting,
+attention-backend support, disabled custom all-reduce, disabled cascade attention, and disabled
+DBO. Outcome A requires exact D==C. If C/D still diverge, execute the K=1/2/4 controls: correct
+mapping plus local==remote is Outcome B (upstream execution-shape limitation, still no
+correctness pass), while any mapping/control difference is Outcome C (integration bug). See
 [phase4-vllm-integration.md](phase4-vllm-integration.md),
 [phase4-vllm-source-audit.md](phase4-vllm-source-audit.md), and
 [phase4-vllm-server-runbook.md](phase4-vllm-server-runbook.md).

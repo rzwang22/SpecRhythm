@@ -2,9 +2,8 @@
 
 This module deliberately separates a requested environment setting from an
 effective, evidence-backed runtime mode.  The pinned vLLM v0.25.1 source says
-that ``VLLM_BATCH_INVARIANT`` requires NVIDIA compute capability >= 9.0, so a
-worker on older hardware cannot be reported as effective merely because the
-environment variable parsed as true.
+that ``VLLM_BATCH_INVARIANT`` requires NVIDIA compute capability >= 8.0, but
+hardware support alone is not proof that an initialized worker is effective.
 """
 
 from __future__ import annotations
@@ -15,7 +14,8 @@ from typing import Any, Mapping, MutableMapping, Optional, Sequence
 
 CORRECTNESS_MODES = ("default", "batch-invariant")
 BATCH_INVARIANT_ENV = "VLLM_BATCH_INVARIANT"
-PINNED_VLLM_MIN_COMPUTE_CAPABILITY = (9, 0)
+PINNED_VLLM_MIN_COMPUTE_CAPABILITY = (8, 0)
+PINNED_VLLM_HARDWARE_CONTRACT = "NVIDIA compute capability >= 8.0"
 
 
 def normalize_correctness_mode(value: str) -> str:
@@ -88,6 +88,16 @@ def parse_compute_capability(value: Any) -> Optional[tuple[int, int]]:
     return None
 
 
+def pinned_vllm_hardware_supported(value: Any) -> bool:
+    """Return whether ``value`` satisfies the exact pinned vLLM contract."""
+
+    capability = parse_compute_capability(value)
+    return bool(
+        capability is not None
+        and capability >= PINNED_VLLM_MIN_COMPUTE_CAPABILITY
+    )
+
+
 def worker_batch_invariant_evidence(worker: Any) -> dict[str, Any]:
     """Collect the effective configuration inside one initialized TP worker."""
 
@@ -138,7 +148,7 @@ def worker_batch_invariant_evidence(worker: Any) -> dict[str, Any]:
             if pynccl is not None and not bool(getattr(pynccl, "disabled", False))
             else "TORCH_DISTRIBUTED_FALLBACK"
         ]
-    documented_hardware_supported = capability >= PINNED_VLLM_MIN_COMPUTE_CAPABILITY
+    documented_hardware_supported = pinned_vllm_hardware_supported(capability)
     attention_supported = bool(attention_rows) and all(
         row["supports_batch_invariance"] is True for row in attention_rows
     )
@@ -159,7 +169,7 @@ def worker_batch_invariant_evidence(worker: Any) -> dict[str, Any]:
         reasons.append("worker did not resolve VLLM_BATCH_INVARIANT=true")
     if requested and not documented_hardware_supported:
         reasons.append(
-            "pinned vLLM documents batch invariance only for compute capability >= 9.0"
+            "pinned vLLM documents batch invariance only for compute capability >= 8.0"
         )
     if requested and not attention_supported:
         reasons.append("active attention backend did not prove batch-invariance support")
@@ -179,7 +189,7 @@ def worker_batch_invariant_evidence(worker: Any) -> dict[str, Any]:
             "reasons": reasons,
         },
         "compute_capability": f"{capability[0]}.{capability[1]}",
-        "pinned_vllm_min_compute_capability": "9.0",
+        "pinned_vllm_min_compute_capability": "8.0",
         "documented_hardware_supported": documented_hardware_supported,
         "disable_custom_all_reduce": custom_disabled,
         "all_reduce_backends": all_reduce_backends,
@@ -218,6 +228,26 @@ def validate_batch_invariant_ranks(
             errors.append(f"rank {rank} did not inherit {BATCH_INVARIANT_ENV}={expected_raw}")
         if row.get("batch_invariant_requested") is not requested:
             errors.append(f"rank {rank} reports the wrong requested mode")
+        if requested and row.get("batch_invariant_env_resolved") is not True:
+            errors.append(f"rank {rank} did not resolve VLLM_BATCH_INVARIANT=true")
+        if requested and row.get("documented_hardware_supported") is not True:
+            errors.append(f"rank {rank} does not satisfy the pinned hardware contract")
+        if requested and row.get("disable_custom_all_reduce") is not True:
+            errors.append(f"rank {rank} did not prove custom all-reduce is disabled")
+        attention_rows = row.get("attention_batch_invariance")
+        attention_rows = attention_rows if isinstance(attention_rows, list) else []
+        if requested and (
+            not attention_rows
+            or any(
+                not isinstance(attention, Mapping)
+                or attention.get("supports_batch_invariance") is not True
+                for attention in attention_rows
+            )
+        ):
+            errors.append(
+                f"rank {rank} did not prove every active attention backend supports "
+                "batch invariance"
+            )
         if requested and row.get("batch_invariant_effective") is not True:
             reasons = row.get("batch_invariant_validation", {}).get("reasons", ())
             errors.append(f"rank {rank} cannot prove effective batch invariance: {list(reasons)}")
@@ -271,7 +301,7 @@ def probe_batch_invariant_hardware(mode: str) -> dict[str, Any]:
             **setup,
             "cuda_available": False,
             "devices": [],
-            "pinned_vllm_hardware_contract": "NVIDIA compute capability >= 9.0",
+            "pinned_vllm_hardware_contract": PINNED_VLLM_HARDWARE_CONTRACT,
             "batch_invariant_effective": False,
             "effective_requires_initialized_worker_evidence": True,
             "valid": False,
@@ -289,8 +319,9 @@ def probe_batch_invariant_hardware(mode: str) -> dict[str, Any]:
                     "logical_cuda_index": logical_index,
                     "name": torch.cuda.get_device_name(logical_index),
                     "compute_capability": f"{capability[0]}.{capability[1]}",
-                    "documented_hardware_supported": capability
-                    >= PINNED_VLLM_MIN_COMPUTE_CAPABILITY,
+                    "documented_hardware_supported": (
+                        pinned_vllm_hardware_supported(capability)
+                    ),
                 }
             )
     errors = []
@@ -301,7 +332,7 @@ def probe_batch_invariant_hardware(mode: str) -> dict[str, Any]:
     ):
         errors.append(
             "pinned vLLM v0.25.1 documents VLLM_BATCH_INVARIANT only for NVIDIA "
-            "compute capability >= 9.0"
+            "compute capability >= 8.0"
         )
     valid = available and (not requested or bool(devices) and not errors)
     return {
@@ -309,7 +340,7 @@ def probe_batch_invariant_hardware(mode: str) -> dict[str, Any]:
         **setup,
         "cuda_available": available,
         "devices": devices,
-        "pinned_vllm_hardware_contract": "NVIDIA compute capability >= 9.0",
+        "pinned_vllm_hardware_contract": PINNED_VLLM_HARDWARE_CONTRACT,
         "batch_invariant_effective": False,
         "effective_requires_initialized_worker_evidence": True,
         "valid": valid,
