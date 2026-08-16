@@ -3,6 +3,21 @@
 Phase 4A.1 default-mode A/B artifacts must remain unchanged. This addendum creates only fresh C/D
 artifacts. It does not run Dual-Batch, Eager, packed trees, SLO/goodput, or a performance test.
 
+The C-reference attempt from commit `a7fe058d417ae44edea497657e17eef161c09d0e`
+stopped before engine creation because runner verification imported vLLM before correctness-mode
+setup. Keep that incomplete directory as failure provenance; do not resume it or place new output
+inside it. The corrected commit creates a new commit-keyed result root below.
+
+Runner checks now locate installed files through distribution metadata and hash them without
+importing vLLM. The four execution paths preserve this ordering contract:
+
+| Entry path | Required order before engine creation |
+| --- | --- |
+| stock reference C | import-free stock SHA check → `run_stock_smoke` mode setup → first vLLM import |
+| patched Target regression C | `run_stock_smoke` mode setup → first vLLM import → patched SHA recheck |
+| Serial D | mode setup → import-free patched SHA check → first vLLM import |
+| fixed local/remote controls | mode setup → import-free patched SHA check → first vLLM import |
+
 ## 0. Mandatory 3×A800 preflight
 
 Fetch the Draft PR head, activate the existing independent Python 3.11 environment, and record
@@ -86,6 +101,16 @@ python integrations/vllm/manage_patch.py check \
   --vllm-root "$SR_VLLM_ROOT" --source "$SR_VLLM_SOURCE"
 python integrations/vllm/manage_patch.py check \
   --vllm-root "$SR_VLLM_ROOT" --source "$SR_VLLM_SOURCE"
+
+python - <<'PY'
+import sys
+from specrhythm.phase4.reference import require_stock_vllm_runner
+
+assert not any(name == "vllm" or name.startswith("vllm.") for name in sys.modules)
+print("stock_runner_sha256=" + require_stock_vllm_runner())
+assert not any(name == "vllm" or name.startswith("vllm.") for name in sys.modules)
+print("runner_verification_import_free=true")
+PY
 
 env -u CUDA_VISIBLE_DEVICES VLLM_BATCH_INVARIANT=1 specrhythm phase4-probe \
   --config configs/phase4a_target_fair_1d2v.yaml \

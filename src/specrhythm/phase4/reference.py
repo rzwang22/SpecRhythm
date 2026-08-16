@@ -16,6 +16,7 @@ from specrhythm.phase4.config import VLLM_COMMIT, VLLM_VERSION, Phase4Config
 from specrhythm.phase4.manifest import model_revision_manifest, sha256_file
 from specrhythm.phase4.stock_vllm import run_stock_smoke
 from specrhythm.phase4.transport import payload_sha256
+from specrhythm.phase4.vllm_installation import locate_installed_vllm_file
 
 REFERENCE_SCHEMA = "specrhythm.phase4-stock-target-reference.v1"
 VLLM_RUNNER_RELATIVE_PATH = Path("vllm/v1/worker/gpu_model_runner.py")
@@ -332,11 +333,9 @@ def validate_stock_reference(value: Mapping[str, Any]) -> list[str]:
 
 
 def require_stock_vllm_runner() -> str:
-    try:
-        import vllm
-    except ImportError as error:
-        raise RuntimeError("vLLM is unavailable for stock runner verification") from error
-    runner_path = Path(vllm.__file__).resolve().parents[1] / VLLM_RUNNER_RELATIVE_PATH
+    """Verify the stock runner without importing vLLM before mode setup."""
+
+    runner_path = locate_installed_vllm_file(VLLM_RUNNER_RELATIVE_PATH)
     actual = sha256_file(runner_path)
     if actual != STOCK_VLLM_RUNNER_SHA256:
         raise RuntimeError(

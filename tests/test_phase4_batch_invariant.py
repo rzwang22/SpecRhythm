@@ -1,4 +1,5 @@
 import ast
+import hashlib
 import json
 import sys
 import tempfile
@@ -9,6 +10,10 @@ from types import SimpleNamespace
 
 import pytest
 
+import specrhythm.phase4.reference as reference_module
+import specrhythm.phase4.serial_runner as serial_runner_module
+import specrhythm.phase4.stock_vllm as stock_vllm_module
+import specrhythm.phase4.vllm_installation as vllm_installation_module
 from specrhythm.phase4.batch_invariant import (
     configure_before_worker_creation,
     pinned_vllm_hardware_supported,
@@ -17,8 +22,16 @@ from specrhythm.phase4.batch_invariant import (
     validate_batch_invariant_ranks,
 )
 from specrhythm.phase4.fixed_control import run_fixed_proposal_service
-from specrhythm.phase4.reference import _exclusive_freeze
-from specrhythm.phase4.serial_runner import PATCHED_VLLM_RUNNER_SHA256
+from specrhythm.phase4.reference import (
+    VLLM_RUNNER_RELATIVE_PATH,
+    _exclusive_freeze,
+    freeze_stock_reference,
+    require_stock_vllm_runner,
+)
+from specrhythm.phase4.serial_runner import (
+    PATCHED_VLLM_RUNNER_SHA256,
+    validate_installed_patched_runner,
+)
 from specrhythm.phase4.transport import UnixDraftClient
 from specrhythm.phase4.vllm_diagnostics import (
     compare_divergence_diagnostics,
@@ -95,6 +108,24 @@ def diagnostic(*, proposal=(10, 11), prefix=(1, 2), kv_length=2):
     }
 
 
+def fake_installed_vllm(tmp_path, monkeypatch, content=b"runner"):
+    runner = tmp_path / VLLM_RUNNER_RELATIVE_PATH
+    runner.parent.mkdir(parents=True)
+    runner.write_bytes(content)
+
+    class Distribution:
+        @staticmethod
+        def locate_file(relative_path):
+            return tmp_path / relative_path
+
+    def distribution(name):
+        assert name == "vllm"
+        return Distribution()
+
+    monkeypatch.setattr(vllm_installation_module.metadata, "distribution", distribution)
+    return hashlib.sha256(content).hexdigest()
+
+
 def test_batch_invariant_env_is_set_before_vllm_import():
     environment = {}
     evidence = configure_before_worker_creation(
@@ -105,6 +136,112 @@ def test_batch_invariant_env_is_set_before_vllm_import():
     with pytest.raises(RuntimeError, match="before importing vLLM"):
         configure_before_worker_creation(
             "batch-invariant", environ={}, loaded_modules=["vllm.envs"]
+        )
+
+
+def test_runner_sha_verification_does_not_import_vllm(tmp_path, monkeypatch):
+    assert not any(name == "vllm" or name.startswith("vllm.") for name in sys.modules)
+    digest = fake_installed_vllm(tmp_path, monkeypatch)
+    monkeypatch.setattr(reference_module, "STOCK_VLLM_RUNNER_SHA256", digest)
+    monkeypatch.setattr(serial_runner_module, "PATCHED_VLLM_RUNNER_SHA256", digest)
+
+    assert require_stock_vllm_runner() == digest
+    assert validate_installed_patched_runner(
+        {"target_file_sha256_after": digest}
+    ) == {
+        "file": str(VLLM_RUNNER_RELATIVE_PATH),
+        "sha256": digest,
+        "matches_manifest": True,
+    }
+    assert not any(name == "vllm" or name.startswith("vllm.") for name in sys.modules)
+
+
+@pytest.mark.parametrize(
+    ("correctness_mode", "expected_environment"),
+    [("batch-invariant", "1"), ("default", "0")],
+)
+def test_stock_reference_configures_mode_before_first_vllm_import(
+    tmp_path, monkeypatch, correctness_mode, expected_environment
+):
+    class WorkerCreationReached(RuntimeError):
+        pass
+
+    assert not any(name == "vllm" or name.startswith("vllm.") for name in sys.modules)
+    digest = fake_installed_vllm(tmp_path, monkeypatch)
+    monkeypatch.setattr(reference_module, "STOCK_VLLM_RUNNER_SHA256", digest)
+    monkeypatch.setenv("VLLM_USE_V2_MODEL_RUNNER", "0")
+    monkeypatch.delenv("VLLM_BATCH_INVARIANT", raising=False)
+
+    class FakeLLM:
+        def __init__(self, **_kwargs):
+            assert sys.modules["vllm"].configured_after_guard is True
+            assert sys.modules["vllm"].environment_value == expected_environment
+            raise WorkerCreationReached("worker creation reached")
+
+    def configure_then_expose_vllm(mode):
+        assert not any(name == "vllm" or name.startswith("vllm.") for name in sys.modules)
+        evidence = configure_before_worker_creation(mode)
+        fake_vllm = SimpleNamespace(
+            LLM=FakeLLM,
+            SamplingParams=object,
+            configured_after_guard=True,
+            environment_value=evidence["environment_value"],
+        )
+        monkeypatch.setitem(sys.modules, "vllm", fake_vllm)
+        return evidence
+
+    fake_torch = SimpleNamespace(cuda=SimpleNamespace(is_available=lambda: True))
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    monkeypatch.setattr(
+        stock_vllm_module,
+        "configure_before_worker_creation",
+        configure_then_expose_vllm,
+    )
+    monkeypatch.setattr(
+        stock_vllm_module, "validate_environment", lambda *_args: {"valid": True}
+    )
+    monkeypatch.setattr(
+        stock_vllm_module, "validate_topology", lambda *_args: {"valid": True}
+    )
+    monkeypatch.setattr(stock_vllm_module, "_visible_physical_ids", lambda: (1, 2))
+    monkeypatch.setattr(stock_vllm_module, "load_smoke_requests", lambda *_args, **_kwargs: [])
+
+    engine = SimpleNamespace(
+        resolved_model_path=tmp_path / "target",
+        resolved_tokenizer_path=tmp_path / "target",
+        tensor_parallel_size=2,
+        dtype="bfloat16",
+        revision=None,
+        tokenizer_revision=None,
+        trust_remote_code=False,
+        gpu_memory_utilization=0.8,
+        physical_gpu_ids=(1, 2),
+    )
+    config = SimpleNamespace(
+        target_model_runner="v1",
+        target=engine,
+        draft=engine,
+        sampling=SimpleNamespace(seed=1664),
+        max_model_len=2048,
+        enforce_eager=True,
+        enable_prefix_caching=False,
+        smoke_request_count=5,
+    )
+    environment_path = tmp_path / "environment.json"
+    topology_path = tmp_path / "topology.json"
+    environment_path.write_text("{}", encoding="utf-8")
+    topology_path.write_text("{}", encoding="utf-8")
+
+    with pytest.raises(WorkerCreationReached, match="worker creation reached"):
+        freeze_stock_reference(
+            tmp_path / "reference.json",
+            config,
+            workload_path=tmp_path / "workload.jsonl",
+            environment_path=environment_path,
+            topology_path=topology_path,
+            runtime_manifest_path=tmp_path / "runtime.json",
+            git_commit="test",
+            correctness_mode=correctness_mode,
         )
 
 

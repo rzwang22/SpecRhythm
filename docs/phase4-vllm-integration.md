@@ -60,6 +60,15 @@ after every initialized TP rank proves the resolved environment flag, attention-
 custom-all-reduce disablement, cascade-attention disablement, and DBO disablement. There is no
 override or silent fallback for missing worker evidence.
 
+Runner provenance verification is also part of the correctness boundary, but it must not import
+vLLM. Both stock and patched runner checks locate
+`vllm/v1/worker/gpu_model_runner.py` through installed-distribution metadata and hash the file
+directly. `run_stock_smoke` remains the authority that configures the correctness mode before the
+first vLLM import. Serial and fixed-control entry points likewise configure the mode before any
+engine import; their import-free patched-runner check occurs inside that protected interval. The
+failed C-reference attempt at commit `a7fe058d417ae44edea497657e17eef161c09d0e` stopped before
+engine creation and is not a GPU correctness result.
+
 The four conceptual experiments remain distinct and use fresh artifact directories:
 
 | Group | Execution | Mode | Status |

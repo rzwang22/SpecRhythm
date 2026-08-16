@@ -39,6 +39,7 @@ from specrhythm.phase4.stock_vllm import (
 )
 from specrhythm.phase4.transport import CheckpointJsonl, UnixDraftClient, payload_sha256
 from specrhythm.phase4.vllm_diagnostics import validate_kv_monotonicity
+from specrhythm.phase4.vllm_installation import locate_installed_vllm_file
 
 PATCHED_VLLM_RUNNER_SHA256 = (
     "a99c410cd791f20071bb17b8a619e5b309427b50ed864b8753d066c1dc4b150c"
@@ -74,12 +75,10 @@ def load_patch_manifest(path: Path, config: Phase4Config) -> dict[str, Any]:
 
 
 def validate_installed_patched_runner(patch_manifest: Mapping[str, Any]) -> dict[str, Any]:
-    try:
-        import vllm
-    except ImportError as error:
-        raise RuntimeError("vLLM is unavailable for installed patch verification") from error
+    """Verify the installed patch without importing vLLM before mode setup."""
+
     relative = Path("vllm/v1/worker/gpu_model_runner.py")
-    path = Path(vllm.__file__).resolve().parents[1] / relative
+    path = locate_installed_vllm_file(relative)
     actual = sha256_file(path)
     expected = str(patch_manifest.get("target_file_sha256_after", ""))
     if actual != expected or actual != PATCHED_VLLM_RUNNER_SHA256:
