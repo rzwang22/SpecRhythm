@@ -14,7 +14,12 @@ from typing import Any, Mapping
 
 from specrhythm.phase4.dual import DualProposal
 from specrhythm.phase4.dual_service import DualDraftClient
+from specrhythm.phase4.request_identity import (
+    FrozenPromptIdentityMap,
+    resolve_stable_ready_request,
+)
 from specrhythm.phase4.serial import token_prefix_hash
+from specrhythm.phase4.stock_vllm import load_smoke_requests
 from specrhythm.phase4.transport import CheckpointJsonl
 
 try:
@@ -41,6 +46,18 @@ class DualBatchScheduler(Scheduler):
         )
         if self._dual_microbatch_size < 1:
             raise RuntimeError("Dual-Batch microbatch size must be positive")
+        workload_value = os.environ.get("SR_PHASE4_WORKLOAD")
+        if not workload_value:
+            raise RuntimeError("Dual-Batch scheduler requires the frozen workload path")
+        request_count = int(os.environ.get("SR_PHASE4_REQUEST_COUNT", "5"))
+        definitions = load_smoke_requests(
+            Path(workload_value),
+            request_count,
+            require_task_mixture=request_count in {5, 100},
+        )
+        self._dual_identity = FrozenPromptIdentityMap.from_definitions(definitions)
+        # These collections are stable-ID keyed. vLLM-owned request tables and
+        # cadence fields remain internal-ID keyed.
         self._dual_tail_ready: set[str] = set()
         self._dual_proposals: dict[str, DualProposal] = {}
         existing_cycles = self._dual_events.read()
@@ -49,10 +66,12 @@ class DualBatchScheduler(Scheduler):
         )
 
     def schedule(self, *args: Any, **kwargs: Any) -> Any:
+        self._bind_vllm_requests()
         poll_start = time.monotonic_ns()
         already_ready = sum(
             bool(request.spec_token_ids)
-            or request.request_id in self._dual_tail_ready
+            or self._dual_identity.stable_id(str(request.request_id))
+            in self._dual_tail_ready
             for request in self.running
         )
         available = max(0, self._dual_microbatch_size - already_ready)
@@ -77,9 +96,10 @@ class DualBatchScheduler(Scheduler):
         # values afterward.  No stock queue/KV/allocation behavior is replaced.
         deferred: dict[str, int] = {}
         for request in self.running:
+            stable_id = self._dual_identity.stable_id(str(request.request_id))
             bootstrap = request.num_output_tokens == 0
             eligible = bootstrap or bool(request.spec_token_ids)
-            eligible = eligible or request.request_id in self._dual_tail_ready
+            eligible = eligible or stable_id in self._dual_tail_ready
             if not eligible:
                 deferred[request.request_id] = request.next_decode_eligible_step
                 request.next_decode_eligible_step = max(
@@ -95,9 +115,16 @@ class DualBatchScheduler(Scheduler):
 
         scheduled_ids = tuple(output.num_scheduled_tokens)
         verified_ids = tuple(output.scheduled_spec_decode_tokens)
-        for request_id in scheduled_ids:
-            if request_id in self._dual_tail_ready:
-                self._dual_tail_ready.remove(request_id)
+        stable_scheduled_ids = tuple(
+            self._dual_identity.stable_id(str(request_id))
+            for request_id in scheduled_ids
+        )
+        stable_verified_ids = tuple(
+            self._dual_identity.stable_id(str(request_id))
+            for request_id in verified_ids
+        )
+        for stable_id in stable_scheduled_ids:
+            self._dual_tail_ready.discard(stable_id)
         self._dual_events.append(
             {
                 "schema_version": "specrhythm.phase4b-scheduler-cycle.v1",
@@ -105,11 +132,13 @@ class DualBatchScheduler(Scheduler):
                 "poll_start_ns": poll_start,
                 "poll_end_ns": time.monotonic_ns(),
                 "poll_blocking_on_draft_gpu": False,
-                "scheduled_request_ids": list(scheduled_ids),
-                "verify_request_ids": list(verified_ids),
+                "scheduled_request_ids": list(stable_scheduled_ids),
+                "internal_scheduled_request_ids": list(scheduled_ids),
+                "verify_request_ids": list(stable_verified_ids),
+                "internal_verify_request_ids": list(verified_ids),
                 "ready_proposal_ids": [
                     self._dual_proposals[item].proposal_id
-                    for item in verified_ids
+                    for item in stable_verified_ids
                     if item in self._dual_proposals
                 ],
                 "scheduler_class": type(self).__name__,
@@ -121,9 +150,13 @@ class DualBatchScheduler(Scheduler):
 
     def _accept_ready_result(self, result: Mapping[str, Any]) -> None:
         request_id = str(result.get("request_id", ""))
-        request = self.requests.get(request_id)
-        if request is None or request.is_finished():
-            raise RuntimeError(f"ready proposal belongs to missing/terminal request {request_id}")
+        internal_request_id, request = resolve_stable_ready_request(
+            request_id, self._dual_identity, self.requests
+        )
+        if request.is_finished():
+            raise RuntimeError(
+                f"ready proposal belongs to terminal stable request {request_id}"
+            )
         proposal_value = result.get("proposal")
         if proposal_value is None:
             if result.get("target_tail") is not True:
@@ -155,6 +188,7 @@ class DualBatchScheduler(Scheduler):
                 {
                     "schema_version": "specrhythm.phase4b-stale-proposal.v1",
                     "request_id": request_id,
+                    "internal_request_id": internal_request_id,
                     "proposal_id": proposal.proposal_id,
                     "discarded": True,
                     "verified": False,
@@ -164,3 +198,15 @@ class DualBatchScheduler(Scheduler):
             raise RuntimeError("stale proposal rejected before verification: " + ", ".join(errors))
         request.spec_token_ids = list(proposal.proposal_token_ids)
         self._dual_proposals[request_id] = proposal
+
+    def _bind_vllm_requests(self) -> None:
+        """Bind opaque scheduler IDs from token prefixes; never parse ID text."""
+
+        for internal_request_id, request in self.requests.items():
+            if request.is_finished():
+                continue
+            table_id = str(internal_request_id)
+            object_id = str(request.request_id)
+            if table_id != object_id:
+                raise RuntimeError("vLLM request table key disagrees with request.request_id")
+            self._dual_identity.bind(table_id, tuple(int(item) for item in request.all_token_ids))

@@ -199,6 +199,13 @@ def run_dual_batch(
     torch.cuda.synchronize()
     ended = time.monotonic_ns()
     draft_shutdown = DualDraftClient(draft_socket_path).call("shutdown", {})
+    plugin_report = _load_object(plugin_report_path)
+    identity_errors = _validate_request_identity_report(plugin_report, requests)
+    if identity_errors:
+        raise RuntimeError(
+            "invalid internal/stable request identity evidence: "
+            + "; ".join(identity_errors)
+        )
     serialized = _ordered_checkpoint_rows(output_checkpoint_path, requests)
     comparison = compare_outputs_to_reference(serialized, reference)
     cycle_rows, overlap_rows = build_cycle_and_overlap_events(
@@ -287,6 +294,8 @@ def run_dual_batch(
             "target_verification": "vllm-linear-speculative-batched-verification",
             "draft_kv_reuse": True,
             "target_kv_reuse": True,
+            "request_identity_adapter": "unique-frozen-prompt-token-prefix",
+            "vllm_internal_request_ids_opaque": True,
             "draft_physical_block_identity_observable": False,
             "target_block_identity_source": "target-diagnostics-when-observable",
         },
@@ -296,6 +305,7 @@ def run_dual_batch(
             int(row.get("overlap_duration_ns", 0)) > 0 for row in overlap_rows
         ),
         "draft_service_shutdown": draft_shutdown,
+        "request_identity": plugin_report["request_identity"],
         "artifact_sha256": {
             "workload": sha256_file(workload_path),
             "reference": sha256_file(reference_path),
@@ -511,6 +521,38 @@ def _configure_environment(**paths: Any) -> None:
     os.environ["VLLM_BATCH_INVARIANT"] = "1"
     for key, value in mapping.items():
         os.environ[key] = str(value)
+
+
+def _validate_request_identity_report(
+    report: Mapping[str, Any], requests: Sequence[Any]
+) -> list[str]:
+    errors = []
+    identity = report.get("request_identity")
+    if not isinstance(identity, Mapping):
+        return ["plugin report lacks request identity metadata"]
+    if identity.get("mapping_source") != "unique frozen prompt_token_ids":
+        errors.append("identity mapping does not use the frozen prompt-token prefix")
+    if identity.get("suffix_parsing") is not False:
+        errors.append("internal request IDs were parsed instead of treated as opaque")
+    bindings = identity.get("bindings")
+    if not isinstance(bindings, list):
+        return [*errors, "identity bindings are missing"]
+    if any(not isinstance(row, Mapping) for row in bindings):
+        return [*errors, "identity binding is not an object"]
+    internal_ids = [str(row.get("internal_request_id", "")) for row in bindings]
+    stable_ids = [str(row.get("request_id", "")) for row in bindings]
+    expected = {str(request.request_id) for request in requests}
+    if not internal_ids or any(not item for item in internal_ids):
+        errors.append("identity bindings contain an empty internal request ID")
+    if len(internal_ids) != len(set(internal_ids)):
+        errors.append("one internal request ID has multiple stable bindings")
+    if len(stable_ids) != len(set(stable_ids)):
+        errors.append("multiple internal request IDs alias one stable request")
+    if set(stable_ids) != expected:
+        errors.append("identity bindings do not cover the frozen workload exactly")
+    if identity.get("bound_request_count") != len(bindings):
+        errors.append("identity binding count is inconsistent")
+    return errors
 
 
 def _load_object(path: Path) -> dict[str, Any]:

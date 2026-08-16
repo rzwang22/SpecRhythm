@@ -16,6 +16,7 @@ from typing import Any, Mapping, Optional, Sequence, Tuple
 from specrhythm.phase4.dual import DualProposal
 from specrhythm.phase4.dual_service import DualDraftClient
 from specrhythm.phase4.manifest import atomic_write_json
+from specrhythm.phase4.request_identity import FrozenPromptIdentityMap
 from specrhythm.phase4.serial import greedy_acceptance, token_prefix_hash
 from specrhythm.phase4.stock_vllm import load_smoke_requests
 from specrhythm.phase4.transport import CheckpointJsonl
@@ -67,6 +68,7 @@ class DualBatchRemoteProposer:
             require_task_mixture=request_count in {5, 100},
         )
         self.definitions = {item.request_id: item for item in definitions}
+        self.identity = FrozenPromptIdentityMap.from_definitions(definitions)
         eos = getattr(vllm_config.model_config.hf_config, "eos_token_id", None)
         if isinstance(eos, int):
             self.eos_token_ids = (eos,)
@@ -75,13 +77,15 @@ class DualBatchRemoteProposer:
         else:
             self.eos_token_ids = ()
         self.requests: dict[str, _Request] = {}
+        self.internal_to_stable = self.identity.internal_to_stable
+        self.stable_to_internal = self.identity.stable_to_internal
         self._verify_start: dict[str, dict[str, Any]] = {}
         self._verify_batch_by_request: dict[str, str] = {}
         self._verified_ids: set[str] = set()
         existing_verifications = self.verification_log.read()
         self._verify_sequence = 1 + max(
             (
-                _sequence_suffix(str(row.get("verify_microbatch_id", "")))
+                int(row.get("verify_sequence", -1))
                 for row in existing_verifications
             ),
             default=-1,
@@ -122,30 +126,72 @@ class DualBatchRemoteProposer:
         request_ids: Sequence[str],
         scheduled_spec_token_ids: Mapping[str, Sequence[int]],
     ) -> None:
-        verify_ids = [str(item) for item in request_ids if item in scheduled_spec_token_ids]
-        if not verify_ids:
+        internal_verify_ids = [
+            str(item) for item in request_ids if item in scheduled_spec_token_ids
+        ]
+        if not internal_verify_ids:
             return
         if self.tp_rank == 0:
-            claimed = self.client.call("claimed", {"request_ids": verify_ids})
-            claimed_rows = claimed.get("claimed", ())
+            stable_verify_ids = [
+                self.identity.stable_id(internal_id)
+                for internal_id in internal_verify_ids
+            ]
+            if len(set(stable_verify_ids)) != len(stable_verify_ids):
+                raise RuntimeError("Target verify aliases multiple internal IDs to one request")
+            claimed = self.client.call("claimed", {"request_ids": stable_verify_ids})
+            service_rows = claimed.get("claimed", ())
+            if not isinstance(service_rows, list) or len(service_rows) != len(
+                stable_verify_ids
+            ):
+                raise RuntimeError("claimed stable proposal metadata is incomplete")
+            service_by_stable = {
+                str(row.get("request_id")): row
+                for row in service_rows
+                if isinstance(row, Mapping)
+            }
+            if set(service_by_stable) != set(stable_verify_ids):
+                raise RuntimeError("claimed proposal stable request set is inconsistent")
+            claimed_rows = []
+            for internal_id, stable_id in zip(internal_verify_ids, stable_verify_ids):
+                row = service_by_stable.get(stable_id)
+                if row is None:
+                    raise RuntimeError("claimed stable proposal metadata is incomplete")
+                claimed_rows.append(
+                    {
+                        **row,
+                        "request_id": stable_id,
+                        "internal_request_id": internal_id,
+                    }
+                )
         else:
             claimed_rows = None
         claimed_rows = self.tp_group.broadcast_object(claimed_rows, src=0)
-        if not isinstance(claimed_rows, list) or len(claimed_rows) != len(verify_ids):
+        if not isinstance(claimed_rows, list) or len(claimed_rows) != len(
+            internal_verify_ids
+        ):
             raise RuntimeError("claimed proposal metadata is incomplete")
-        by_request = {str(row.get("request_id")): row for row in claimed_rows}
+        by_internal = {
+            str(row.get("internal_request_id")): row for row in claimed_rows
+        }
+        if set(by_internal) != set(internal_verify_ids):
+            raise RuntimeError("claimed proposal internal request set is inconsistent")
         verify_batch_id = f"verify-{self._verify_sequence}"
-        for request_id in verify_ids:
-            result = by_request.get(request_id)
+        for internal_id in internal_verify_ids:
+            result = by_internal.get(internal_id)
             proposal_value = result.get("proposal") if isinstance(result, Mapping) else None
             if not isinstance(proposal_value, Mapping):
                 raise RuntimeError("Target verify lacks claimed proposal metadata")
             proposal = DualProposal.from_dict(proposal_value)
-            expected = tuple(int(item) for item in scheduled_spec_token_ids[request_id])
+            stable_id = str(result.get("request_id"))
+            if proposal.request_id != stable_id:
+                raise RuntimeError("claimed proposal belongs to a different stable request")
+            expected = tuple(int(item) for item in scheduled_spec_token_ids[internal_id])
             if proposal.proposal_token_ids != expected:
                 raise RuntimeError("scheduled tokens differ from claimed proposal")
             if self.tp_rank == 0:
-                state = self.requests.get(request_id)
+                if self.identity.stable_id(internal_id) != stable_id:
+                    raise RuntimeError("scheduler/proposer request identity mapping disagrees")
+                state = self.requests.get(stable_id)
                 if state is None or state.pending_proposal is not None:
                     raise RuntimeError("request cannot own two unverified proposals")
                 prefix = state.committed_token_ids
@@ -156,24 +202,27 @@ class DualBatchRemoteProposer:
                 ):
                     raise RuntimeError("stale proposal reached Target verify boundary")
                 state.pending_proposal = proposal
-                self._verify_batch_by_request[request_id] = verify_batch_id
-                self._transition(request_id, "PROPOSAL_READY")
-                self._transition(request_id, "VERIFY_READY")
-                self._transition(request_id, "VERIFYING")
+                self._verify_batch_by_request[stable_id] = verify_batch_id
+                self._transition(stable_id, "PROPOSAL_READY")
+                self._transition(stable_id, "VERIFY_READY")
+                self._transition(stable_id, "VERIFYING")
         self.tp_group.barrier()
         self.torch.cuda.synchronize()
         self.torch.cuda.nvtx.range_push(
-            "specrhythm:verify:" + ",".join(verify_ids)
+            "specrhythm:verify:" + ",".join(
+                str(by_internal[item]["request_id"]) for item in internal_verify_ids
+            )
         )
         start_event = self.torch.cuda.Event(enable_timing=True)
         start_event.record()
         self._verify_start = {
-            request_id: {
+            internal_id: {
                 "event": start_event,
                 "host_start_ns": time.monotonic_ns(),
-                "proposal": by_request[request_id]["proposal"],
+                "proposal": by_internal[internal_id]["proposal"],
+                "request_id": str(by_internal[internal_id]["request_id"]),
             }
-            for request_id in verify_ids
+            for internal_id in internal_verify_ids
         }
 
     def on_target_verify_end(
@@ -184,9 +233,13 @@ class DualBatchRemoteProposer:
         scheduled_spec_token_ids: Mapping[str, Sequence[int]],
     ) -> None:
         del sampled_token_ids
-        verify_ids = [str(item) for item in request_ids if item in scheduled_spec_token_ids]
-        if not verify_ids:
+        internal_verify_ids = [
+            str(item) for item in request_ids if item in scheduled_spec_token_ids
+        ]
+        if not internal_verify_ids:
             return
+        if set(internal_verify_ids) != set(self._verify_start):
+            raise RuntimeError("verify-end internal request set differs from verify-start")
         end_event = self.torch.cuda.Event(enable_timing=True)
         end_event.record()
         end_event.synchronize()
@@ -196,13 +249,15 @@ class DualBatchRemoteProposer:
         physical = _physical_gpu_id()
         uuid = self.torch.cuda.get_device_properties(0).uuid
         local_rows = []
-        for request_id in verify_ids:
-            start = self._verify_start.get(request_id)
+        for internal_id in internal_verify_ids:
+            start = self._verify_start.get(internal_id)
             if start is None:
                 raise RuntimeError("verify-end has no matching CUDA start event")
+            stable_id = str(start["request_id"])
             local_rows.append(
                 {
-                    "request_id": request_id,
+                    "request_id": stable_id,
+                    "internal_request_id": internal_id,
                     "global_rank": int(self.dist.get_rank()),
                     "local_rank": int(os.environ.get("LOCAL_RANK", self.tp_rank)),
                     "tp_rank": self.tp_rank,
@@ -220,20 +275,37 @@ class DualBatchRemoteProposer:
         self.dist.all_gather_object(gathered, local_rows, group=self.tp_group.cpu_group)
         if self.tp_rank == 0:
             rank_rows = [row for group in gathered for row in group]
-            verify_batch_id = self._verify_batch_by_request[verify_ids[0]]
-            for request_id in verify_ids:
-                proposal = DualProposal.from_dict(self._verify_start[request_id]["proposal"])
-                evidence = [row for row in rank_rows if row["request_id"] == request_id]
+            stable_verify_ids = [
+                str(self._verify_start[internal_id]["request_id"])
+                for internal_id in internal_verify_ids
+            ]
+            batch_ids = {
+                self._verify_batch_by_request[stable_id]
+                for stable_id in stable_verify_ids
+            }
+            if len(batch_ids) != 1:
+                raise RuntimeError("one Target verification batch has mixed proposal metadata")
+            verify_batch_id = next(iter(batch_ids))
+            for internal_id, stable_id in zip(internal_verify_ids, stable_verify_ids):
+                proposal = DualProposal.from_dict(
+                    self._verify_start[internal_id]["proposal"]
+                )
+                evidence = [row for row in rank_rows if row["request_id"] == stable_id]
+                if len(evidence) != self.tp_world_size:
+                    raise RuntimeError("Target verify is missing TP-rank identity evidence")
                 self.verification_log.append(
                     {
                         "schema_version": "specrhythm.phase4b-verification-event.v1",
-                        "request_id": request_id,
+                        "request_id": stable_id,
+                        "internal_request_id": internal_id,
                         "round_id": proposal.round_id,
                         "proposal_id": proposal.proposal_id,
                         "prefix_version": proposal.prefix_version,
                         "proposal_token_ids": list(proposal.proposal_token_ids),
                         "verify_microbatch_id": verify_batch_id,
-                        "verify_request_ids": verify_ids,
+                        "verify_sequence": self._verify_sequence,
+                        "verify_request_ids": stable_verify_ids,
+                        "internal_verify_request_ids": internal_verify_ids,
                         "target_rank_intervals": evidence,
                         # Conservative TP interval: every rank is inside its
                         # synchronized verify region throughout this window.
@@ -249,8 +321,8 @@ class DualBatchRemoteProposer:
                         ),
                     }
                 )
-                self._verified_ids.add(request_id)
-            self._verify_sequence += 1
+                self._verified_ids.add(stable_id)
+        self._verify_sequence += 1
         self._verify_start = {}
 
     def _rank_zero_update(
@@ -260,16 +332,13 @@ class DualBatchRemoteProposer:
         commit_rows = []
         tail_rows = []
         for index, request_id_value in enumerate(request_ids):
-            request_id = str(request_id_value)
-            definition = self.definitions.get(request_id)
-            if definition is None:
-                raise RuntimeError(f"unknown stable Dual-Batch request ID: {request_id}")
+            internal_request_id = str(request_id_value)
             count = int(num_tokens_no_spec[index])
             physical_tokens = tuple(
                 int(item) for item in token_ids_cpu[index, :count].tolist()
             )
-            if physical_tokens[: len(definition.prompt_token_ids)] != definition.prompt_token_ids:
-                raise RuntimeError("Target request prompt identity changed")
+            request_id = self.identity.bind(internal_request_id, physical_tokens)
+            definition = self.definitions[request_id]
             generated = _logical_generated(
                 physical_tokens[len(definition.prompt_token_ids) :],
                 definition.maximum_new_tokens,
@@ -437,6 +506,22 @@ class DualBatchRemoteProposer:
                 "target_callback_blocks_on_draft_gpu": False,
                 "one_unverified_proposal_per_request": True,
                 "dependency_speculation": False,
+                "request_identity": {
+                    "stable_key": "frozen workload request_id",
+                    "internal_key": "opaque vLLM request_id",
+                    "mapping_source": "unique frozen prompt_token_ids",
+                    "suffix_parsing": False,
+                    "bound_request_count": len(self.internal_to_stable),
+                    "bindings": [
+                        {
+                            "internal_request_id": internal_id,
+                            "request_id": stable_id,
+                        }
+                        for internal_id, stable_id in sorted(
+                            self.internal_to_stable.items()
+                        )
+                    ],
+                },
                 "request_count": len(self.requests),
                 "target_tp": self.tp_world_size,
             },
@@ -470,10 +555,3 @@ def _terminal(values: Sequence[int], maximum: int, eos: Sequence[int]) -> bool:
 
 def _starts_with(values: Sequence[int], prefix: Sequence[int]) -> bool:
     return tuple(values[: len(prefix)]) == tuple(prefix)
-
-
-def _sequence_suffix(value: str) -> int:
-    try:
-        return int(value.rsplit("-", 1)[1])
-    except (IndexError, ValueError):
-        return -1

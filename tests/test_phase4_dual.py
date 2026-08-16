@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 import time
+from pathlib import Path
 from typing import Any, Mapping, Sequence, Tuple
 
 import pytest
@@ -19,12 +22,18 @@ from specrhythm.phase4.dual import (
 )
 from specrhythm.phase4.dual_runner import (
     _ordered_checkpoint_rows,
+    _validate_request_identity_report,
     _write_checkpoint_rows,
     build_cycle_and_overlap_events,
 )
 from specrhythm.phase4.dual_service import (
     AsyncDualDraftController,
     DualDraftMachine,
+)
+from specrhythm.phase4.dual_validation import _validate_identity_domains
+from specrhythm.phase4.request_identity import (
+    FrozenPromptIdentityMap,
+    resolve_stable_ready_request,
 )
 from specrhythm.phase4.transport import CheckpointJsonl
 
@@ -295,6 +304,158 @@ def test_finished_request_cannot_reenter_draft_or_verify():
         request.start_draft()
     with pytest.raises(ValueError, match="no proposal"):
         request.start_verify()
+
+
+def test_opaque_internal_id_maps_to_stable_prompt_without_suffix_parsing():
+    identity = FrozenPromptIdentityMap({"r3-abc": (1, 2), "r3-def": (3, 4)})
+    internal_id = "r3-abc-9997a85a"
+    states = {identity.bind(internal_id, (1, 2, 10)): {"prefix_version": 1}}
+    assert set(states) == {"r3-abc"}
+    assert identity.stable_id(internal_id) == "r3-abc"
+    assert identity.internal_id("r3-abc") == internal_id
+
+
+def test_internal_id_binding_is_stable_and_prompt_changes_fail_closed():
+    identity = FrozenPromptIdentityMap({"A": (1, 2), "B": (3, 4)})
+    assert identity.bind("opaque", (1, 2, 9)) == "A"
+    assert identity.bind("opaque", (1, 2, 10)) == "A"
+    with pytest.raises(RuntimeError, match="changed stable prompt identity"):
+        identity.bind("opaque", (3, 4, 11))
+
+
+def test_prompt_identity_rejects_zero_and_multiple_matches():
+    identity = FrozenPromptIdentityMap({"short": (1,), "long": (1, 2)})
+    with pytest.raises(RuntimeError, match="no frozen workload prompt"):
+        identity.match((9, 9))
+    with pytest.raises(RuntimeError, match="ambiguously"):
+        identity.match((1, 2, 3))
+    with pytest.raises(ValueError, match="unique frozen prompt"):
+        FrozenPromptIdentityMap({"A": (1, 2), "B": (1, 2)})
+
+
+def test_two_internal_ids_cannot_alias_one_stable_request():
+    identity = FrozenPromptIdentityMap({"A": (1, 2)})
+    identity.bind("internal-A-1", (1, 2, 3))
+    with pytest.raises(RuntimeError, match="alias one stable request"):
+        identity.bind("internal-A-2", (1, 2, 4))
+
+
+def test_scheduler_handoff_resolves_only_the_mapped_internal_request():
+    identity = FrozenPromptIdentityMap({"A": (1, 2), "B": (3, 4)})
+    internal_a = "A-engine-suffix"
+    internal_b = "B-engine-suffix"
+    identity.bind(internal_a, (1, 2, 10))
+    identity.bind(internal_b, (3, 4, 20))
+    request_a = type("VllmRequest", (), {"request_id": internal_a})()
+    request_b = type("VllmRequest", (), {"request_id": internal_b})()
+    internal_id, request = resolve_stable_ready_request(
+        "A", identity, {internal_a: request_a, internal_b: request_b}
+    )
+    assert internal_id == internal_a
+    assert request is request_a
+    with pytest.raises(RuntimeError, match="no mapped vLLM request"):
+        resolve_stable_ready_request("A", identity, {internal_b: request_b})
+
+
+def test_identity_translation_keeps_stale_prefix_guard_fail_closed():
+    identity = FrozenPromptIdentityMap({"A": (1, 2)})
+    assert identity.bind("A-engine-suffix", (1, 2, 3)) == "A"
+    request = make_request("A", (1, 2))
+    request.start_draft()
+    request.publish_proposal(make_proposal(request))
+    request.mark_verify_ready()
+    request.committed_token_ids += (99,)
+    with pytest.raises(ValueError, match="stale proposal"):
+        request.start_verify()
+
+
+def test_identity_report_requires_one_to_one_frozen_workload_coverage():
+    requests = [
+        type("Request", (), {"request_id": "A"})(),
+        type("Request", (), {"request_id": "B"})(),
+    ]
+    report = {
+        "request_identity": {
+            "mapping_source": "unique frozen prompt_token_ids",
+            "suffix_parsing": False,
+            "bound_request_count": 2,
+            "bindings": [
+                {"internal_request_id": "A-x", "request_id": "A"},
+                {"internal_request_id": "B-y", "request_id": "B"},
+            ],
+        }
+    }
+    assert _validate_request_identity_report(report, requests) == []
+    report["request_identity"]["bindings"][1]["request_id"] = "A"
+    assert any(
+        "alias" in error
+        for error in _validate_request_identity_report(report, requests)
+    )
+
+
+def test_dual_validator_rejects_internal_ids_in_stable_event_fields():
+    identity = {
+        "mapping_source": "unique frozen prompt_token_ids",
+        "suffix_parsing": False,
+        "bindings": [{"internal_request_id": "A-suffix", "request_id": "A"}],
+    }
+    run = {"outputs": [{"request_id": "A"}], "request_identity": identity}
+    assert _validate_identity_domains(run, [], [], [], [], []) == []
+    errors = _validate_identity_domains(
+        run,
+        [{"request_id": "A-suffix"}],
+        [],
+        [],
+        [],
+        [],
+    )
+    assert any("non-stable request IDs" in error for error in errors)
+
+
+def test_target_failure_terminates_draft_without_unbounded_wait(tmp_path):
+    helper = (
+        Path(__file__).parents[1]
+        / "integrations"
+        / "vllm"
+        / "phase4b_run_helpers.sh"
+    )
+    environment = dict(os.environ)
+    environment.update(
+        {
+            "PHASE4B_HELPER": str(helper),
+            "TARGET_LOG": str(tmp_path / "target.log"),
+            "DRAFT_LOG": str(tmp_path / "draft.log"),
+            "PHASE4B_CLEANUP_POLLS": "5",
+            "PHASE4B_CLEANUP_SLEEP_SECONDS": "0.01",
+        }
+    )
+    completed = subprocess.run(
+        [
+            "bash",
+            "-c",
+            """
+source "$PHASE4B_HELPER"
+: >"$DRAFT_LOG"
+sleep 60 &
+draft_pid="$!"
+if phase4b_run_target_with_cleanup "$draft_pid" "$TARGET_LOG" "$DRAFT_LOG" -- \
+    bash -c 'echo target-failed; exit 7'; then
+  target_status=0
+else
+  target_status="$?"
+fi
+test "$target_status" -eq 7
+! kill -0 "$draft_pid" 2>/dev/null
+""",
+        ],
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=5,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert "target-failed" in completed.stderr
 
 
 def _wait_ready(controller: AsyncDualDraftController) -> Mapping[str, Any]:

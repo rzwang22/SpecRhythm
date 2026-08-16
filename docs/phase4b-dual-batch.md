@@ -35,6 +35,14 @@ prefix token count/SHA256, Draft KV lengths before/after, token IDs, and creatio
 timestamps. Target validates all parent-prefix fields before verification. Stale proposals are
 logged and rejected; they are never repaired, partially reused, or committed.
 
+The proposal `request_id` is always the frozen workload ID. vLLM-owned scheduler tables use an
+opaque internal ID that may contain an implementation-defined suffix. Both the Target proposer
+and scheduler independently match the current physical token row against unique frozen
+`prompt_token_ids`, then bind one internal ID to one stable ID. They never split, trim, regex-match
+or prefix-match the internal ID text. Zero/multiple prompt matches, identity changes and aliases
+fail closed. Boundary events retain both fields where useful, but state, proposal, round,
+validation and Draft-service keys remain stable IDs.
+
 ## Ready-only handoff and stock-vLLM boundary
 
 The GPU-0 service owns one persistent Draft model and per-request KV. A single background worker
@@ -50,7 +58,8 @@ it commits, Draft jobs become eligible. A proposal-free final token is explicitl
 Target tail.
 
 The pinned `0001-custom-proposer-request-and-verify-hooks.patch` remains the only upstream patch.
-It supplies stable request IDs and Target verify observers in `gpu_model_runner.py`. Phase 4B
+It supplies the opaque vLLM request IDs and Target verify observers in `gpu_model_runner.py`; the
+SpecRhythm adapter performs the explicit prompt-token identity translation. Phase 4B
 does not add `0002`: the source audit found that `scheduler_cls` is sufficient. The patch is
 default-inactive and has no Target-only effect.
 
@@ -92,6 +101,11 @@ transport/Target-diagnostic logs, scheduler and Draft-work logs, derived cycle a
 an output checkpoint, validation JSON and Markdown summary. The runner checkpoints complete
 requests. `--resume` skips those stable IDs and starts fresh engine/Draft state only for remaining
 cohorts; it never reconstructs a live in-flight proposal.
+
+The server helper uses a short `/tmp` Unix socket and bounds both failure cleanup and graceful
+Draft shutdown. It checks the Target exit status before waiting for Draft, terminates Target
+leftovers plus Draft after a Target failure, reaps Draft, and returns the Target status instead of
+hanging the shell wrapper.
 
 Repeated runs compare proposal rounds by `(request_id, round_id)`. Different cross-request JSONL
 order is diagnostic metadata, not a failure. Duplicate/missing keys or any proposal, acceptance,

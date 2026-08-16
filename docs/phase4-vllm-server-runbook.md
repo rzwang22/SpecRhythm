@@ -835,6 +835,8 @@ export SR_PHASE3C_COMMIT="34c7ea9836c2595c8a8aeaeb5680709520edd3d8"
 export SR_PHASE3C_RUN="/root/autodl-tmp/SpecRhythm-data/results/phase3c/$SR_PHASE3C_COMMIT/corrected-multiround-100"
 export SR_R3_100="$SR_PHASE3C_RUN/workload.jsonl"
 export SR_PHASE4B_ROOT="/root/autodl-tmp/SpecRhythm-data/results/phase4/$SR_PHASE4B_COMMIT/dual-batch-1d2v-$(date -u +%Y%m%dT%H%M%SZ)"
+export SR_PHASE4B_INPUT_ROOT="${SR_PHASE4B_INPUT_ROOT:-$SR_PHASE4B_ROOT}"
+source integrations/vllm/phase4b_run_helpers.sh
 
 test -f "$SR_DRAFT_MODEL/config.json"
 test -f "$SR_TARGET_MODEL/config.json"
@@ -983,18 +985,26 @@ The function starts a fresh persistent Draft service. If a Target process is int
 the old service, start it again with the same paths, and rerun the Target command with `--resume`.
 Only completed request checkpoints are skipped; no in-flight proposal is reconstructed.
 
+For the first-L2 identity-fix recovery, create a new `SR_PHASE4B_ROOT` but export the old immutable
+result root as `SR_PHASE4B_INPUT_ROOT` before running this section. If the workload, config,
+environment/topology, patch manifest, Target regression and both stock-reference hashes are
+unchanged, reuse them through that input root and skip section 2. Never point the new DB run at or
+resume the failed L2 directory.
+
 ```bash
 run_dual_once () {
   level="$1"
   run_id="$2"
   cohort_size="$3"
   run_dir="$SR_PHASE4B_ROOT/L$level/DB-$run_id"
+  socket_path="/tmp/sr4b-${SR_PHASE4B_COMMIT:0:8}-L${level}-DB${run_id}.sock"
   mkdir -p "$run_dir"
+  unlink "$socket_path" 2>/dev/null || true
 
   CUDA_VISIBLE_DEVICES=0 VLLM_USE_V2_MODEL_RUNNER=0 VLLM_BATCH_INVARIANT=1 \
   specrhythm phase4-dual-draft-service \
     --config configs/phase4b_dual_batch_1d2v.yaml \
-    --socket "$run_dir/draft.sock" \
+    --socket "$socket_path" \
     --event-log "$run_dir/draft-work-events.jsonl" \
     --transport-events "$run_dir/transport-events.jsonl" \
     --ready "$run_dir/draft-service-ready.json" \
@@ -1002,24 +1012,25 @@ run_dual_once () {
   draft_pid="$!"
 
   for _ in $(seq 1 600); do
-    test -f "$run_dir/draft-service-ready.json" && test -S "$run_dir/draft.sock" && break
+    test -f "$run_dir/draft-service-ready.json" && test -S "$socket_path" && break
     kill -0 "$draft_pid" 2>/dev/null || { cat "$run_dir/draft-service.log"; return 1; }
     sleep 1
   done
-  test -S "$run_dir/draft.sock"
+  test -S "$socket_path"
 
-  set +e
-  CUDA_VISIBLE_DEVICES=1,2 VLLM_USE_V2_MODEL_RUNNER=0 VLLM_BATCH_INVARIANT=1 \
-  specrhythm phase4-dual-batch-run \
+  if phase4b_run_target_with_cleanup \
+    "$draft_pid" "$run_dir/target.log" "$run_dir/draft-service.log" -- \
+    env CUDA_VISIBLE_DEVICES=1,2 VLLM_USE_V2_MODEL_RUNNER=0 VLLM_BATCH_INVARIANT=1 \
+    specrhythm phase4-dual-batch-run \
     --config configs/phase4b_dual_batch_1d2v.yaml \
-    --workload "$SR_PHASE4B_ROOT/workloads/r3-corrected-$level.jsonl" \
+    --workload "$SR_PHASE4B_INPUT_ROOT/workloads/r3-corrected-$level.jsonl" \
     --request-count "$level" \
-    --environment "$SR_PHASE4B_ROOT/environment.json" \
-    --topology "$SR_PHASE4B_ROOT/topology.json" \
+    --environment "$SR_PHASE4B_INPUT_ROOT/environment.json" \
+    --topology "$SR_PHASE4B_INPUT_ROOT/topology.json" \
     --runtime-manifest "$run_dir/runtime-manifest.json" \
-    --reference "$SR_PHASE4B_ROOT/L$level/reference-1/stock-target-reference.json" \
-    --patch-manifest "$SR_PHASE4B_ROOT/vllm-base-and-patch-manifest.json" \
-    --draft-socket "$run_dir/draft.sock" \
+    --reference "$SR_PHASE4B_INPUT_ROOT/L$level/reference-1/stock-target-reference.json" \
+    --patch-manifest "$SR_PHASE4B_INPUT_ROOT/vllm-base-and-patch-manifest.json" \
+    --draft-socket "$socket_path" \
     --draft-ready "$run_dir/draft-service-ready.json" \
     --scheduler-events "$run_dir/scheduler-events.jsonl" \
     --request-state-events "$run_dir/request-state-events.jsonl" \
@@ -1035,33 +1046,26 @@ run_dual_once () {
     --microbatch-size 1 \
     --cohort-size "$cohort_size" \
     --resume \
-    --output "$run_dir/dual-batch-run.json" \
-    >"$run_dir/target.log" 2>&1
-  target_status="$?"
-  set -e
-
-  if test "$target_status" -ne 0; then
-    kill "$draft_pid" 2>/dev/null || true
-    wait "$draft_pid" 2>/dev/null || true
-    tail -n 200 "$run_dir/target.log"
-    return "$target_status"
+    --output "$run_dir/dual-batch-run.json"; then
+    target_status=0
+  else
+    target_status="$?"
   fi
-  wait "$draft_pid"
+  test "$target_status" -eq 0 || return "$target_status"
   test -f "$run_dir/dual-batch-run.json"
+  test ! -S "$socket_path"
 }
 
 # Level 1: two short requests. Review the cycle log before continuing.
 run_dual_once 2 1 2
 run_dual_once 2 2 2
-
-# Level 2: two independent corrected 3/1/1 runs.
-run_dual_once 5 1 5
-run_dual_once 5 2 5
-
-# Level 3: request-level resume checkpoints every ten requests.
-run_dual_once 100 1 10
-run_dual_once 100 2 10
 ```
+
+Stop here until the fresh L2 pair passes the validator below. Do not resume the failed L2
+directory, and do not start L5/L100 while this identity-fix gate is unresolved. The helper checks
+the Target status first, terminates and reaps Draft on failure, tails both logs, and bounds the
+graceful-shutdown wait. Its `/tmp` socket name remains below the AF_UNIX pathname limit; do not
+replace it with a result-directory socket.
 
 ## 4. Read-only validation for levels 2, 5 and 100
 
@@ -1076,9 +1080,9 @@ validate_dual_level () {
 
   set +e
   specrhythm phase4-dual-batch-validate \
-    --stock-reference "$SR_PHASE4B_ROOT/L$level/reference-1/stock-target-reference.json" \
-    --stock-reference "$SR_PHASE4B_ROOT/L$level/reference-2/stock-target-reference.json" \
-    --target-regression "$SR_PHASE4B_ROOT/patched-target-regression.json" \
+    --stock-reference "$SR_PHASE4B_INPUT_ROOT/L$level/reference-1/stock-target-reference.json" \
+    --stock-reference "$SR_PHASE4B_INPUT_ROOT/L$level/reference-2/stock-target-reference.json" \
+    --target-regression "$SR_PHASE4B_INPUT_ROOT/patched-target-regression.json" \
     --run "$SR_PHASE4B_ROOT/L$level/DB-1/dual-batch-run.json" \
     --run "$SR_PHASE4B_ROOT/L$level/DB-2/dual-batch-run.json" \
     --request-state-events "$SR_PHASE4B_ROOT/L$level/DB-1/request-state-events.jsonl" \
@@ -1107,13 +1111,24 @@ validate_dual_level () {
 }
 
 validate_dual_level 2
-validate_dual_level 5
-validate_dual_level 100
 
-find "$SR_PHASE4B_ROOT/workloads" -type f -print0 | sort -z | xargs -0 sha256sum \
+find "$SR_PHASE4B_INPUT_ROOT/workloads" -type f -print0 | sort -z | xargs -0 sha256sum \
   > "$SR_PHASE4B_ROOT/workload-sha256-after.txt"
-diff -u "$SR_PHASE4B_ROOT/workload-sha256-before.txt" \
+diff -u "$SR_PHASE4B_INPUT_ROOT/workload-sha256-before.txt" \
   "$SR_PHASE4B_ROOT/workload-sha256-after.txt"
+```
+
+Only after `L2/validation/validation.json` reports `valid=true` and `outcome=A` may the same
+function be used for L5 and L100:
+
+```bash
+run_dual_once 5 1 5
+run_dual_once 5 2 5
+validate_dual_level 5
+
+run_dual_once 100 1 10
+run_dual_once 100 2 10
+validate_dual_level 100
 ```
 
 Outcome A requires the five- and 100-request validators to be valid, exact, state/KV/accounting

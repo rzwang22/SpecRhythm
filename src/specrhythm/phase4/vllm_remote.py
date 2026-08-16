@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence, Tuple
 
 from specrhythm.phase4.manifest import atomic_write_json
+from specrhythm.phase4.request_identity import FrozenPromptIdentityMap
 from specrhythm.phase4.serial import Proposal, RoundRecord, SerialTimeline, greedy_acceptance
 from specrhythm.phase4.stock_vllm import load_smoke_requests
 from specrhythm.phase4.transport import CheckpointJsonl, UnixDraftClient
@@ -63,9 +64,7 @@ class RemoteDraftProposer:
         self.client = UnixDraftClient(socket_path, transport_log=self.transport_log)
         requests = load_smoke_requests(workload_path)
         self.definitions = {request.request_id: request for request in requests}
-        prompts = [request.prompt_token_ids for request in requests]
-        if len(set(prompts)) != len(prompts):
-            raise RuntimeError("stable request mapping requires unique frozen prompt token IDs")
+        self.identity = FrozenPromptIdentityMap.from_definitions(requests)
         eos = getattr(vllm_config.model_config.hf_config, "eos_token_id", None)
         if isinstance(eos, int):
             self.eos_token_ids = (eos,)
@@ -74,7 +73,8 @@ class RemoteDraftProposer:
         else:
             self.eos_token_ids = ()
         self.requests: dict[str, _TargetRequest] = {}
-        self.internal_to_stable: dict[str, str] = {}
+        # Kept as a public diagnostic alias for existing Phase-4A reports.
+        self.internal_to_stable = self.identity.internal_to_stable
         self.round_records: list[dict[str, Any]] = []
         self.hooks_seen = {"verify_start": 0, "verify_end": 0}
         self.verify_phase_sequence = 0
@@ -177,11 +177,8 @@ class RemoteDraftProposer:
         for index, internal_id in enumerate(request_ids):
             count = int(num_tokens_no_spec[index])
             tokens = tuple(int(item) for item in token_ids_cpu[index, :count].tolist())
-            definition = self._match_definition(tokens)
-            stable_id = definition.request_id
-            previous = self.internal_to_stable.setdefault(str(internal_id), stable_id)
-            if previous != stable_id:
-                raise RuntimeError("vLLM internal request ID changed stable prompt identity")
+            stable_id = self.identity.bind(str(internal_id), tokens)
+            definition = self.definitions[stable_id]
             generated = self._logical_generated(
                 tokens[len(definition.prompt_token_ids) :], definition.maximum_new_tokens
             )
@@ -377,16 +374,6 @@ class RemoteDraftProposer:
         state.generated_token_ids = generated
         state.next_round_id += 1
         state.pending_proposal = None
-
-    def _match_definition(self, full_tokens: Tuple[int, ...]) -> Any:
-        matches = [
-            request
-            for request in self.definitions.values()
-            if _starts_with(full_tokens, request.prompt_token_ids)
-        ]
-        if len(matches) != 1:
-            raise RuntimeError("Target batch row does not uniquely match a frozen prompt")
-        return matches[0]
 
     def _logical_generated(
         self, generated: Sequence[int], maximum_new_tokens: int

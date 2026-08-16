@@ -107,6 +107,19 @@ def validate_dual_batch_runs(
     target_kv_errors = [_validate_target_diagnostics(rows) for rows in diagnostic_rows]
     for index, values in enumerate(target_kv_errors):
         errors.extend(f"run {index + 1} Target KV: {item}" for item in values)
+    identity_errors = [
+        _validate_identity_domains(
+            run,
+            state_rows[index],
+            proposal_rows[index],
+            cycle_rows[index],
+            draft_rows[index],
+            diagnostic_rows[index],
+        )
+        for index, run in enumerate(runs)
+    ]
+    for index, values in enumerate(identity_errors):
+        errors.extend(f"run {index + 1} identity: {item}" for item in values)
     batch_effective = [
         run.get("batch_invariant_effective") is True
         and all(
@@ -148,6 +161,7 @@ def validate_dual_batch_runs(
         and not any(commit_sequence_errors)
         and not any(draft_kv_errors)
         and not any(target_kv_errors)
+        and not any(identity_errors)
         and all(batch_effective)
         and patch_regression_valid
         and not any(placement_errors)
@@ -183,6 +197,7 @@ def validate_dual_batch_runs(
         and not any(commit_sequence_errors),
         "draft_kv_valid": not any(draft_kv_errors),
         "target_kv_valid": not any(target_kv_errors),
+        "stable_request_identity_valid": not any(identity_errors),
         "batch_invariant_effective": batch_effective,
         "target_patch_regression_valid": patch_regression_valid,
         "gpu_placement_valid": not any(placement_errors),
@@ -391,6 +406,65 @@ def _validate_placement(rows: Sequence[Mapping[str, Any]]) -> list[str]:
                 errors.append(
                     f"cycle {row.get('cycle_id')}: Target rank GPU identities are not unique"
                 )
+    return errors
+
+
+def _validate_identity_domains(
+    run: Mapping[str, Any],
+    state_rows: Sequence[Mapping[str, Any]],
+    proposal_rows: Sequence[Mapping[str, Any]],
+    cycle_rows: Sequence[Mapping[str, Any]],
+    draft_rows: Sequence[Mapping[str, Any]],
+    diagnostic_rows: Sequence[Mapping[str, Any]],
+) -> list[str]:
+    errors = []
+    stable_ids = {str(row.get("request_id", "")) for row in run.get("outputs", ())}
+    identity = run.get("request_identity")
+    if not stable_ids or "" in stable_ids:
+        errors.append("final outputs lack stable request IDs")
+    if not isinstance(identity, Mapping):
+        errors.append("run lacks explicit internal/stable identity evidence")
+    else:
+        if identity.get("mapping_source") != "unique frozen prompt_token_ids":
+            errors.append("run did not use frozen prompt-token identity mapping")
+        if identity.get("suffix_parsing") is not False:
+            errors.append("run parsed opaque vLLM request IDs")
+        bindings = identity.get("bindings", ())
+        if not isinstance(bindings, list):
+            errors.append("run identity bindings are not a list")
+        elif any(not isinstance(row, Mapping) for row in bindings):
+            errors.append("run identity binding is not an object")
+        else:
+            internal = [str(row.get("internal_request_id", "")) for row in bindings]
+            stable = [str(row.get("request_id", "")) for row in bindings]
+            if any(not item for item in internal + stable):
+                errors.append("run identity binding contains an empty ID")
+            if len(internal) != len(set(internal)):
+                errors.append("internal request identity is not one-to-one")
+            if len(stable) != len(set(stable)):
+                errors.append("stable request identity is aliased")
+            if set(stable) != stable_ids:
+                errors.append("identity bindings do not cover final outputs")
+    for label, rows in (
+        ("state", state_rows),
+        ("proposal", proposal_rows),
+        ("Draft", draft_rows),
+        ("Target diagnostic", diagnostic_rows),
+    ):
+        unknown = {
+            str(row.get("request_id", "")) for row in rows
+        } - stable_ids
+        if unknown:
+            errors.append(f"{label} events use non-stable request IDs: {sorted(unknown)}")
+    for row in cycle_rows:
+        observed = {
+            str(item)
+            for field in ("draft_request_ids", "verify_request_ids")
+            for item in row.get(field, ())
+        }
+        unknown = observed - stable_ids
+        if unknown:
+            errors.append(f"cycle events use non-stable request IDs: {sorted(unknown)}")
     return errors
 
 

@@ -34,7 +34,7 @@ claims.
 | [#1 workload-v0.1](https://github.com/rzwang22/SpecRhythm/pull/1) | merged | strict Mooncake replay, R3 proxy config, validator, manifest, fixture tests and docs | workload plumbing only; proxy payload and illustrative acceptance |
 | [#2 simulator-semantics-v0.2](https://github.com/rzwang22/SpecRhythm/pull/2) | frozen draft; Phase 2 complete, not merged | proposal lifecycle, deterministic tree oracle, tree-aware allocators, base-preserving residual controls, Phase-2 nested search pools and common-snapshot oracle replay, path-aware eager and accounting | pure-Python proxy and oracle upper bounds only; no deployable oracle, measured search cost, GPU integration, or performance claim |
 | [#3 gpu-integration-v0.1](https://github.com/rzwang22/SpecRhythm/pull/3) | draft; Phase 3B.1 and corrected-20 Phase 3C.2 complete; Phase 3C.3 corrected-100 awaiting server run | hardened multi-rank primitives, corrected R3-real traces, common-prefix replay, request-bootstrap statistics, 2x shell decomposition and diagnostic learned ranker | user-run 3×A800 correctness artifacts plus Mac CPU tests; no packed-tree/serving engine, Dual-Batch, SLO, calibrated latency or speedup claim |
-| [#4 vllm-serving-v0.1](https://github.com/rzwang22/SpecRhythm/pull/4) | draft; Phase 4A.1.1 Outcome A frozen; Phase 4B.0 contracts and Phase 4B.1 1D+2V GPU correctness readiness implemented locally, awaiting 3×A800 runs | stock reference, persistent Draft KV, Serial runner, batch-invariant proof, ready-only scheduler plugin, asynchronous Draft service, prefix-versioned proposals and keyed Dual validator | no Phase 4B GPU Outcome yet; no performance, packed tree, residual selection, eager, shaping, SLO or goodput claim |
+| [#4 vllm-serving-v0.1](https://github.com/rzwang22/SpecRhythm/pull/4) | draft; Phase 4A.1.1 Outcome A frozen; first Phase 4B.1 L2 bring-up exposed and now fixes an internal/stable request-ID adapter bug; fresh L2 reruns pending | stock reference, persistent Draft KV, Serial runner, batch-invariant proof, ready-only scheduler plugin, asynchronous Draft service, prompt-token identity bridge, prefix-versioned proposals and keyed Dual validator | failed L2 is integration-failure provenance only; no Phase 4B GPU Outcome, performance, packed tree, residual selection, eager, shaping, SLO or goodput claim |
 
 ## Phase 4A.0–4A.1: vLLM freeze and Serial Disaggregated correctness
 
@@ -115,7 +115,15 @@ The runner and read-only validator emit state, proposal, verification, transport
 diagnostic, cycle and overlap artifacts. CUDA-event evidence is retained per Target TP rank and
 on Draft GPU 0; shared host monotonic intervals establish only whether disjoint Draft and Verify
 sets overlapped. Two-, five-, and 100-request corrected workloads are the server gates. The Mac
-agent did not execute Phase 4B on GPU, so no Outcome A/B/C is currently claimed. Even Outcome A
+agent did not execute Phase 4B on GPU. The user's first real L2 request reached Target TP2 but
+stopped before correctness or overlap evaluation because vLLM decorated the internal request ID
+and the proposer incorrectly used it as a frozen workload key. The adapter now binds opaque
+internal IDs to stable workload IDs solely through unique frozen prompt-token prefixes, enforces
+one-to-one identity in both proposer and scheduler, and records both domains at adapter events.
+The failed DB-1 directory is not resumable evidence. A bounded shell helper checks Target status
+before waiting for Draft and retains short `/tmp` sockets. Fresh L2 DB-1/DB-2 plus read-only
+validation are the only next gate; existing immutable stock references remain reusable when their
+hashes and configs are unchanged. No Outcome A/B/C is currently claimed. Even Outcome A
 would establish correctness and overlap existence only—not speedup, goodput, SLO attainment,
 throughput, latency improvement, or production readiness. See
 [phase4b-dual-batch.md](phase4b-dual-batch.md).
