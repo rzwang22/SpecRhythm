@@ -16,6 +16,16 @@ from specrhythm.phase4.vllm_diagnostics import (
     validate_target_diagnostic,
 )
 
+ROUND_SEMANTIC_FIELDS = (
+    "proposal_token_ids",
+    "accepted_draft_tokens",
+    "rejected_draft_tokens",
+    "target_correction_token_ids",
+    "target_bonus_token_ids",
+    "committed_token_ids",
+    "terminal",
+)
+
 
 def _json(path: Path) -> dict[str, Any]:
     value = json.loads(path.read_text(encoding="utf-8"))
@@ -35,6 +45,114 @@ def _trajectories(outputs: Any) -> dict[str, tuple[Any, Any, Any]]:
         )
         for row in outputs
         if isinstance(row, Mapping) and row.get("request_id")
+    }
+
+
+def _canonical_round_rows(
+    rows: Sequence[Mapping[str, Any]], *, label: str
+) -> tuple[dict[tuple[str, int], dict[str, Any]], list[tuple[str, int]], list[str]]:
+    canonical = {}
+    raw_order = []
+    errors = []
+    per_request_rounds: dict[str, list[int]] = {}
+    token_fields = {
+        "proposal_token_ids",
+        "target_correction_token_ids",
+        "target_bonus_token_ids",
+        "committed_token_ids",
+    }
+    count_fields = {"accepted_draft_tokens", "rejected_draft_tokens"}
+    for position, row in enumerate(rows):
+        if not isinstance(row, Mapping):
+            errors.append(f"{label} round row {position} is not an object")
+            continue
+        request_id = row.get("request_id")
+        round_id = row.get("round_id")
+        if not isinstance(request_id, str) or not request_id:
+            errors.append(f"{label} round row {position} has an invalid request_id")
+            continue
+        if not isinstance(round_id, int) or isinstance(round_id, bool) or round_id < 0:
+            errors.append(f"{label} round row {position} has an invalid round_id")
+            continue
+        key = (request_id, round_id)
+        raw_order.append(key)
+        per_request_rounds.setdefault(request_id, []).append(round_id)
+        if key in canonical:
+            errors.append(f"{label} has duplicate round key {key!r}")
+            continue
+        semantics = {}
+        for field in ROUND_SEMANTIC_FIELDS:
+            if field not in row:
+                errors.append(f"{label} round key {key!r} is missing {field}")
+                continue
+            value = row[field]
+            if field in token_fields:
+                if not isinstance(value, list) or any(
+                    not isinstance(token, int) or isinstance(token, bool)
+                    for token in value
+                ):
+                    errors.append(f"{label} round key {key!r} has invalid {field}")
+                    continue
+                value = tuple(value)
+            elif field in count_fields:
+                if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                    errors.append(f"{label} round key {key!r} has invalid {field}")
+                    continue
+            elif field == "terminal" and not isinstance(value, bool):
+                errors.append(f"{label} round key {key!r} has invalid terminal")
+                continue
+            semantics[field] = value
+        canonical[key] = semantics
+    for request_id, round_ids in per_request_rounds.items():
+        if round_ids != sorted(round_ids) or round_ids != list(range(len(round_ids))):
+            errors.append(
+                f"{label} request {request_id!r} has non-monotonic or non-contiguous "
+                "round IDs"
+            )
+    return canonical, raw_order, errors
+
+
+def compare_round_semantics(
+    first_rows: Sequence[Mapping[str, Any]],
+    second_rows: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Compare round meaning by stable request/round key, not scheduler interleaving."""
+
+    first, first_order, errors = _canonical_round_rows(first_rows, label="D1")
+    second, second_order, second_errors = _canonical_round_rows(
+        second_rows, label="D2"
+    )
+    errors.extend(second_errors)
+    first_keys = set(first)
+    second_keys = set(second)
+    missing_in_d2 = sorted(first_keys - second_keys)
+    extra_in_d2 = sorted(second_keys - first_keys)
+    if missing_in_d2:
+        errors.append(f"D2 is missing round keys present in D1: {missing_in_d2!r}")
+    if extra_in_d2:
+        errors.append(f"D2 has extra round keys absent from D1: {extra_in_d2!r}")
+    mismatches = []
+    for key in sorted(first_keys & second_keys):
+        fields = [
+            field
+            for field in ROUND_SEMANTIC_FIELDS
+            if first[key].get(field) != second[key].get(field)
+        ]
+        if fields:
+            mismatches.append(
+                {"request_id": key[0], "round_id": key[1], "fields": fields}
+            )
+            errors.append(f"round key {key!r} has different semantics: {fields!r}")
+    return {
+        "valid": not errors,
+        "semantic_fields": list(ROUND_SEMANTIC_FIELDS),
+        "round_count": [len(first), len(second)],
+        "raw_event_order_equal": first_order == second_order,
+        "key_sets_equal": first_keys == second_keys,
+        "missing_in_d2": [list(key) for key in missing_in_d2],
+        "extra_in_d2": [list(key) for key in extra_in_d2],
+        "semantic_mismatches": mismatches,
+        "errors": errors,
     }
 
 
@@ -158,21 +276,8 @@ def validate_batch_invariant_experiment(
         rows = CheckpointJsonl(path).read()
         round_rows.append(rows)
         errors.extend(f"D{index}: {item}" for item in validate_kv_monotonicity(rows))
-    round_repeated = [
-        [
-            (
-                row.get("request_id"),
-                row.get("round_id"),
-                row.get("proposal_token_ids"),
-                row.get("committed_token_ids"),
-                row.get("terminal"),
-            )
-            for row in rows
-        ]
-        for rows in round_rows
-    ]
-    if round_repeated[0] != round_repeated[1]:
-        errors.append("D repeats have different proposal/acceptance/termination semantics")
+    round_comparison = compare_round_semantics(round_rows[0], round_rows[1])
+    errors.extend(round_comparison["errors"])
 
     diagnostics_valid = []
     for label, paths in (
@@ -209,9 +314,11 @@ def validate_batch_invariant_experiment(
             "serial_repeated_exact_equality": serial_repeated,
             "serial_equals_stock": serial_equals_stock,
             "termination_included_in_trajectory_comparison": True,
-            "round_semantics_repeated": round_repeated[0] == round_repeated[1],
+            "round_semantics_repeated": round_comparison["valid"],
+            "raw_event_order_equal": round_comparison["raw_event_order_equal"],
             "target_diagnostics_valid": all(diagnostics_valid),
         },
+        "round_comparison": round_comparison,
         "next_action": (
             "Phase 4A.1 exact correctness passes; retain batch-invariant mode for future "
             "exact baselines"

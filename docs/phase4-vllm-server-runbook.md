@@ -240,6 +240,79 @@ set -e
 cat "$SR_PHASE4_BI_ROOT/summary.md"
 ```
 
+### Validator-only replay for immutable completed C/D artifacts
+
+If C1/C2/D1/D2 already completed, do not rerun them and do not write new files into their input
+root. Check out the corrected validator commit, point `SR_PHASE4_BI_ROOT` at the existing immutable
+C/D directory, and write only to a separate validation directory. The before/after digest diff
+proves that validation did not mutate any GPU artifact.
+
+```bash
+set -euo pipefail
+cd /root/autodl-tmp/src/SpecRhythm
+git fetch origin codex/vllm-serving-v0.1
+git switch --detach origin/codex/vllm-serving-v0.1
+export SR_VALIDATOR_COMMIT="$(git rev-parse HEAD)"
+test -z "$(git status --short)"
+python -m pip install -e '.[dev]' --no-deps
+
+export SR_PHASE4_BI_ROOT="/root/autodl-tmp/SpecRhythm-data/results/phase4/REPLACE_WITH_EXISTING_COMPLETE_CD_ROOT"
+test -f "$SR_PHASE4_BI_ROOT/C-1/stock-target-reference.json"
+test -f "$SR_PHASE4_BI_ROOT/C-2/stock-target-reference.json"
+test -f "$SR_PHASE4_BI_ROOT/D-1/serial-run.json"
+test -f "$SR_PHASE4_BI_ROOT/D-2/serial-run.json"
+
+export SR_PHASE4_VALIDATION_ROOT="/root/autodl-tmp/SpecRhythm-data/results/phase4-validator/$SR_VALIDATOR_COMMIT/$(basename "$SR_PHASE4_BI_ROOT")"
+test ! -e "$SR_PHASE4_VALIDATION_ROOT"
+mkdir -p "$SR_PHASE4_VALIDATION_ROOT"
+
+find "$SR_PHASE4_BI_ROOT" -type f -print0 | sort -z | xargs -0 sha256sum \
+  > "$SR_PHASE4_VALIDATION_ROOT/input-sha256-before.txt"
+
+set +e
+specrhythm phase4-batch-invariant-validate \
+  --stock-reference "$SR_PHASE4_BI_ROOT/C-1/stock-target-reference.json" \
+  --stock-reference "$SR_PHASE4_BI_ROOT/C-2/stock-target-reference.json" \
+  --target-regression "$SR_PHASE4_BI_ROOT/C-1/patched-target-regression.json" \
+  --target-regression "$SR_PHASE4_BI_ROOT/C-2/patched-target-regression.json" \
+  --serial-run "$SR_PHASE4_BI_ROOT/D-1/serial-run.json" \
+  --serial-run "$SR_PHASE4_BI_ROOT/D-2/serial-run.json" \
+  --round-events "$SR_PHASE4_BI_ROOT/D-1/round-events.jsonl" \
+  --round-events "$SR_PHASE4_BI_ROOT/D-2/round-events.jsonl" \
+  --target-diagnostics "$SR_PHASE4_BI_ROOT/C-1/target-diagnostics.jsonl" \
+  --target-diagnostics "$SR_PHASE4_BI_ROOT/C-2/target-diagnostics.jsonl" \
+  --serial-diagnostics "$SR_PHASE4_BI_ROOT/D-1/target-diagnostics.jsonl" \
+  --serial-diagnostics "$SR_PHASE4_BI_ROOT/D-2/target-diagnostics.jsonl" \
+  --output "$SR_PHASE4_VALIDATION_ROOT/validation.json" \
+  --markdown-output "$SR_PHASE4_VALIDATION_ROOT/summary.md"
+validator_exit="$?"
+set -e
+
+find "$SR_PHASE4_BI_ROOT" -type f -print0 | sort -z | xargs -0 sha256sum \
+  > "$SR_PHASE4_VALIDATION_ROOT/input-sha256-after.txt"
+diff -u \
+  "$SR_PHASE4_VALIDATION_ROOT/input-sha256-before.txt" \
+  "$SR_PHASE4_VALIDATION_ROOT/input-sha256-after.txt"
+cat "$SR_PHASE4_VALIDATION_ROOT/summary.md"
+
+python - "$SR_PHASE4_VALIDATION_ROOT/validation.json" "$validator_exit" <<'PY'
+import json
+import sys
+
+value = json.load(open(sys.argv[1], encoding="utf-8"))
+assert int(sys.argv[2]) == 0, value
+assert value["valid"] is True and value["outcome"] == "A", value
+checks = value["checks"]
+assert checks["target_only_repeated_exact_equality"] is True, value
+assert checks["serial_repeated_exact_equality"] is True, value
+assert checks["serial_equals_stock"] == [True, True], value
+assert checks["round_semantics_repeated"] is True, value
+assert checks["target_diagnostics_valid"] is True, value
+print("validator_only_outcome=A")
+print("raw_event_order_equal=" + str(checks["raw_event_order_equal"]).lower())
+PY
+```
+
 If `validation_status=0`, stop with Outcome A. If it is nonzero because C differs from D, create
 the first-divergence proof before running controls:
 

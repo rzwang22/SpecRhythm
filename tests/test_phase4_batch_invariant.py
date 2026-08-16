@@ -21,6 +21,7 @@ from specrhythm.phase4.batch_invariant import (
     require_matching_reference_mode,
     validate_batch_invariant_ranks,
 )
+from specrhythm.phase4.correctness_validation import compare_round_semantics
 from specrhythm.phase4.fixed_control import run_fixed_proposal_service
 from specrhythm.phase4.reference import (
     VLLM_RUNNER_RELATIVE_PATH,
@@ -105,6 +106,20 @@ def diagnostic(*, proposal=(10, 11), prefix=(1, 2), kv_length=2):
         "causal_attention": True,
         "target_kv_contains_rejected_or_future_tokens": False,
         "visible_to_draft": False,
+    }
+
+
+def round_semantic_row(request_id, round_id, *, terminal=False):
+    return {
+        "request_id": request_id,
+        "round_id": round_id,
+        "proposal_token_ids": [10 + round_id],
+        "accepted_draft_tokens": 1,
+        "rejected_draft_tokens": 0,
+        "target_correction_token_ids": [],
+        "target_bonus_token_ids": [90 + round_id],
+        "committed_token_ids": [10 + round_id, 90 + round_id],
+        "terminal": terminal,
     }
 
 
@@ -309,6 +324,61 @@ def test_target_only_and_serial_reference_mode_must_match():
     require_matching_reference_mode(reference, "default")
     with pytest.raises(ValueError, match="does not match"):
         require_matching_reference_mode(reference, "batch-invariant")
+
+
+def test_round_semantics_ignore_cross_request_event_interleaving():
+    a0 = round_semantic_row("A", 0)
+    b0 = round_semantic_row("B", 0, terminal=True)
+    a1 = round_semantic_row("A", 1, terminal=True)
+    report = compare_round_semantics(
+        [a0, b0, a1],
+        [json.loads(json.dumps(a0)), json.loads(json.dumps(a1)), json.loads(json.dumps(b0))],
+    )
+    assert report["valid"] is True
+    assert report["raw_event_order_equal"] is False
+    assert report["key_sets_equal"] is True
+    assert report["semantic_mismatches"] == []
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    [
+        ("proposal_token_ids", [999]),
+        ("accepted_draft_tokens", 0),
+        ("committed_token_ids", [999]),
+    ],
+)
+def test_round_semantics_reject_keyed_proposal_acceptance_or_commit_mismatch(
+    field, replacement
+):
+    first = round_semantic_row("A", 0, terminal=True)
+    second = json.loads(json.dumps(first))
+    second[field] = replacement
+    report = compare_round_semantics([first], [second])
+    assert report["valid"] is False
+    assert report["semantic_mismatches"] == [
+        {"request_id": "A", "round_id": 0, "fields": [field]}
+    ]
+
+
+def test_round_semantics_fail_closed_on_duplicate_missing_and_non_monotonic_keys():
+    a0 = round_semantic_row("A", 0)
+    a1 = round_semantic_row("A", 1, terminal=True)
+    duplicate = compare_round_semantics([a0, a0], [a0])
+    assert not duplicate["valid"]
+    assert any("duplicate round key" in error for error in duplicate["errors"])
+
+    missing = compare_round_semantics([a0, a1], [a0])
+    assert not missing["valid"]
+    assert missing["missing_in_d2"] == [["A", 1]]
+
+    extra = compare_round_semantics([a0], [a0, a1])
+    assert not extra["valid"]
+    assert extra["extra_in_d2"] == [["A", 1]]
+
+    non_monotonic = compare_round_semantics([a1, a0], [a0, a1])
+    assert not non_monotonic["valid"]
+    assert any("non-monotonic" in error for error in non_monotonic["errors"])
 
 
 def test_requested_effective_validation_fails_closed_and_checks_ranks():

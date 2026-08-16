@@ -34,7 +34,7 @@ claims.
 | [#1 workload-v0.1](https://github.com/rzwang22/SpecRhythm/pull/1) | merged | strict Mooncake replay, R3 proxy config, validator, manifest, fixture tests and docs | workload plumbing only; proxy payload and illustrative acceptance |
 | [#2 simulator-semantics-v0.2](https://github.com/rzwang22/SpecRhythm/pull/2) | frozen draft; Phase 2 complete, not merged | proposal lifecycle, deterministic tree oracle, tree-aware allocators, base-preserving residual controls, Phase-2 nested search pools and common-snapshot oracle replay, path-aware eager and accounting | pure-Python proxy and oracle upper bounds only; no deployable oracle, measured search cost, GPU integration, or performance claim |
 | [#3 gpu-integration-v0.1](https://github.com/rzwang22/SpecRhythm/pull/3) | draft; Phase 3B.1 and corrected-20 Phase 3C.2 complete; Phase 3C.3 corrected-100 awaiting server run | hardened multi-rank primitives, corrected R3-real traces, common-prefix replay, request-bootstrap statistics, 2x shell decomposition and diagnostic learned ranker | user-run 3×A800 correctness artifacts plus Mac CPU tests; no packed-tree/serving engine, Dual-Batch, SLO, calibrated latency or speedup claim |
-| [#4 vllm-serving-v0.1](https://github.com/rzwang22/SpecRhythm/pull/4) | draft; Phase 4A.1 default A/B exposed one exact-token mismatch; A800 preflight passed; first C attempt exposed a pre-engine import-order bug, now fixed and awaiting clean C/D rerun | frozen stock reference, persistent Draft KV, stock Target verifier, strict Serial runner, import-free runner provenance, CC≥8.0 preflight, per-rank batch-invariant proof, Target-only divergence logs, C/D validator and K=1/2/4 fixed controls | failed C attempt stopped before engine creation and is not a result; A800 must still prove all worker conditions; no performance, Dual-Batch, packed tree, eager, SLO or goodput claim |
+| [#4 vllm-serving-v0.1](https://github.com/rzwang22/SpecRhythm/pull/4) | draft; A800 C/D completed with exact target/serial trajectories and identical keyed round semantics; validator no longer conflates cross-request event interleaving with semantics; awaiting immutable-artifact validator replay | frozen stock reference, persistent Draft KV, stock Target verifier, strict Serial runner, import-free runner provenance, CC≥8.0 and per-rank batch-invariant proof, keyed round comparator, Target-only divergence logs, C/D validator and K=1/2/4 fixed controls | observed evidence predicts Outcome A but is not recorded as passed until corrected validator output is returned; no performance, Dual-Batch, packed tree, eager, SLO or goodput claim |
 
 ## Phase 4A.0–4A.1: vLLM freeze and Serial Disaggregated correctness
 
@@ -85,15 +85,15 @@ default-mode provenance.
 
 At the exact pinned vLLM commit, the batch-invariance documentation and FlashAttention backend
 set the minimum NVIDIA compute capability to 8.0. A800 therefore passes the hardware preflight,
-but that preflight intentionally leaves `batch_invariant_effective=false`. The immediate next gate
-is a clean C/D rerun from the import-order fix. The first C attempt on `a7fe058d` stopped before
-engine creation because stock runner verification imported vLLM before mode configuration; the
-runner verifier now uses package metadata without importing vLLM. Two C and two D runs must then
-have initialized TP ranks that each prove the resolved environment setting,
-attention-backend support, disabled custom all-reduce, disabled cascade attention, and disabled
-DBO. Outcome A requires exact D==C. If C/D still diverge, execute the K=1/2/4 controls: correct
-mapping plus local==remote is Outcome B (upstream execution-shape limitation, still no
-correctness pass), while any mapping/control difference is Outcome C (integration bug). See
+but that preflight intentionally leaves `batch_invariant_effective=false`. The first C attempt on
+`a7fe058d` stopped before engine creation because stock runner verification imported vLLM before
+mode configuration; the runner verifier now uses package metadata without importing vLLM. The
+subsequent C1/C2/D1/D2 artifacts completed and report exact Target-only repeats, exact Serial
+repeats, D==C, valid diagnostics, and identical semantics for all 24 keyed rounds. Their raw
+cross-request event order differs, which is scheduler interleaving rather than a semantic change.
+The immediate next gate is a validator-only replay against those immutable artifacts. Outcome A
+is recorded only if that corrected replay returns `valid=true`; otherwise the keyed mismatch or
+artifact error must be investigated without rerunning or rewriting C/D. See
 [phase4-vllm-integration.md](phase4-vllm-integration.md),
 [phase4-vllm-source-audit.md](phase4-vllm-source-audit.md), and
 [phase4-vllm-server-runbook.md](phase4-vllm-server-runbook.md).

@@ -69,6 +69,12 @@ engine import; their import-free patched-runner check occurs inside that protect
 failed C-reference attempt at commit `a7fe058d417ae44edea497657e17eef161c09d0e` stopped before
 engine creation and is not a GPU correctness result.
 
+Repeated Serial round semantics are keyed by `(request_id, round_id)`. Cross-request scheduler
+interleaving may change the raw JSONL order without changing speculative-decoding behavior, so raw
+event-order equality is diagnostic metadata only. The validator still fails closed on duplicate,
+missing, extra, non-monotonic per-request keys or any keyed difference in proposals, accepted and
+rejected counts, Target correction/bonus tokens, committed tokens, or terminal state.
+
 The four conceptual experiments remain distinct and use fresh artifact directories:
 
 | Group | Execution | Mode | Status |
