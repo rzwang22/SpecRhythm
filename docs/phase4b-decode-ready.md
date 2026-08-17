@@ -53,6 +53,11 @@ field except the hash itself. It records the SpecRhythm and pinned-vLLM commits,
 hashes, model/tokenizer revisions, workload hash, sampling and batch-invariant configuration,
 GPU placement/TP, setup/barrier/measurement timestamps, and every request's exact logical state.
 
+`ResidentSetupObservation` has one canonical JSON-compatible codec. `to_dict()` emits token IDs
+as a JSON list; `from_dict()` strictly validates integer fields and restores
+`prompt_token_ids` to `tuple[int, ...]`. Target, Serial, and future providers must use this loader
+instead of raw dataclass `**mapping` reconstruction. The in-memory tuple invariant is fail closed.
+
 Validation fails if any request does not satisfy:
 
 ```text

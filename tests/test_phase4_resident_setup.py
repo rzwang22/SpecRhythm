@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import json
 from dataclasses import replace
 from pathlib import Path
 
@@ -16,6 +17,7 @@ from specrhythm.phase4.resident_setup import (
     IncrementalResidentSetup,
     build_setup_ready,
     load_setup_ready,
+    observation_to_dict,
     resident_admission_decision,
     validate_resident_admission_events,
 )
@@ -58,6 +60,14 @@ def _provenance() -> DecodeReadyProvenance:
     )
 
 
+def _roundtrip(
+    observation: ResidentSetupObservation,
+) -> ResidentSetupObservation:
+    serialized = json.loads(json.dumps(observation_to_dict(observation)))
+    assert isinstance(serialized["prompt_token_ids"], list)
+    return ResidentSetupObservation.from_dict(serialized)
+
+
 def _manifest(observations: tuple[ResidentSetupObservation, ...]):
     return ResidentWarmStartProvider().prepare(
         observations,
@@ -88,7 +98,7 @@ def _proposal(request_id: str, parent_len: int, parent_hash: str, start: int = 3
 
 def test_incremental_l2_records_a_then_b_and_freezes_a():
     tracker = IncrementalResidentSetup(("A", "B"), setup_start_ns=5)
-    assert tracker.record(_observation("A", 1)) is True
+    assert tracker.record(_roundtrip(_observation("A", 1))) is True
     assert tracker.complete is False
     assert tracker.observed_request_ids == ("A",)
     assert resident_admission_decision(
@@ -97,7 +107,7 @@ def test_incremental_l2_records_a_then_b_and_freezes_a():
         consumer="target-only",
         has_initial_proposal=False,
     ) == (False, "bootstrap-ready-awaiting-global-boundary")
-    assert tracker.record(_observation("B", 4)) is True
+    assert tracker.record(_roundtrip(_observation("B", 4))) is True
     assert tracker.complete is True
     assert tracker.observed_request_ids == ("A", "B")
     assert tracker.completion_transition_count == 1
@@ -109,7 +119,9 @@ def test_incremental_l5_mixed_subsets_have_one_completion_transition():
     offsets = {request_id: index * 3 + 1 for index, request_id in enumerate(request_ids)}
     for subset in (("A",), ("B", "C"), ("D",), ("E",)):
         for request_id in subset:
-            tracker.record(_observation(request_id, offsets[request_id]))
+            tracker.record(
+                _roundtrip(_observation(request_id, offsets[request_id]))
+            )
     assert tracker.complete is True
     assert tracker.observed_request_ids == request_ids
     assert tracker.completion_transition_count == 1
@@ -126,6 +138,56 @@ def test_duplicate_or_stale_bootstrap_fails_closed():
         tracker.record(replace(original, bootstrap_token_id=999))
     with pytest.raises(RuntimeError, match="unexpected resident setup request"):
         tracker.record(replace(original, request_id="B"))
+
+
+def test_observation_json_roundtrip_restores_tuple_and_builds_manifest():
+    original = _observation("A", 1)
+    restored = _roundtrip(original)
+    assert restored == original
+    assert isinstance(restored.prompt_token_ids, tuple)
+    manifest = ResidentWarmStartProvider().prepare(
+        (restored,),
+        _provenance(),
+        setup_start_ns=5,
+        setup_complete_ns=20,
+        global_barrier_ns=21,
+        measurement_start_ns=22,
+    )
+    assert manifest.requests[0].logical_committed_prefix_token_ids == (1, 2, 3)
+
+
+@pytest.mark.parametrize(
+    "prompt", [[1, "bad"], [1, 2.5], [1, True], [1, -2], "1,2"]
+)
+def test_observation_loader_rejects_malformed_prompt_tokens(prompt):
+    value = observation_to_dict(_observation("A", 1))
+    value["prompt_token_ids"] = prompt
+    with pytest.raises(ValueError, match="prompt_token_ids"):
+        ResidentSetupObservation.from_dict(value)
+
+
+def test_observation_loader_canonicalizes_request_ids_to_strings():
+    value = observation_to_dict(_observation("A", 1))
+    value["request_id"] = 7
+    value["internal_target_request_id"] = 8
+    restored = ResidentSetupObservation.from_dict(value)
+    assert restored.request_id == "7"
+    assert restored.internal_target_request_id == "8"
+
+
+def test_in_memory_observation_rejects_list_prompt_tokens():
+    with pytest.raises(ValueError, match="non-empty tuple"):
+        ResidentSetupObservation(
+            request_id="A",
+            internal_target_request_id="opaque-A",
+            prompt_token_ids=[1, 2],
+            bootstrap_token_id=3,
+            target_materialized_kv_token_count=2,
+            target_num_computed_tokens=2,
+            draft_materialized_kv_token_count=3,
+            bootstrap_ready_ns=11,
+            draft_initialization_complete_ns=12,
+        )
 
 
 def test_serial_proposal_before_measurement_start_fails(tmp_path):
@@ -252,6 +314,10 @@ def test_both_gpu_consumers_use_incremental_setup_and_resident_scheduler():
     assert "requires all requests in one initial prefill batch" not in serial
     assert "IncrementalResidentSetup" in target
     assert "IncrementalResidentSetup" in serial
+    assert "ResidentSetupObservation.from_dict" in target
+    assert "ResidentSetupObservation.from_dict" in serial
+    assert "ResidentSetupObservation(**row)" not in target
+    assert "ResidentSetupObservation(**row)" not in serial
     scheduler = "specrhythm.phase4.resident_scheduler.ResidentSetupScheduler"
     assert scheduler in target_runner
     assert scheduler in serial_runner

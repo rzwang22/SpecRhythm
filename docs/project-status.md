@@ -34,7 +34,7 @@ claims.
 | [#1 workload-v0.1](https://github.com/rzwang22/SpecRhythm/pull/1) | merged | strict Mooncake replay, R3 proxy config, validator, manifest, fixture tests and docs | workload plumbing only; proxy payload and illustrative acceptance |
 | [#2 simulator-semantics-v0.2](https://github.com/rzwang22/SpecRhythm/pull/2) | frozen draft; Phase 2 complete, not merged | proposal lifecycle, deterministic tree oracle, tree-aware allocators, base-preserving residual controls, Phase-2 nested search pools and common-snapshot oracle replay, path-aware eager and accounting | pure-Python proxy and oracle upper bounds only; no deployable oracle, measured search cost, GPU integration, or performance claim |
 | [#3 gpu-integration-v0.1](https://github.com/rzwang22/SpecRhythm/pull/3) | draft; Phase 3B.1 and corrected-20 Phase 3C.2 complete; Phase 3C.3 corrected-100 awaiting server run | hardened multi-rank primitives, corrected R3-real traces, common-prefix replay, request-bootstrap statistics, 2x shell decomposition and diagnostic learned ranker | user-run 3×A800 correctness artifacts plus Mac CPU tests; no packed-tree/serving engine, Dual-Batch, SLO, calibrated latency or speedup claim |
-| [#4 vllm-serving-v0.1](https://github.com/rzwang22/SpecRhythm/pull/4) | draft; Phase 4A.1.1 Outcome A frozen; `d6c7aa8` Gate A passed and Gate B exposed an incremental-setup bug; corrected L2 rerun pending | explicit ready-only scheduler predicate, owned process lifecycle, incremental resident setup, atomic cross-process global readiness, Target/Serial comparator and first-forward proof | failed `d6c7aa8` resident output is immutable failure provenance; no GPU Gate-B PASS, Dual-Batch Outcome, performance, packed tree, eager, SLO or goodput claim |
+| [#4 vllm-serving-v0.1](https://github.com/rzwang22/SpecRhythm/pull/4) | draft; Phase 4A.1.1 Outcome A frozen; `d6c7aa8` Gate A passed; `98ec816` proved incremental progress and exposed observation deserialization; serialization-fixed Target rerun pending | explicit ready-only scheduler predicate, owned process lifecycle, incremental resident setup, canonical observation codec, atomic cross-process global readiness, Target/Serial comparator and first-forward proof | failed `d6c7aa8` and `98ec816` resident outputs are immutable failure provenance; no GPU Gate-B PASS, Dual-Batch Outcome, performance, packed tree, eager, SLO or goodput claim |
 
 ## Phase 4A.0–4A.1: vLLM freeze and Serial Disaggregated correctness
 
@@ -133,10 +133,14 @@ required the whole workload in that callback. The failed `d6c7aa8` directory is 
 The corrected contract accumulates immutable stable-ID observations across callbacks. A dedicated
 EngineCore scheduler admits prompt/bootstrap work, freezes requests after their first output token,
 and releases them only after full-set validation, one TP barrier, manifest creation, measurement
-start, and atomic setup-ready publication. Resident Serial creates every initial proposal after
-measurement start and publishes it for exact scheduler installation. The next server action is the
-L2-only procedure in [phase4b-resident-l2-rerun.md](phase4b-resident-l2-rerun.md). L5, 100 requests,
-Phase 4B.1 Dual-Batch, performance, Dual-Eager, and SLO evaluation remain blocked pending review.
+start, and atomic setup-ready publication. The real-A800 `98ec816` run reached the second
+incremental request and `_complete_global_setup`, proving the earlier whole-batch assumption was
+removed, but failed because the JSON-compatible observation list was reconstructed without tuple
+normalization. `ResidentSetupObservation.to_dict/from_dict` is now the only serialized boundary;
+Target and Serial both use it and reject malformed token types. The next server action is only the
+fresh Target procedure in
+[phase4b-resident-l2-target-rerun.md](phase4b-resident-l2-target-rerun.md). Serial, L5, 100
+requests, Phase 4B.1 Dual-Batch, performance, Dual-Eager, and SLO evaluation remain blocked.
 
 GPU 0 runs one persistent Draft service. Heavy Draft model work is serialized on its background
 worker queue; Unix-socket calls only enqueue work or poll completed proposals. The Target

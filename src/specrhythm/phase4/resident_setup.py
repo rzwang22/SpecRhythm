@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
 
@@ -360,9 +359,7 @@ def validate_resident_admission_events(
 
 
 def observation_to_dict(observation: ResidentSetupObservation) -> dict[str, Any]:
-    value = asdict(observation)
-    value["prompt_token_ids"] = list(observation.prompt_token_ids)
-    return value
+    return observation.to_dict()
 
 
 def observation_static_fields(observation: ResidentSetupObservation) -> tuple[Any, ...]:

@@ -461,7 +461,7 @@ class RemoteDraftProposer:
             raise RuntimeError("resident Serial observations are missing")
         assert self.decode_ready_provenance is not None
         manifest = ResidentWarmStartProvider().prepare(
-            [ResidentSetupObservation(**row) for row in observations],
+            [ResidentSetupObservation.from_dict(row) for row in observations],
             self.decode_ready_provenance,
             setup_start_ns=int(setup["setup_start_ns"]),
             setup_complete_ns=int(setup["setup_complete_ns"]),

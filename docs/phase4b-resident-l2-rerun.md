@@ -1,5 +1,9 @@
 # Phase 4B incremental resident-setup L2 rerun
 
+> Archived after the real-A800 `98ec816` Target run reached both incremental requests but failed
+> while rebuilding a tuple-typed observation from its JSON-compatible list. Preserve that run.
+> Use `docs/phase4b-resident-l2-target-rerun.md`; it runs only the serialization-fixed Target gate.
+
 This is the only active procedure after the real-A800 `d6c7aa8` Gate-B failure. It runs only
 L2 resident Target, then L2 resident Serial if Target passes, then read-only L2 validation. It
 does not run L5, Phase 4B.1 Dual-Batch, performance, Dual-Eager, or SLO evaluation. The failed

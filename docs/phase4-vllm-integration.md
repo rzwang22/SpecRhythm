@@ -279,14 +279,20 @@ atomic setup-ready artifact is published. Target keeps KV for the prompt and the
 pending input; Draft keeps KV for `prompt+bootstrap`. Serial round-zero proposals are created only
 after measurement start and installed from the same fail-closed readiness artifact.
 
+The subsequent `98ec816` A800 Target run reached both incremental observations and the global
+completion path, then exposed a narrow codec bug: JSON-compatible prompt tokens remained lists at
+a raw dataclass reconstruction boundary. The canonical observation loader now restores strict
+tuple semantics for both Target and Serial and rejects malformed token types.
+
 Phase 4 main evaluation is decode-only. Resident warm start isolates the decode stage with real
 KV but is not an end-to-end prefill/decode deployment. `KVConnectorHandoffProvider` is the future
 end-to-end path and is not implemented in this phase. See
 [phase4b-decode-ready.md](phase4b-decode-ready.md).
 
 The Mac agent validates only CPU contracts. Real-A800 Gate A.1/A.2/A.3 passed; the failed Gate-B
-artifact remains failure provenance. The next server action is only the corrected L2 resident
-Target/Serial comparison in
-[phase4b-resident-l2-rerun.md](phase4b-resident-l2-rerun.md). L5 and Phase 4B.1 remain blocked.
+artifacts remain failure provenance. The next server action is only the serialization-fixed L2
+resident Target in
+[phase4b-resident-l2-target-rerun.md](phase4b-resident-l2-target-rerun.md). Serial, L5 and Phase
+4B.1 remain blocked.
 No artifact in this phase establishes speedup, throughput, goodput, SLO attainment, latency
 improvement or production readiness.

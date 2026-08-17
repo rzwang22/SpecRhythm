@@ -304,7 +304,7 @@ class ResidentTargetProposer:
         if not isinstance(observations, list):
             raise RuntimeError("resident setup observations are missing")
         manifest = ResidentWarmStartProvider().prepare(
-            [ResidentSetupObservation(**row) for row in observations],
+            [ResidentSetupObservation.from_dict(row) for row in observations],
             self.provenance,
             setup_start_ns=int(setup["setup_start_ns"]),
             setup_complete_ns=int(setup["setup_complete_ns"]),

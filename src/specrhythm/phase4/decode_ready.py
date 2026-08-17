@@ -193,8 +193,114 @@ class ResidentSetupObservation:
     target_materialized_kv_token_count: int
     target_num_computed_tokens: int
     draft_materialized_kv_token_count: int
-    bootstrap_ready_ns: int = 0
-    draft_initialization_complete_ns: int = 0
+    bootstrap_ready_ns: int
+    draft_initialization_complete_ns: int
+
+    def __post_init__(self) -> None:
+        for name, value in (
+            ("request_id", self.request_id),
+            ("internal_target_request_id", self.internal_target_request_id),
+        ):
+            if not isinstance(value, str) or not value or value != value.strip():
+                raise ValueError(f"resident setup {name} must be a canonical string")
+        if not isinstance(self.prompt_token_ids, tuple) or not self.prompt_token_ids:
+            raise ValueError("resident setup prompt_token_ids must be a non-empty tuple")
+        for index, token_id in enumerate(self.prompt_token_ids):
+            parsed = _strict_observation_int(
+                token_id, f"resident setup prompt_token_ids[{index}]"
+            )
+            if parsed < 0:
+                raise ValueError(
+                    f"resident setup prompt_token_ids[{index}] must be non-negative"
+                )
+        for name, value in (
+            ("bootstrap_token_id", self.bootstrap_token_id),
+            (
+                "target_materialized_kv_token_count",
+                self.target_materialized_kv_token_count,
+            ),
+            ("target_num_computed_tokens", self.target_num_computed_tokens),
+            (
+                "draft_materialized_kv_token_count",
+                self.draft_materialized_kv_token_count,
+            ),
+            ("bootstrap_ready_ns", self.bootstrap_ready_ns),
+            (
+                "draft_initialization_complete_ns",
+                self.draft_initialization_complete_ns,
+            ),
+        ):
+            parsed = _strict_observation_int(value, f"resident setup {name}")
+            if parsed < 0:
+                raise ValueError(f"resident setup {name} must be non-negative")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "request_id": self.request_id,
+            "internal_target_request_id": self.internal_target_request_id,
+            "prompt_token_ids": list(self.prompt_token_ids),
+            "bootstrap_token_id": self.bootstrap_token_id,
+            "target_materialized_kv_token_count": (
+                self.target_materialized_kv_token_count
+            ),
+            "target_num_computed_tokens": self.target_num_computed_tokens,
+            "draft_materialized_kv_token_count": (
+                self.draft_materialized_kv_token_count
+            ),
+            "bootstrap_ready_ns": self.bootstrap_ready_ns,
+            "draft_initialization_complete_ns": (
+                self.draft_initialization_complete_ns
+            ),
+        }
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "ResidentSetupObservation":
+        if not isinstance(value, Mapping):
+            raise ValueError("resident setup observation must be an object")
+        prompt = value.get("prompt_token_ids")
+        if not isinstance(prompt, (list, tuple)) or not prompt:
+            raise ValueError(
+                "resident setup prompt_token_ids must be a non-empty sequence"
+            )
+        return cls(
+            request_id=_canonical_observation_id(
+                value.get("request_id"), "request_id"
+            ),
+            internal_target_request_id=_canonical_observation_id(
+                value.get("internal_target_request_id"),
+                "internal_target_request_id",
+            ),
+            prompt_token_ids=tuple(
+                _strict_observation_int(
+                    token_id, f"resident setup prompt_token_ids[{index}]"
+                )
+                for index, token_id in enumerate(prompt)
+            ),
+            bootstrap_token_id=_strict_observation_int(
+                value.get("bootstrap_token_id"),
+                "resident setup bootstrap_token_id",
+            ),
+            target_materialized_kv_token_count=_strict_observation_int(
+                value.get("target_materialized_kv_token_count"),
+                "resident setup target_materialized_kv_token_count",
+            ),
+            target_num_computed_tokens=_strict_observation_int(
+                value.get("target_num_computed_tokens"),
+                "resident setup target_num_computed_tokens",
+            ),
+            draft_materialized_kv_token_count=_strict_observation_int(
+                value.get("draft_materialized_kv_token_count"),
+                "resident setup draft_materialized_kv_token_count",
+            ),
+            bootstrap_ready_ns=_strict_observation_int(
+                value.get("bootstrap_ready_ns"),
+                "resident setup bootstrap_ready_ns",
+            ),
+            draft_initialization_complete_ns=_strict_observation_int(
+                value.get("draft_initialization_complete_ns"),
+                "resident setup draft_initialization_complete_ns",
+            ),
+        )
 
 
 @dataclass(frozen=True)
@@ -744,6 +850,21 @@ def _validate_request(request: DecodeReadyRequest) -> list[str]:
     if request.initial_proposal_generated:
         errors.append(f"{request.request_id}: proposal was generated during setup")
     return errors
+
+
+def _canonical_observation_id(value: Any, name: str) -> str:
+    if value is None or isinstance(value, bool):
+        raise ValueError(f"resident setup {name} must be a string-like ID")
+    result = str(value).strip()
+    if not result:
+        raise ValueError(f"resident setup {name} must not be empty")
+    return result
+
+
+def _strict_observation_int(value: Any, name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{name} must be an integer")
+    return int(value)
 
 
 def _unique_outputs(rows: Sequence[Mapping[str, Any]]) -> dict[str, Mapping[str, Any]]:
