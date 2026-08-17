@@ -270,19 +270,23 @@ hashes are checked and restoration is reverse-order. No attention, sampler, mode
 C++/CUDA/Triton or DBO behavior changes.
 
 Phase 4B.0b introduces `DecodeReadyProvider -> DecodeReadyManifest -> consumer`. The implemented
-`ResidentWarmStartProvider` performs real Target prompt prefill plus exactly one bootstrap token,
-initializes Draft KV to the same full committed prefix, validates every request, crosses a global
-TP barrier, then starts measurement. No initial proposal may exist before that boundary. Target
-keeps KV for the prompt and the bootstrap as its pending input; Draft keeps KV for
-`prompt+bootstrap`. Target-only and Serial consume that state without full-prefix replay.
+`ResidentWarmStartProvider` incrementally observes real Target prompt prefill plus exactly one
+bootstrap token and initializes Draft KV to the same committed prefix. The `d6c7aa8` A800 failure
+proved that proposer callbacks cannot be treated as whole-workload batches. Each bootstrapped
+request is now frozen by a dedicated EngineCore scheduler until every frozen stable request is
+observed, the complete manifest validates, one TP barrier finishes, measurement starts, and an
+atomic setup-ready artifact is published. Target keeps KV for the prompt and the bootstrap as its
+pending input; Draft keeps KV for `prompt+bootstrap`. Serial round-zero proposals are created only
+after measurement start and installed from the same fail-closed readiness artifact.
 
 Phase 4 main evaluation is decode-only. Resident warm start isolates the decode stage with real
 KV but is not an end-to-end prefill/decode deployment. `KVConnectorHandoffProvider` is the future
 end-to-end path and is not implemented in this phase. See
 [phase4b-decode-ready.md](phase4b-decode-ready.md).
 
-The Mac agent validates only CPU contracts. Server Gate A must first prove explicit scheduler
-admission and owned-process cleanup. Gate B may then compare fresh two- and five-request raw
-Target, resident Target and resident Serial token/termination results. Phase 4B.0b does not run or
-claim Dual-Batch Outcome A. No artifact in this phase establishes speedup, throughput, goodput,
-SLO attainment, latency improvement or production readiness.
+The Mac agent validates only CPU contracts. Real-A800 Gate A.1/A.2/A.3 passed; the failed Gate-B
+artifact remains failure provenance. The next server action is only the corrected L2 resident
+Target/Serial comparison in
+[phase4b-resident-l2-rerun.md](phase4b-resident-l2-rerun.md). L5 and Phase 4B.1 remain blocked.
+No artifact in this phase establishes speedup, throughput, goodput, SLO attainment, latency
+improvement or production readiness.

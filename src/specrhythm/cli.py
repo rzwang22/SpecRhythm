@@ -772,6 +772,9 @@ def build_parser() -> argparse.ArgumentParser:
         "context",
         "decode-ready-manifest",
         "timing-events",
+        "setup-control",
+        "setup-ready",
+        "admission-events",
         "target-diagnostics",
         "plugin-report",
         "first-forward",
@@ -807,6 +810,9 @@ def build_parser() -> argparse.ArgumentParser:
         "context",
         "decode-ready-manifest",
         "timing-events",
+        "setup-control",
+        "setup-ready",
+        "admission-events",
         "target-diagnostics",
         "first-forward",
         "output",
@@ -1359,6 +1365,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 context_path=Path(args.context).resolve(),
                 decode_ready_manifest_path=Path(args.decode_ready_manifest).resolve(),
                 timing_events_path=Path(args.timing_events).resolve(),
+                setup_control_path=Path(args.setup_control).resolve(),
+                setup_ready_path=Path(args.setup_ready).resolve(),
+                admission_events_path=Path(args.admission_events).resolve(),
                 target_diagnostics_path=Path(args.target_diagnostics).resolve(),
                 plugin_report_path=Path(args.plugin_report).resolve(),
                 first_forward_path=Path(args.first_forward).resolve(),
@@ -1424,6 +1433,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 ).resolve(),
                 decode_ready_timing_path=Path(args.timing_events).resolve(),
                 first_forward_path=Path(args.first_forward).resolve(),
+                resident_setup_control_path=Path(args.setup_control).resolve(),
+                resident_setup_ready_path=Path(args.setup_ready).resolve(),
+                resident_admission_events_path=Path(
+                    args.admission_events
+                ).resolve(),
             )
             _write_json(report, args.output)
         except (

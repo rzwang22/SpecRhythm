@@ -14,14 +14,24 @@ DecodeReadyProvider
 
 ## Resident warm start
 
-For every request, untimed setup performs exactly these operations:
+Pinned vLLM may split the initial prefill into arbitrary non-empty proposer callbacks. For every
+request, untimed setup therefore performs these operations incrementally:
 
 1. Target prompt prefill samples exactly one bootstrap token and then stops advancing.
 2. Draft initializes real resident KV for `prompt + bootstrap` and generates no proposal.
-3. Request-level prompt/bootstrap/KV invariants are validated.
-4. All Target TP ranks cross a CUDA-synchronized barrier.
-5. `measurement_start_ns` is broadcast and the immutable manifest is written.
-6. Target-only executes its first one-token decode, or Serial begins its first Draft proposal.
+3. An immutable stable-ID observation and bootstrap/Draft-initialization timestamps are retained.
+4. The EngineCore scheduler freezes that request after bootstrap while any frozen request is not
+   ready; later prompt/bootstrap work remains admissible.
+5. After the complete frozen set validates, all Target TP ranks cross one CUDA-synchronized
+   barrier and `measurement_start_ns` is broadcast.
+6. The manifest is written. Target-only then publishes its atomic setup-ready artifact. Serial
+   first creates all round-zero proposals after measurement start and includes them in its atomic
+   setup-ready artifact for exact scheduler installation.
+
+The scheduler and TP proposer workers do not share Python globals. The scheduler reads only the
+atomic setup-ready artifact, validates its manifest SHA256 and stable/internal identity mapping,
+and uses the existing explicit request predicate. A request with one output token cannot advance
+before global readiness. Current-step arithmetic is forbidden.
 
 The Target state deliberately uses the standard pending-input convention:
 
@@ -78,7 +88,7 @@ offsets, invalid acceptance accounting, or KV mismatch fail closed.
 
 ## Correctness chain
 
-Gate B uses fresh two-request and five-request runs:
+The corrected Gate B first uses a fresh two-request run:
 
 ```text
 raw-prompt stock Target output
@@ -88,8 +98,9 @@ raw-prompt stock Target output
 
 Token IDs, bootstrap, EOS/stop reason, max-token termination and final logical length all belong
 to equality. The comparator already accepts an optional future Dual output, but Phase 4B.0b does
-not run or claim Dual-Batch Outcome A. The Phase 3 HF trajectory remains diagnostic provenance,
-not the serving correctness reference.
+not run or claim Dual-Batch Outcome A. L5 remains blocked until the corrected L2 artifacts are
+reviewed. The Phase 3 HF trajectory remains diagnostic provenance, not the serving correctness
+reference. See [phase4b-resident-l2-rerun.md](phase4b-resident-l2-rerun.md).
 
 ## Patch and process boundaries
 

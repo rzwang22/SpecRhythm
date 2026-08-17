@@ -415,6 +415,61 @@ def require_reference_for_mode(reference: Mapping[str, Any], mode: str) -> None:
     require_matching_reference_mode(reference, mode)
 
 
+def require_exact_resident_reference_reuse(
+    reference: Mapping[str, Any], config: Phase4Config, workload_path: Path
+) -> None:
+    """Allow an older stock reference only when every semantic input matches.
+
+    The SpecRhythm commit that orchestrates a consumer may differ because the
+    reference was intentionally frozen before applying integration patches.
+    Model/tokenizer metadata, workload, sampling, pinned stock vLLM, placement,
+    and correctness mode may not differ.
+    """
+
+    errors = []
+    vllm = reference.get("vllm")
+    if not isinstance(vllm, Mapping) or (
+        vllm.get("version") != config.expected_vllm_version
+        or vllm.get("source_commit") != config.expected_vllm_commit
+        or vllm.get("patched") is not False
+        or vllm.get("gpu_model_runner_sha256") != STOCK_VLLM_RUNNER_SHA256
+    ):
+        errors.append("stock vLLM identity differs")
+    if reference.get("model") != model_revision_manifest(
+        config.target.resolved_model_path, config.target.revision
+    ):
+        errors.append("Target model metadata differs")
+    if reference.get("tokenizer") != model_revision_manifest(
+        config.target.resolved_tokenizer_path, config.target.tokenizer_revision
+    ):
+        errors.append("Target tokenizer metadata differs")
+    workload = reference.get("workload")
+    if not isinstance(workload, Mapping) or workload.get("sha256") != sha256_file(
+        workload_path
+    ):
+        errors.append("frozen workload checksum differs")
+    if reference.get("sampling_configuration") != config.sampling.to_dict():
+        errors.append("sampling configuration differs")
+    runtime = reference.get("target_runtime_configuration")
+    expected_runtime = {
+        "physical_gpu_ids": list(config.target.physical_gpu_ids),
+        "tensor_parallel_size": config.target.tensor_parallel_size,
+        "dtype": config.target.dtype,
+        "max_model_len": config.max_model_len,
+        "enforce_eager": config.enforce_eager,
+        "enable_prefix_caching": config.enable_prefix_caching,
+        "vllm_dbo_enabled": False,
+        "built_in_speculative_decoding": False,
+        "enable_thinking": config.enable_thinking,
+    }
+    if not isinstance(runtime, Mapping) or any(
+        runtime.get(key) != value for key, value in expected_runtime.items()
+    ):
+        errors.append("Target runtime configuration differs")
+    if errors:
+        raise ValueError("stock reference cannot be reused: " + "; ".join(errors))
+
+
 def build_target_regression(
     smoke: Mapping[str, Any], reference: Mapping[str, Any], *, patch_manifest: Mapping[str, Any]
 ) -> dict[str, Any]:

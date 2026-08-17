@@ -54,6 +54,8 @@ def make_manifest() -> DecodeReadyManifest:
             target_materialized_kv_token_count=3,
             target_num_computed_tokens=3,
             draft_materialized_kv_token_count=4,
+            bootstrap_ready_ns=12,
+            draft_initialization_complete_ns=14,
         ),
         ResidentSetupObservation(
             request_id="B",
@@ -63,6 +65,8 @@ def make_manifest() -> DecodeReadyManifest:
             target_materialized_kv_token_count=2,
             target_num_computed_tokens=2,
             draft_materialized_kv_token_count=3,
+            bootstrap_ready_ns=15,
+            draft_initialization_complete_ns=18,
         ),
     ]
     return ResidentWarmStartProvider().prepare(

@@ -26,7 +26,13 @@ from specrhythm.phase4.reference import (
     compare_outputs_to_reference,
     load_reference,
     reference_file_evidence,
+    require_exact_resident_reference_reuse,
     require_reference_for_mode,
+)
+from specrhythm.phase4.resident_setup import (
+    build_setup_control,
+    load_setup_ready,
+    validate_resident_admission_events,
 )
 from specrhythm.phase4.stock_vllm import (
     _serialize_outputs,
@@ -206,6 +212,9 @@ def run_serial_disaggregated(
     decode_ready_manifest_path: Optional[Path] = None,
     decode_ready_timing_path: Optional[Path] = None,
     first_forward_path: Optional[Path] = None,
+    resident_setup_control_path: Optional[Path] = None,
+    resident_setup_ready_path: Optional[Path] = None,
+    resident_admission_events_path: Optional[Path] = None,
 ) -> dict[str, Any]:
     """Run one real GPU correctness pass; no performance metrics are derived."""
 
@@ -242,6 +251,9 @@ def run_serial_disaggregated(
         decode_ready_manifest_path,
         decode_ready_timing_path,
         first_forward_path,
+        resident_setup_control_path,
+        resident_setup_ready_path,
+        resident_admission_events_path,
     )
     resident_mode = any(path is not None for path in resident_paths)
     if resident_mode and any(path is None for path in resident_paths):
@@ -249,6 +261,7 @@ def run_serial_disaggregated(
             "resident Serial requires context, manifest, timing and first-forward paths"
         )
     if resident_mode:
+        require_exact_resident_reference_reuse(reference, config, workload_path)
         installed_runner = validate_installed_patch_stack(patch_manifest)
     artifact_paths = [round_events_path, transport_events_path, plugin_report_path]
     artifact_paths.extend(path for path in resident_paths[1:] if path is not None)
@@ -284,6 +297,9 @@ def run_serial_disaggregated(
         assert decode_ready_context_path is not None
         assert decode_ready_manifest_path is not None
         assert decode_ready_timing_path is not None
+        assert resident_setup_control_path is not None
+        assert resident_setup_ready_path is not None
+        assert resident_admission_events_path is not None
         os.environ.update(
             {
                 "SR_PHASE4_DECODE_READY_MODE": "1",
@@ -291,6 +307,15 @@ def run_serial_disaggregated(
                 "SR_PHASE4_DECODE_READY_MANIFEST": str(decode_ready_manifest_path),
                 "SR_PHASE4_DECODE_READY_TIMING_EVENTS": str(
                     decode_ready_timing_path
+                ),
+                "SR_PHASE4_RESIDENT_SETUP": "1",
+                "SR_PHASE4_RESIDENT_CONSUMER": "serial",
+                "SR_PHASE4_RESIDENT_SETUP_CONTROL": str(
+                    resident_setup_control_path
+                ),
+                "SR_PHASE4_RESIDENT_SETUP_READY": str(resident_setup_ready_path),
+                "SR_PHASE4_RESIDENT_ADMISSION_EVENTS": str(
+                    resident_admission_events_path
                 ),
             }
         )
@@ -300,6 +325,11 @@ def run_serial_disaggregated(
             "SR_PHASE4_DECODE_READY_CONTEXT",
             "SR_PHASE4_DECODE_READY_MANIFEST",
             "SR_PHASE4_DECODE_READY_TIMING_EVENTS",
+            "SR_PHASE4_RESIDENT_SETUP",
+            "SR_PHASE4_RESIDENT_CONSUMER",
+            "SR_PHASE4_RESIDENT_SETUP_CONTROL",
+            "SR_PHASE4_RESIDENT_SETUP_READY",
+            "SR_PHASE4_RESIDENT_ADMISSION_EVENTS",
         ):
             os.environ.pop(name, None)
     if diagnostics_path is not None:
@@ -321,6 +351,11 @@ def run_serial_disaggregated(
         enforce_eager=config.enforce_eager,
         enable_prefix_caching=config.enable_prefix_caching,
         enable_dbo=False,
+        scheduler_cls=(
+            "specrhythm.phase4.resident_scheduler.ResidentSetupScheduler"
+            if resident_mode
+            else None
+        ),
         speculative_config={
             "model": "specrhythm.phase4.vllm_remote.RemoteDraftProposer",
             "method": "custom_class",
@@ -357,7 +392,15 @@ def run_serial_disaggregated(
     ]
     generation_start = time.monotonic_ns()
     if resident_mode:
-        os.environ["SR_PHASE4_SETUP_START_NS"] = str(generation_start)
+        assert resident_setup_control_path is not None
+        atomic_write_json(
+            resident_setup_control_path,
+            build_setup_control(
+                consumer="serial",
+                expected_request_ids=[row.request_id for row in requests],
+                setup_start_ns=generation_start,
+            ),
+        )
     outputs = llm.generate(prompts, parameters, use_tqdm=False)
     torch.cuda.synchronize()
     generation_end = time.monotonic_ns()
@@ -540,6 +583,8 @@ def run_serial_disaggregated(
     if resident_mode:
         assert decode_ready_manifest_path is not None
         assert first_forward_path is not None
+        assert resident_setup_ready_path is not None
+        assert resident_admission_events_path is not None
         from specrhythm.phase4.decode_ready import (
             build_first_target_forward_contract,
             compare_raw_and_decode_outputs,
@@ -551,6 +596,17 @@ def run_serial_disaggregated(
         manifest = load_decode_ready_manifest(
             json.loads(decode_ready_manifest_path.read_text(encoding="utf-8"))
         )
+        setup_ready = load_setup_ready(
+            resident_setup_ready_path,
+            manifest_path=decode_ready_manifest_path,
+            consumer="serial",
+            expected_request_ids=[row.request_id for row in requests],
+        )
+        admission_rows = CheckpointJsonl(resident_admission_events_path).read()
+        admission_errors = validate_resident_admission_events(
+            admission_rows, consumer="serial"
+        )
+        resident_errors.extend(admission_errors)
         diagnostics = CheckpointJsonl(diagnostics_path).read() if diagnostics_path else []
         contracts = []
         first_round_by_request = {
@@ -671,6 +727,12 @@ def run_serial_disaggregated(
                 "end_to_end_pd_deployment": False,
                 "kv_connector_handoff": False,
                 "resident_errors": resident_errors,
+                "global_setup_ready": setup_ready,
+                "resident_admission": {
+                    "valid": not admission_errors,
+                    "errors": admission_errors,
+                    "event_count": len(admission_rows),
+                },
             }
         )
     result["valid"] = bool(

@@ -30,7 +30,13 @@ from specrhythm.phase4.manifest import (
 from specrhythm.phase4.reference import (
     compare_outputs_to_reference,
     load_reference,
+    require_exact_resident_reference_reuse,
     require_reference_for_mode,
+)
+from specrhythm.phase4.resident_setup import (
+    build_setup_control,
+    load_setup_ready,
+    validate_resident_admission_events,
 )
 from specrhythm.phase4.serial_runner import (
     load_patch_manifest,
@@ -105,6 +111,9 @@ def run_resident_target(
     context_path: Path,
     decode_ready_manifest_path: Path,
     timing_events_path: Path,
+    setup_control_path: Path,
+    setup_ready_path: Path,
+    admission_events_path: Path,
     target_diagnostics_path: Path,
     plugin_report_path: Path,
     first_forward_path: Path,
@@ -120,6 +129,9 @@ def run_resident_target(
         context_path,
         decode_ready_manifest_path,
         timing_events_path,
+        setup_control_path,
+        setup_ready_path,
+        admission_events_path,
         target_diagnostics_path,
         plugin_report_path,
         first_forward_path,
@@ -130,6 +142,7 @@ def run_resident_target(
     mode_evidence = configure_before_worker_creation(correctness_mode)
     reference = load_reference(reference_path)
     require_reference_for_mode(reference, correctness_mode)
+    require_exact_resident_reference_reuse(reference, config, workload_path)
     patch_manifest = load_patch_manifest(patch_manifest_path, config)
     installed_stack = validate_installed_patch_stack(patch_manifest)
     environment = _read_object(environment_path)
@@ -171,6 +184,11 @@ def run_resident_target(
             "SR_PHASE4_DECODE_READY_CONTEXT": str(context_path),
             "SR_PHASE4_DECODE_READY_MANIFEST": str(decode_ready_manifest_path),
             "SR_PHASE4_DECODE_READY_TIMING_EVENTS": str(timing_events_path),
+            "SR_PHASE4_RESIDENT_SETUP": "1",
+            "SR_PHASE4_RESIDENT_CONSUMER": "target-only",
+            "SR_PHASE4_RESIDENT_SETUP_CONTROL": str(setup_control_path),
+            "SR_PHASE4_RESIDENT_SETUP_READY": str(setup_ready_path),
+            "SR_PHASE4_RESIDENT_ADMISSION_EVENTS": str(admission_events_path),
             "SR_PHASE4_TARGET_DIAGNOSTICS": str(target_diagnostics_path),
             "SR_PHASE4_PLUGIN_REPORT": str(plugin_report_path),
         }
@@ -196,6 +214,7 @@ def run_resident_target(
         enforce_eager=config.enforce_eager,
         enable_prefix_caching=config.enable_prefix_caching,
         enable_dbo=False,
+        scheduler_cls="specrhythm.phase4.resident_scheduler.ResidentSetupScheduler",
         speculative_config={
             "model": "specrhythm.phase4.resident_vllm.ResidentTargetProposer",
             "method": "custom_class",
@@ -226,13 +245,30 @@ def run_resident_target(
         )
         for row in requests
     ]
-    os.environ["SR_PHASE4_SETUP_START_NS"] = str(time.monotonic_ns())
+    atomic_write_json(
+        setup_control_path,
+        build_setup_control(
+            consumer="target-only",
+            expected_request_ids=[row.request_id for row in requests],
+            setup_start_ns=time.monotonic_ns(),
+        ),
+    )
     outputs = llm.generate(prompts, parameters, use_tqdm=False)
     torch.cuda.synchronize()
     serialized = _serialize_outputs(outputs, requests)
     draft_shutdown = UnixDraftClient(draft_socket_path).shutdown()
     manifest_value = json.loads(decode_ready_manifest_path.read_text(encoding="utf-8"))
     manifest = load_decode_ready_manifest(manifest_value)
+    setup_ready = load_setup_ready(
+        setup_ready_path,
+        manifest_path=decode_ready_manifest_path,
+        consumer="target-only",
+        expected_request_ids=[row.request_id for row in requests],
+    )
+    admission_rows = CheckpointJsonl(admission_events_path).read()
+    admission_errors = validate_resident_admission_events(
+        admission_rows, consumer="target-only"
+    )
     diagnostics = CheckpointJsonl(target_diagnostics_path).read()
     plugin_report = _read_object(plugin_report_path)
     residency_errors = validate_engine_residency(
@@ -268,7 +304,7 @@ def run_resident_target(
     if not first_contracts:
         boundary_errors.append("no first Target decode exists after the barrier")
     stock_comparison = compare_outputs_to_reference(serialized, reference)
-    errors = first_errors + boundary_errors + residency_errors
+    errors = first_errors + boundary_errors + residency_errors + admission_errors
     if not raw_decode["valid"]:
         errors.extend(raw_decode["errors"])
     if not stock_comparison["all_sequences_equal"]:
@@ -292,6 +328,12 @@ def run_resident_target(
         "decode_ready_manifest_sha256": manifest.manifest_sha256,
         "first_target_forward_valid": not first_errors,
         "measurement_boundary_valid": not boundary_errors,
+        "global_setup_ready": setup_ready,
+        "resident_admission": {
+            "valid": not admission_errors,
+            "errors": admission_errors,
+            "event_count": len(admission_rows),
+        },
         "worker_ranks": worker_ranks,
         "batch_invariant": batch_validation,
         "environment_validation": environment_validation,
@@ -310,6 +352,9 @@ def run_resident_target(
             "reference": sha256_file(reference_path),
             "decode_ready_manifest": sha256_file(decode_ready_manifest_path),
             "first_target_forward": sha256_file(first_forward_path),
+            "setup_control": sha256_file(setup_control_path),
+            "setup_ready": sha256_file(setup_ready_path),
+            "admission_events": sha256_file(admission_events_path),
         },
     }
     atomic_write_json(output_path, result)

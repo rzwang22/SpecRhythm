@@ -40,6 +40,8 @@ class DecodeReadyRequest:
     target_decode_ready: bool
     draft_decode_ready: bool
     initial_proposal_generated: bool
+    bootstrap_ready_ns: int
+    draft_initialization_complete_ns: int
 
     def to_dict(self) -> dict[str, Any]:
         value = asdict(self)
@@ -54,6 +56,8 @@ class DecodeReadyRequest:
         fields["logical_committed_prefix_token_ids"] = tuple(
             int(item) for item in value.get("logical_committed_prefix_token_ids", ())
         )
+        fields.setdefault("bootstrap_ready_ns", 0)
+        fields.setdefault("draft_initialization_complete_ns", 0)
         return cls(**fields)
 
 
@@ -189,6 +193,8 @@ class ResidentSetupObservation:
     target_materialized_kv_token_count: int
     target_num_computed_tokens: int
     draft_materialized_kv_token_count: int
+    bootstrap_ready_ns: int = 0
+    draft_initialization_complete_ns: int = 0
 
 
 @dataclass(frozen=True)
@@ -304,6 +310,10 @@ class ResidentWarmStartProvider:
                     target_decode_ready=True,
                     draft_decode_ready=True,
                     initial_proposal_generated=False,
+                    bootstrap_ready_ns=row.bootstrap_ready_ns,
+                    draft_initialization_complete_ns=(
+                        row.draft_initialization_complete_ns
+                    ),
                 )
             )
         manifest = DecodeReadyManifest(
@@ -383,6 +393,15 @@ def validate_decode_ready_manifest(manifest: DecodeReadyManifest) -> list[str]:
         errors.append("decode-ready request IDs are not unique")
     for request in manifest.requests:
         errors.extend(_validate_request(request))
+        if not (
+            manifest.setup_start_ns
+            <= request.bootstrap_ready_ns
+            <= request.draft_initialization_complete_ns
+            <= manifest.setup_complete_ns
+        ):
+            errors.append(
+                f"{request.request_id}: per-request setup timestamps are not ordered"
+            )
     expected_hash = _payload_sha256(manifest.payload())
     if manifest.manifest_sha256 != expected_hash:
         errors.append("decode-ready manifest hash is invalid")
@@ -642,6 +661,8 @@ def run_decode_ready_contract_dry_run() -> dict[str, Any]:
         target_materialized_kv_token_count=3,
         target_num_computed_tokens=3,
         draft_materialized_kv_token_count=4,
+        bootstrap_ready_ns=12,
+        draft_initialization_complete_ns=18,
     )
     manifest = ResidentWarmStartProvider().prepare(
         [observation],

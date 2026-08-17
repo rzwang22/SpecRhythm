@@ -34,7 +34,7 @@ claims.
 | [#1 workload-v0.1](https://github.com/rzwang22/SpecRhythm/pull/1) | merged | strict Mooncake replay, R3 proxy config, validator, manifest, fixture tests and docs | workload plumbing only; proxy payload and illustrative acceptance |
 | [#2 simulator-semantics-v0.2](https://github.com/rzwang22/SpecRhythm/pull/2) | frozen draft; Phase 2 complete, not merged | proposal lifecycle, deterministic tree oracle, tree-aware allocators, base-preserving residual controls, Phase-2 nested search pools and common-snapshot oracle replay, path-aware eager and accounting | pure-Python proxy and oracle upper bounds only; no deployable oracle, measured search cost, GPU integration, or performance claim |
 | [#3 gpu-integration-v0.1](https://github.com/rzwang22/SpecRhythm/pull/3) | draft; Phase 3B.1 and corrected-20 Phase 3C.2 complete; Phase 3C.3 corrected-100 awaiting server run | hardened multi-rank primitives, corrected R3-real traces, common-prefix replay, request-bootstrap statistics, 2x shell decomposition and diagnostic learned ranker | user-run 3×A800 correctness artifacts plus Mac CPU tests; no packed-tree/serving engine, Dual-Batch, SLO, calibrated latency or speedup claim |
-| [#4 vllm-serving-v0.1](https://github.com/rzwang22/SpecRhythm/pull/4) | draft; Phase 4A.1.1 Outcome A frozen; Phase 4B.0a/0b CPU implementation complete, A800 Gate A/B pending | explicit ready-only scheduler predicate, owned process lifecycle, resident real-KV decode-ready provider/manifest, Target/Serial comparator and first-forward proof | `96842c8` identity passed but scheduler/cleanup failed; current work has no GPU Gate PASS, Dual-Batch Outcome, performance, packed tree, eager, SLO or goodput claim |
+| [#4 vllm-serving-v0.1](https://github.com/rzwang22/SpecRhythm/pull/4) | draft; Phase 4A.1.1 Outcome A frozen; `d6c7aa8` Gate A passed and Gate B exposed an incremental-setup bug; corrected L2 rerun pending | explicit ready-only scheduler predicate, owned process lifecycle, incremental resident setup, atomic cross-process global readiness, Target/Serial comparator and first-forward proof | failed `d6c7aa8` resident output is immutable failure provenance; no GPU Gate-B PASS, Dual-Batch Outcome, performance, packed tree, eager, SLO or goodput claim |
 
 ## Phase 4A.0–4A.1: vLLM freeze and Serial Disaggregated correctness
 
@@ -124,10 +124,19 @@ actual forward boundaries and inputs.
 
 Phase 4 main evaluation is decode-only. Resident warm start is real-KV decode-stage isolation,
 not an end-to-end PD deployment. KVConnector handoff remains a future provider and is not
-implemented. CPU contract tests pass locally; the coding agent has not run CUDA. The next gate is
-the ordered 3×A800 Gate A construction/cleanup test, then two- and five-request resident Target
-and Serial equality. Do not run 100 requests or Phase 4B.1 Dual-Batch correctness before both
-gates pass.
+implemented. CPU contract tests pass locally; the coding agent has not run CUDA.
+
+The real-A800 Gate A.1/A.2/A.3 run passed. Gate B then proved that pinned vLLM may legally deliver
+only one frozen request in an initial proposer callback; both resident proposers incorrectly
+required the whole workload in that callback. The failed `d6c7aa8` directory is preserved.
+
+The corrected contract accumulates immutable stable-ID observations across callbacks. A dedicated
+EngineCore scheduler admits prompt/bootstrap work, freezes requests after their first output token,
+and releases them only after full-set validation, one TP barrier, manifest creation, measurement
+start, and atomic setup-ready publication. Resident Serial creates every initial proposal after
+measurement start and publishes it for exact scheduler installation. The next server action is the
+L2-only procedure in [phase4b-resident-l2-rerun.md](phase4b-resident-l2-rerun.md). L5, 100 requests,
+Phase 4B.1 Dual-Batch, performance, Dual-Eager, and SLO evaluation remain blocked pending review.
 
 GPU 0 runs one persistent Draft service. Heavy Draft model work is serialized on its background
 worker queue; Unix-socket calls only enqueue work or poll completed proposals. The Target

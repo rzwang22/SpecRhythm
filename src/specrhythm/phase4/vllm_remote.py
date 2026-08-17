@@ -22,6 +22,13 @@ from specrhythm.phase4.decode_ready import (
 )
 from specrhythm.phase4.manifest import atomic_write_json
 from specrhythm.phase4.request_identity import FrozenPromptIdentityMap
+from specrhythm.phase4.resident_setup import (
+    IncrementalResidentSetup,
+    build_setup_ready,
+    load_setup_control,
+    observation_static_fields,
+    observation_to_dict,
+)
 from specrhythm.phase4.serial import Proposal, RoundRecord, SerialTimeline, greedy_acceptance
 from specrhythm.phase4.stock_vllm import load_smoke_requests
 from specrhythm.phase4.transport import CheckpointJsonl, UnixDraftClient
@@ -92,6 +99,7 @@ class RemoteDraftProposer:
         self.verify_phase_sequence = 0
         self.resident_mode = os.environ.get("SR_PHASE4_DECODE_READY_MODE") == "1"
         self.resident_setup_complete = False
+        self.resident_setup_tracker: Optional[IncrementalResidentSetup] = None
         self.measurement_start_ns: Optional[int] = None
         self.decode_ready_manifest_path = (
             _required_path("SR_PHASE4_DECODE_READY_MANIFEST")
@@ -100,6 +108,16 @@ class RemoteDraftProposer:
         )
         self.decode_ready_timing_log = (
             CheckpointJsonl(_required_path("SR_PHASE4_DECODE_READY_TIMING_EVENTS"))
+            if self.resident_mode
+            else None
+        )
+        self.resident_setup_control_path = (
+            _required_path("SR_PHASE4_RESIDENT_SETUP_CONTROL")
+            if self.resident_mode
+            else None
+        )
+        self.resident_setup_ready_path = (
+            _required_path("SR_PHASE4_RESIDENT_SETUP_READY")
             if self.resident_mode
             else None
         )
@@ -132,7 +150,7 @@ class RemoteDraftProposer:
             )
         if self.resident_mode and not self.resident_setup_complete:
             setup = (
-                self._rank_zero_resident_setup(
+                self._rank_zero_observe_resident_setup(
                     request_ids, num_tokens_no_spec, token_ids_cpu
                 )
                 if self.tp_rank == 0
@@ -140,27 +158,14 @@ class RemoteDraftProposer:
             )
             setup = self.tp_group.broadcast_object(setup, src=0)
             if not isinstance(setup, Mapping) or setup.get("valid") is not True:
-                raise RuntimeError("Serial resident setup did not validate")
-            self.tp_group.barrier()
-            self.torch.cuda.synchronize()
-            barrier_ns = time.monotonic_ns()
-            measurement_start_ns = (
-                time.monotonic_ns() if self.tp_rank == 0 else None
-            )
-            measurement_start_ns = self.tp_group.broadcast_object(
-                measurement_start_ns, src=0
-            )
-            if not isinstance(measurement_start_ns, int):
-                raise RuntimeError("Serial measurement boundary was not broadcast")
-            if self.tp_rank == 0:
-                self._write_decode_ready_manifest(
-                    setup,
-                    barrier_ns=barrier_ns,
-                    measurement_start_ns=measurement_start_ns,
-                )
-            self.tp_group.barrier()
-            self.resident_setup_complete = True
-            self.measurement_start_ns = measurement_start_ns
+                raise RuntimeError("incremental Serial resident setup failed")
+            if setup.get("complete") is not True:
+                return [[] for _ in request_ids]
+            initial = self._complete_resident_setup(setup, request_ids)
+            proposals = initial.get("draft_token_ids")
+            if not isinstance(proposals, list) or len(proposals) != len(request_ids):
+                raise RuntimeError("Serial resident initial proposal batch is invalid")
+            return [list(row) for row in proposals]
         if self.tp_rank == 0:
             result = self._rank_zero_propose(request_ids, num_tokens_no_spec, token_ids_cpu)
         else:
@@ -173,17 +178,12 @@ class RemoteDraftProposer:
             raise RuntimeError("remote Draft proposal batch shape is invalid")
         return [list(row) for row in proposals]
 
-    def _rank_zero_resident_setup(
+    def _rank_zero_observe_resident_setup(
         self, request_ids: Sequence[str], num_tokens_no_spec: Any, token_ids_cpu: Any
     ) -> dict[str, Any]:
-        if len(request_ids) != len(self.definitions):
-            raise RuntimeError(
-                "resident Serial setup requires all requests in one initial prefill batch"
-            )
-        setup_start_ns = int(os.environ.get("SR_PHASE4_SETUP_START_NS", "0"))
-        if setup_start_ns <= 0:
-            raise RuntimeError("resident Serial setup start timestamp is missing")
-        observations = []
+        if not request_ids:
+            raise RuntimeError("resident Serial setup callback cannot be empty")
+        tracker = self._resident_tracker()
         for index, internal_id in enumerate(request_ids):
             count = int(num_tokens_no_spec[index])
             tokens = tuple(int(item) for item in token_ids_cpu[index, :count].tolist())
@@ -196,6 +196,33 @@ class RemoteDraftProposer:
             if len(generated) != 1:
                 raise RuntimeError("resident Serial setup must sample one bootstrap token")
             logical = definition.prompt_token_ids + generated
+            existing = tracker.get(stable_id)
+            if existing is not None:
+                candidate = ResidentSetupObservation(
+                    request_id=stable_id,
+                    internal_target_request_id=str(internal_id),
+                    prompt_token_ids=definition.prompt_token_ids,
+                    bootstrap_token_id=generated[0],
+                    target_materialized_kv_token_count=len(
+                        definition.prompt_token_ids
+                    ),
+                    target_num_computed_tokens=len(definition.prompt_token_ids),
+                    draft_materialized_kv_token_count=len(logical),
+                    bootstrap_ready_ns=existing.bootstrap_ready_ns,
+                    draft_initialization_complete_ns=(
+                        existing.draft_initialization_complete_ns
+                    ),
+                )
+                if observation_static_fields(candidate) != observation_static_fields(
+                    existing
+                ):
+                    raise RuntimeError(
+                        f"resident Serial bootstrap changed for {stable_id}"
+                    )
+                tracker.record(existing)
+                self._log_resident_observation(existing, duplicate=True)
+                continue
+            bootstrap_ready_ns = time.monotonic_ns()
             initialized = self.client.call(
                 "initialize",
                 {
@@ -204,7 +231,10 @@ class RemoteDraftProposer:
                     "committed_prefix_hash": _prefix_hash(logical),
                 },
             )
-            if initialized.get("committed_prefix_len") != len(logical):
+            if (
+                initialized.get("committed_prefix_len") != len(logical)
+                or initialized.get("committed_prefix_hash") != _prefix_hash(logical)
+            ):
                 raise RuntimeError("resident Draft KV does not cover committed prefix")
             self.requests[stable_id] = _TargetRequest(
                 request_id=stable_id,
@@ -215,25 +245,32 @@ class RemoteDraftProposer:
                 bootstrap_target_tokens=1,
                 finished=self._terminal(generated, definition.maximum_new_tokens),
             )
-            observations.append(
-                {
-                    "request_id": stable_id,
-                    "internal_target_request_id": str(internal_id),
-                    "prompt_token_ids": list(definition.prompt_token_ids),
-                    "bootstrap_token_id": generated[0],
-                    "target_materialized_kv_token_count": len(
-                        definition.prompt_token_ids
-                    ),
-                    "target_num_computed_tokens": len(definition.prompt_token_ids),
-                    "draft_materialized_kv_token_count": len(logical),
-                }
+            observation = ResidentSetupObservation(
+                request_id=stable_id,
+                internal_target_request_id=str(internal_id),
+                prompt_token_ids=definition.prompt_token_ids,
+                bootstrap_token_id=generated[0],
+                target_materialized_kv_token_count=len(definition.prompt_token_ids),
+                target_num_computed_tokens=len(definition.prompt_token_ids),
+                draft_materialized_kv_token_count=len(logical),
+                bootstrap_ready_ns=bootstrap_ready_ns,
+                draft_initialization_complete_ns=time.monotonic_ns(),
             )
+            tracker.record(observation)
+            self._log_resident_observation(observation, duplicate=False)
+        if not tracker.complete:
+            self._write_report()
+            return {
+                "valid": True,
+                "complete": False,
+                "observed_request_ids": list(tracker.observed_request_ids),
+            }
         setup_complete_ns = time.monotonic_ns()
         assert self.decode_ready_provenance is not None
         provisional = ResidentWarmStartProvider().prepare(
-            [ResidentSetupObservation(**row) for row in observations],
+            tracker.observations,
             self.decode_ready_provenance,
-            setup_start_ns=setup_start_ns,
+            setup_start_ns=tracker.setup_start_ns,
             setup_complete_ns=setup_complete_ns,
             global_barrier_ns=setup_complete_ns,
             measurement_start_ns=setup_complete_ns,
@@ -248,16 +285,169 @@ class RemoteDraftProposer:
                 "valid": not errors,
                 "errors": errors,
                 "initial_proposal_generated": False,
+                "observed_request_ids": list(tracker.observed_request_ids),
             }
         )
         if errors:
             raise RuntimeError("resident Serial setup is invalid: " + "; ".join(errors))
         return {
             "valid": True,
-            "setup_start_ns": setup_start_ns,
+            "complete": True,
+            "setup_start_ns": tracker.setup_start_ns,
             "setup_complete_ns": setup_complete_ns,
-            "observations": observations,
+            "observations": [
+                observation_to_dict(row) for row in tracker.observations
+            ],
         }
+
+    def _complete_resident_setup(
+        self, setup: Mapping[str, Any], request_ids: Sequence[str]
+    ) -> dict[str, Any]:
+        self.tp_group.barrier()
+        self.torch.cuda.synchronize()
+        barrier_ns = time.monotonic_ns()
+        measurement_start_ns = time.monotonic_ns() if self.tp_rank == 0 else None
+        measurement_start_ns = self.tp_group.broadcast_object(
+            measurement_start_ns, src=0
+        )
+        if not isinstance(measurement_start_ns, int):
+            raise RuntimeError("Serial measurement boundary was not broadcast")
+        if self.tp_rank == 0:
+            manifest = self._write_decode_ready_manifest(
+                setup,
+                barrier_ns=barrier_ns,
+                measurement_start_ns=measurement_start_ns,
+            )
+            initial_proposals = self._generate_initial_resident_proposals(
+                measurement_start_ns
+            )
+            assert self.resident_setup_ready_path is not None
+            assert self.decode_ready_manifest_path is not None
+            ready_published_ns = time.monotonic_ns()
+            ready = build_setup_ready(
+                manifest,
+                consumer="serial",
+                manifest_path=self.decode_ready_manifest_path,
+                initial_proposals=initial_proposals,
+                ready_published_ns=ready_published_ns,
+            )
+            atomic_write_json(self.resident_setup_ready_path, ready)
+            assert self.decode_ready_timing_log is not None
+            self.decode_ready_timing_log.append(
+                {
+                    "schema_version": "specrhythm.phase4b-decode-ready-timing.v1",
+                    "event": "global-setup-ready-published",
+                    "timestamp_ns": ready_published_ns,
+                    "consumer": "serial",
+                    "request_count": len(self.definitions),
+                    "initial_proposal_generated": True,
+                    "initial_proposal_min_start_ns": min(
+                        row.draft_start_ns for row in initial_proposals
+                    ),
+                }
+            )
+            proposal_by_id = {row.request_id: row for row in initial_proposals}
+            result: Optional[dict[str, Any]] = {
+                "draft_token_ids": [
+                    list(proposal_by_id[self.identity.stable_id(str(internal_id))].proposal_token_ids)
+                    for internal_id in request_ids
+                ]
+            }
+        else:
+            result = None
+        result = self.tp_group.broadcast_object(result, src=0)
+        if not isinstance(result, Mapping):
+            raise RuntimeError("Serial initial proposals were not broadcast")
+        self.resident_setup_complete = True
+        self.measurement_start_ns = measurement_start_ns
+        self._write_report()
+        return dict(result)
+
+    def _generate_initial_resident_proposals(
+        self, measurement_start_ns: int
+    ) -> tuple[Proposal, ...]:
+        rows = []
+        for stable_id in self.definitions:
+            definition = self.definitions[stable_id]
+            state = self.requests.get(stable_id)
+            if state is None or len(state.generated_token_ids) != 1 or state.finished:
+                raise RuntimeError(
+                    f"Serial initial proposal state is invalid for {stable_id}"
+                )
+            rows.append(
+                {
+                    "request_id": stable_id,
+                    "round_id": 0,
+                    "committed_prefix_len": len(state.committed_token_ids),
+                    "committed_prefix_hash": _prefix_hash(
+                        state.committed_token_ids
+                    ),
+                    "remaining_output_budget": (
+                        definition.maximum_new_tokens - 1
+                    ),
+                    "eos_token_ids": list(self.eos_token_ids),
+                }
+            )
+        outgoing = {"synchronizations": [], "proposals": rows}
+        _assert_target_information_isolated(outgoing)
+        response = self.client.call("synchronize_and_batch_propose", outgoing)
+        by_id = {
+            str(row["request_id"]): Proposal.from_dict(row)
+            for row in response.get("proposals", ())
+        }
+        if set(by_id) != set(self.definitions):
+            raise RuntimeError("Draft did not return one initial proposal per request")
+        proposals = tuple(by_id[item] for item in self.definitions)
+        if any(row.draft_start_ns < measurement_start_ns for row in proposals):
+            raise RuntimeError("Serial initial proposal began before measurement_start")
+        for proposal in proposals:
+            state = self.requests[proposal.request_id]
+            if (
+                proposal.parent_prefix_len != len(state.committed_token_ids)
+                or proposal.parent_prefix_hash
+                != _prefix_hash(state.committed_token_ids)
+            ):
+                raise RuntimeError("Draft returned a stale initial resident proposal")
+            state.pending_proposal = proposal
+            state.transfer_start_ns = int(response["service_send_ns"])
+            state.transfer_end_ns = int(response["transport_end_ns"])
+        return proposals
+
+    def _resident_tracker(self) -> IncrementalResidentSetup:
+        if self.resident_setup_tracker is None:
+            assert self.resident_setup_control_path is not None
+            expected = tuple(self.definitions)
+            control = load_setup_control(
+                self.resident_setup_control_path,
+                consumer="serial",
+                expected_request_ids=expected,
+            )
+            self.resident_setup_tracker = IncrementalResidentSetup(
+                expected, int(control["setup_start_ns"])
+            )
+        return self.resident_setup_tracker
+
+    def _log_resident_observation(
+        self, observation: ResidentSetupObservation, *, duplicate: bool
+    ) -> None:
+        assert self.decode_ready_timing_log is not None
+        self.decode_ready_timing_log.append(
+            {
+                "schema_version": "specrhythm.phase4b-decode-ready-timing.v1",
+                "event": "bootstrap-draft-ready",
+                "timestamp_ns": observation.draft_initialization_complete_ns,
+                "bootstrap_ready_ns": observation.bootstrap_ready_ns,
+                "draft_initialization_complete_ns": (
+                    observation.draft_initialization_complete_ns
+                ),
+                "request_id": observation.request_id,
+                "internal_target_request_id": (
+                    observation.internal_target_request_id
+                ),
+                "duplicate_identical": duplicate,
+                "initial_proposal_generated": False,
+            }
+        )
 
     def _write_decode_ready_manifest(
         self,
@@ -265,7 +455,7 @@ class RemoteDraftProposer:
         *,
         barrier_ns: int,
         measurement_start_ns: int,
-    ) -> None:
+    ) -> Any:
         observations = setup.get("observations")
         if not isinstance(observations, list):
             raise RuntimeError("resident Serial observations are missing")
@@ -291,6 +481,7 @@ class RemoteDraftProposer:
                 "initial_proposal_generated": False,
             }
         )
+        return manifest
 
     def on_target_verify_start(
         self,
@@ -609,6 +800,11 @@ class RemoteDraftProposer:
                     "resident-warm-start" if self.resident_mode else None
                 ),
                 "decode_ready_setup_complete": self.resident_setup_complete,
+                "decode_ready_observed_request_count": (
+                    len(self.resident_setup_tracker.observations)
+                    if self.resident_setup_tracker is not None
+                    else 0
+                ),
                 "measurement_start_ns": self.measurement_start_ns,
             },
         )

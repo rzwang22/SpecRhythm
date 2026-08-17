@@ -1,5 +1,9 @@
 # Phase 4B.0a/4B.0b 3×A800 gate runbook
 
+> Archived after the real-A800 `d6c7aa8` Gate-B failure. Gate A passed, but this procedure's
+> resident Gate B assumed one all-request prefill callback. Do not rerun its Gate B or L5 steps.
+> Use `docs/phase4b-resident-l2-rerun.md`, which runs only the corrected L2 gate.
+
 This runbook is the only active Phase-4B server procedure. It uses GPUs `0` for Draft and `1,2`
 for Target TP=2. It collects correctness contracts, not performance. Stop on the first nonzero
 command. Do not run 100 requests, Phase 4B.1 Dual-Batch correctness, packed trees, Dual-Eager,
