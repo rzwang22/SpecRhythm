@@ -1,5 +1,9 @@
 # Phase 4B observation-serialization fix: L2 Target-only rerun
 
+> Completed successfully at `5db8657`; preserve that Target directory as immutable read-only
+> evidence. Do not rerun Target for the Serial-only lifecycle fix. Use
+> `phase4b-resident-l2-serial-rerun.md`.
+
 This is the only active server procedure after the real-A800 `98ec816` failure. It verifies the
 preserved partial evidence, then runs one fresh L2 resident Target. It contains no Serial, L5,
 Phase 4B.1, performance, Dual-Eager, or SLO command.

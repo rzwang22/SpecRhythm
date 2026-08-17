@@ -8,12 +8,15 @@ from pathlib import Path
 from typing import Any, Optional
 
 from specrhythm.phase4.request_identity import FrozenPromptIdentityMap
+from specrhythm.phase4.resident_initial_proposal import (
+    ResidentInitialProposalLifecycle,
+)
 from specrhythm.phase4.resident_setup import (
     ADMISSION_EVENT_SCHEMA,
     load_setup_ready,
     resident_admission_decision,
 )
-from specrhythm.phase4.serial import Proposal, token_prefix_hash
+from specrhythm.phase4.serial import Proposal
 from specrhythm.phase4.stock_vllm import load_smoke_requests
 from specrhythm.phase4.transport import CheckpointJsonl
 
@@ -50,25 +53,33 @@ class ResidentSetupScheduler(Scheduler):
         self._resident_expected_ids = tuple(row.request_id for row in definitions)
         self._resident_identity = FrozenPromptIdentityMap.from_definitions(definitions)
         self._resident_ready: Optional[dict[str, Any]] = None
-        self._resident_initial_proposals: dict[str, Proposal] = {}
-        self._resident_installed: set[str] = set()
+        self._resident_initial_lifecycle: Optional[
+            ResidentInitialProposalLifecycle
+        ] = None
+        self._resident_proposal_events = (
+            CheckpointJsonl(
+                _required_path("SR_PHASE4_RESIDENT_INITIAL_PROPOSAL_EVENTS")
+            )
+            if consumer == "serial"
+            else None
+        )
         self._resident_decisions: dict[str, tuple[bool, str, int, str]] = {}
         self._resident_cycle_id = 0
 
     def schedule(self, *args: Any, **kwargs: Any) -> Any:
         self._bind_requests()
         self._refresh_readiness()
-        if self._resident_ready is not None and self._resident_consumer == "serial":
-            self._install_initial_proposals()
+        if self._resident_initial_lifecycle is not None:
+            self._resident_initial_lifecycle.prepare_for_schedule(
+                self.requests, cycle_id=self._resident_cycle_id
+            )
         self._resident_decisions = {}
         decision_ns = time.monotonic_ns()
         for internal_id, request in self.requests.items():
             if request.is_finished():
                 continue
             stable_id = self._resident_identity.stable_id(str(internal_id))
-            proposal_installed = stable_id in self._resident_installed or bool(
-                request.spec_token_ids
-            )
+            proposal_installed = self._initial_proposal_available(stable_id, request)
             admissible, reason = resident_admission_decision(
                 num_output_tokens=int(request.num_output_tokens),
                 global_decode_ready=self._resident_ready is not None,
@@ -82,6 +93,13 @@ class ResidentSetupScheduler(Scheduler):
                 stable_id,
             )
         output = super().schedule(*args, **kwargs)
+        if self._resident_initial_lifecycle is not None:
+            self._resident_initial_lifecycle.finish_schedule(
+                self.requests,
+                scheduled_tokens=output.num_scheduled_tokens,
+                scheduled_spec_decode_tokens=output.scheduled_spec_decode_tokens,
+                cycle_id=self._resident_cycle_id,
+            )
         scheduled = output.num_scheduled_tokens
         for internal_id, (admissible, reason, timestamp_ns, stable_id) in sorted(
             self._resident_decisions.items()
@@ -105,8 +123,14 @@ class ResidentSetupScheduler(Scheduler):
                         if self._resident_ready is not None
                         else None
                     ),
-                    "initial_proposal_installed": stable_id
-                    in self._resident_installed,
+                    "initial_proposal_installed": self._initial_proposal_was_installed(
+                        stable_id
+                    ),
+                    "initial_proposal_lifecycle_state": (
+                        self._resident_initial_lifecycle.state_for(stable_id).value
+                        if self._resident_initial_lifecycle is not None
+                        else None
+                    ),
                     "admissible": admissible,
                     "reason": reason,
                     "scheduled": scheduled_count > 0,
@@ -127,8 +151,8 @@ class ResidentSetupScheduler(Scheduler):
                 num_output_tokens=int(request.num_output_tokens),
                 global_decode_ready=self._resident_ready is not None,
                 consumer=self._resident_consumer,
-                has_initial_proposal=(
-                    stable_id in self._resident_installed or bool(request.spec_token_ids)
+                has_initial_proposal=self._initial_proposal_available(
+                    stable_id, request
                 ),
             )
             decision = (*decision_value, time.monotonic_ns(), stable_id)
@@ -147,38 +171,41 @@ class ResidentSetupScheduler(Scheduler):
             expected_request_ids=self._resident_expected_ids,
         )
         self._resident_ready = ready
-        proposals = ready.get("initial_proposals", ())
-        self._resident_initial_proposals = {
-            str(row["request_id"]): Proposal.from_dict(row) for row in proposals
-        }
-
-    def _install_initial_proposals(self) -> None:
-        mappings = self._resident_ready.get("stable_to_internal_request_id", {})
+        if self._resident_consumer != "serial":
+            return
+        mappings = ready.get("stable_to_internal_request_id", {})
         if not isinstance(mappings, dict):
             raise RuntimeError("resident setup-ready identity mapping is invalid")
         for stable_id in self._resident_expected_ids:
-            internal_id = str(mappings.get(stable_id, ""))
-            if self._resident_identity.internal_id(stable_id) != internal_id:
-                raise RuntimeError("resident scheduler identity differs from setup-ready")
-            request = self.requests.get(internal_id)
-            if request is None or request.is_finished():
-                raise RuntimeError("resident initial proposal has no live Target request")
-            proposal = self._resident_initial_proposals.get(stable_id)
-            if proposal is None:
-                raise RuntimeError("resident Serial initial proposal is missing")
-            prefix = tuple(int(item) for item in request.all_token_ids)
-            if (
-                proposal.parent_prefix_len != len(prefix)
-                or proposal.parent_prefix_hash != token_prefix_hash(prefix)
+            if self._resident_identity.internal_id(stable_id) != str(
+                mappings.get(stable_id, "")
             ):
-                raise RuntimeError("resident Serial initial proposal parent is stale")
-            proposal_tokens = list(proposal.proposal_token_ids)
-            if not proposal_tokens:
-                raise RuntimeError("resident Serial initial proposal is empty")
-            if request.spec_token_ids and request.spec_token_ids != proposal_tokens:
-                raise RuntimeError("worker/scheduler initial proposal tokens differ")
-            request.spec_token_ids = proposal_tokens
-            self._resident_installed.add(stable_id)
+                raise RuntimeError("resident scheduler identity differs from setup-ready")
+        proposals = tuple(
+            Proposal.from_dict(row) for row in ready.get("initial_proposals", ())
+        )
+        assert self._resident_proposal_events is not None
+        self._resident_initial_lifecycle = ResidentInitialProposalLifecycle(
+            expected_request_ids=self._resident_expected_ids,
+            stable_to_internal_request_id=mappings,
+            proposals=proposals,
+            emit=self._resident_proposal_events.append,
+        )
+        self._resident_initial_lifecycle.publish(
+            self.requests, cycle_id=self._resident_cycle_id
+        )
+
+    def _initial_proposal_available(self, stable_id: str, request: Any) -> bool:
+        if self._resident_initial_lifecycle is None:
+            return False
+        return self._resident_initial_lifecycle.available_for_first_verification(
+            stable_id, request
+        )
+
+    def _initial_proposal_was_installed(self, stable_id: str) -> bool:
+        if self._resident_initial_lifecycle is None:
+            return False
+        return self._resident_initial_lifecycle.was_installed(stable_id)
 
     def _bind_requests(self) -> None:
         for internal_id, request in self.requests.items():

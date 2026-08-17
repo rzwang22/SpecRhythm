@@ -2,12 +2,12 @@
 
 > Archived after the real-A800 `98ec816` Target run reached both incremental requests but failed
 > while rebuilding a tuple-typed observation from its JSON-compatible list. Preserve that run.
-> Use `docs/phase4b-resident-l2-target-rerun.md`; it runs only the serialization-fixed Target gate.
+> The later `5db8657` Serial attempt exposed a round-zero proposal lifecycle bug and also started
+> Draft twice, invalidating its process-lifecycle provenance. Do not execute this procedure. Use
+> `docs/phase4b-resident-l2-serial-rerun.md` after the lifecycle fix.
 
-This is the only active procedure after the real-A800 `d6c7aa8` Gate-B failure. It runs only
-L2 resident Target, then L2 resident Serial if Target passes, then read-only L2 validation. It
-does not run L5, Phase 4B.1 Dual-Batch, performance, Dual-Eager, or SLO evaluation. The failed
-`d6c7aa8` directory remains immutable failure provenance.
+This is a historical procedure after the real-A800 `d6c7aa8` Gate-B failure. It must not be used
+for a new run; the failed `d6c7aa8` directory remains immutable failure provenance.
 
 ## 1. Checkout and identify immutable inputs
 
@@ -192,6 +192,7 @@ phase4b_run_target_with_cleanup \
     --setup-control "$SR_L2_SERIAL_DIR/setup-control.json" \
     --setup-ready "$SR_L2_SERIAL_DIR/setup-ready.json" \
     --admission-events "$SR_L2_SERIAL_DIR/admission-events.jsonl" \
+    --initial-proposal-events "$SR_L2_SERIAL_DIR/initial-proposal-events.jsonl" \
     --target-diagnostics "$SR_L2_SERIAL_DIR/target-diagnostics.jsonl" \
     --first-forward "$SR_L2_SERIAL_DIR/first-target-forward.json" \
     --output "$SR_L2_SERIAL_DIR/resident-serial.json"

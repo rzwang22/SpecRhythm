@@ -334,6 +334,9 @@ run_resident_consumer () {
         --context "$run_dir/decode-ready-context.json" \
         --decode-ready-manifest "$run_dir/decode-ready-manifest.json" \
         --timing-events "$run_dir/timing-events.jsonl" \
+        --setup-control "$run_dir/setup-control.json" \
+        --setup-ready "$run_dir/setup-ready.json" \
+        --admission-events "$run_dir/admission-events.jsonl" \
         --target-diagnostics "$run_dir/target-diagnostics.jsonl" \
         --plugin-report "$run_dir/plugin-report.json" \
         --first-forward "$run_dir/first-target-forward.json" \
@@ -360,6 +363,10 @@ run_resident_consumer () {
         --context "$run_dir/decode-ready-context.json" \
         --decode-ready-manifest "$run_dir/decode-ready-manifest.json" \
         --timing-events "$run_dir/timing-events.jsonl" \
+        --setup-control "$run_dir/setup-control.json" \
+        --setup-ready "$run_dir/setup-ready.json" \
+        --admission-events "$run_dir/admission-events.jsonl" \
+        --initial-proposal-events "$run_dir/initial-proposal-events.jsonl" \
         --target-diagnostics "$run_dir/target-diagnostics.jsonl" \
         --first-forward "$run_dir/first-target-forward.json" \
         --output "$run_dir/resident-serial.json"

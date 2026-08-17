@@ -813,6 +813,7 @@ def build_parser() -> argparse.ArgumentParser:
         "setup-control",
         "setup-ready",
         "admission-events",
+        "initial-proposal-events",
         "target-diagnostics",
         "first-forward",
         "output",
@@ -1437,6 +1438,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 resident_setup_ready_path=Path(args.setup_ready).resolve(),
                 resident_admission_events_path=Path(
                     args.admission_events
+                ).resolve(),
+                resident_initial_proposal_events_path=Path(
+                    args.initial_proposal_events
                 ).resolve(),
             )
             _write_json(report, args.output)

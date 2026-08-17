@@ -284,15 +284,24 @@ completion path, then exposed a narrow codec bug: JSON-compatible prompt tokens 
 a raw dataclass reconstruction boundary. The canonical observation loader now restores strict
 tuple semantics for both Target and Serial and rejects malformed token types.
 
+The serialization-fixed L2 Target subsequently passed on A800 and is immutable reusable
+Target-only evidence. The first resident Serial attempt at `5db8657` is diagnostic-only because
+the shell started Draft twice and lost valid lifecycle ownership. It nevertheless localized a
+separate scheduler bug: round-zero proposals were correctly installed and scheduled, then
+revalidated against an advanced prefix on the next scheduler iteration. Resident Serial now uses
+an auditable `published -> installed -> consumed` lifecycle. The stale-parent guard remains active
+before consumption, while consumed round-zero proposals are never reinstalled or compared with
+normal later-round prefixes.
+
 Phase 4 main evaluation is decode-only. Resident warm start isolates the decode stage with real
 KV but is not an end-to-end prefill/decode deployment. `KVConnectorHandoffProvider` is the future
 end-to-end path and is not implemented in this phase. See
 [phase4b-decode-ready.md](phase4b-decode-ready.md).
 
-The Mac agent validates only CPU contracts. Real-A800 Gate A.1/A.2/A.3 passed; the failed Gate-B
-artifacts remain failure provenance. The next server action is only the serialization-fixed L2
-resident Target in
-[phase4b-resident-l2-target-rerun.md](phase4b-resident-l2-target-rerun.md). Serial, L5 and Phase
-4B.1 remain blocked.
+The Mac agent validates only CPU contracts. Real-A800 Gate A.1/A.2/A.3 and the serialization-fixed
+L2 resident Target passed. The failed Serial directory remains diagnostic-only provenance. The
+next server action is only the lifecycle-fixed L2 resident Serial in
+[phase4b-resident-l2-serial-rerun.md](phase4b-resident-l2-serial-rerun.md), followed by read-only
+comparison with the preserved Target if Serial passes. L5 and Phase 4B.1 remain blocked.
 No artifact in this phase establishes speedup, throughput, goodput, SLO attainment, latency
 improvement or production readiness.

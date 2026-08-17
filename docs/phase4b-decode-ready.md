@@ -33,6 +33,15 @@ atomic setup-ready artifact, validates its manifest SHA256 and stable/internal i
 and uses the existing explicit request predicate. A request with one output token cannot advance
 before global readiness. Current-step arithmetic is forbidden.
 
+Resident Serial gives each readiness-published round-zero proposal an explicit one-shot lifecycle:
+`published -> installed -> consumed`. Installation validates the live committed-prefix length and
+SHA256. An installed but unscheduled proposal remains admissible only while both the live prefix
+and `request.spec_token_ids` remain unchanged. Membership in the
+[pinned vLLM scheduler's `scheduled_spec_decode_tokens`](https://github.com/vllm-project/vllm/blob/752a3a504485790a2e8491cacbb35c137339ad34/vllm/v1/core/sched/scheduler.py#L548-L563)
+is the consumption evidence; after consumption, the scheduler never compares or reinstalls round
+zero and normal `RemoteDraftProposer` rounds own subsequent proposal state. Every transition and
+fail-closed check is written to a dedicated checkpoint JSONL artifact.
+
 The Target state deliberately uses the standard pending-input convention:
 
 ```text

@@ -34,7 +34,7 @@ claims.
 | [#1 workload-v0.1](https://github.com/rzwang22/SpecRhythm/pull/1) | merged | strict Mooncake replay, R3 proxy config, validator, manifest, fixture tests and docs | workload plumbing only; proxy payload and illustrative acceptance |
 | [#2 simulator-semantics-v0.2](https://github.com/rzwang22/SpecRhythm/pull/2) | frozen draft; Phase 2 complete, not merged | proposal lifecycle, deterministic tree oracle, tree-aware allocators, base-preserving residual controls, Phase-2 nested search pools and common-snapshot oracle replay, path-aware eager and accounting | pure-Python proxy and oracle upper bounds only; no deployable oracle, measured search cost, GPU integration, or performance claim |
 | [#3 gpu-integration-v0.1](https://github.com/rzwang22/SpecRhythm/pull/3) | draft; Phase 3B.1 and corrected-20 Phase 3C.2 complete; Phase 3C.3 corrected-100 awaiting server run | hardened multi-rank primitives, corrected R3-real traces, common-prefix replay, request-bootstrap statistics, 2x shell decomposition and diagnostic learned ranker | user-run 3×A800 correctness artifacts plus Mac CPU tests; no packed-tree/serving engine, Dual-Batch, SLO, calibrated latency or speedup claim |
-| [#4 vllm-serving-v0.1](https://github.com/rzwang22/SpecRhythm/pull/4) | draft; Phase 4A.1.1 Outcome A frozen; `d6c7aa8` Gate A passed; `98ec816` proved incremental progress and exposed observation deserialization; serialization-fixed Target rerun pending | explicit ready-only scheduler predicate, owned process lifecycle, incremental resident setup, canonical observation codec, atomic cross-process global readiness, Target/Serial comparator and first-forward proof | failed `d6c7aa8` and `98ec816` resident outputs are immutable failure provenance; no GPU Gate-B PASS, Dual-Batch Outcome, performance, packed tree, eager, SLO or goodput claim |
+| [#4 vllm-serving-v0.1](https://github.com/rzwang22/SpecRhythm/pull/4) | draft; Phase 4A.1.1 Outcome A frozen; L2 resident Target passed; Serial lifecycle fix awaiting L2-only rerun | explicit ready-only scheduler predicate, incremental resident setup, canonical observation codec, one-shot Serial initial-proposal lifecycle, Target/Serial comparator and first-forward proof | successful `5db8657` Target is immutable read-only evidence; failed double-start Serial is diagnostic-only; no full Gate-B PASS, Dual-Batch Outcome, performance, packed tree, eager, SLO or goodput claim |
 
 ## Phase 4A.0–4A.1: vLLM freeze and Serial Disaggregated correctness
 
@@ -137,10 +137,20 @@ start, and atomic setup-ready publication. The real-A800 `98ec816` run reached t
 incremental request and `_complete_global_setup`, proving the earlier whole-batch assumption was
 removed, but failed because the JSON-compatible observation list was reconstructed without tuple
 normalization. `ResidentSetupObservation.to_dict/from_dict` is now the only serialized boundary;
-Target and Serial both use it and reject malformed token types. The next server action is only the
-fresh Target procedure in
-[phase4b-resident-l2-target-rerun.md](phase4b-resident-l2-target-rerun.md). Serial, L5, 100
-requests, Phase 4B.1 Dual-Batch, performance, Dual-Eager, and SLO evaluation remain blocked.
+Target and Serial both use it and reject malformed token types. The resulting L2 Target run passed
+on A800 and is preserved read-only.
+
+The next resident Serial attempt at `5db8657` is diagnostic-only because Draft was accidentally
+started twice and its live PID provenance was overwritten. Its manifest/proposal hashes and
+timing/admission logs nevertheless showed correct round-zero publication and first scheduling,
+followed by an erroneous second installation pass after the live prefix advanced. Resident Serial
+now owns each initial proposal through `published -> installed -> consumed`, uses pinned vLLM's
+`scheduled_spec_decode_tokens` as consumption evidence, preserves detailed fail-closed diagnostics,
+and leaves consumed requests exclusively to normal proposer rounds. The only next server action
+is the Serial-only L2 procedure in
+[phase4b-resident-l2-serial-rerun.md](phase4b-resident-l2-serial-rerun.md), reusing the successful
+Target artifact read-only. L5, 100 requests, Phase 4B.1 Dual-Batch, performance, Dual-Eager, and
+SLO evaluation remain blocked.
 
 GPU 0 runs one persistent Draft service. Heavy Draft model work is serialized on its background
 worker queue; Unix-socket calls only enqueue work or poll completed proposals. The Target

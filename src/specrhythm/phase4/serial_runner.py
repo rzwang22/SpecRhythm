@@ -29,6 +29,9 @@ from specrhythm.phase4.reference import (
     require_exact_resident_reference_reuse,
     require_reference_for_mode,
 )
+from specrhythm.phase4.resident_initial_proposal import (
+    validate_initial_proposal_lifecycle_events,
+)
 from specrhythm.phase4.resident_setup import (
     build_setup_control,
     load_setup_ready,
@@ -215,6 +218,7 @@ def run_serial_disaggregated(
     resident_setup_control_path: Optional[Path] = None,
     resident_setup_ready_path: Optional[Path] = None,
     resident_admission_events_path: Optional[Path] = None,
+    resident_initial_proposal_events_path: Optional[Path] = None,
 ) -> dict[str, Any]:
     """Run one real GPU correctness pass; no performance metrics are derived."""
 
@@ -254,6 +258,7 @@ def run_serial_disaggregated(
         resident_setup_control_path,
         resident_setup_ready_path,
         resident_admission_events_path,
+        resident_initial_proposal_events_path,
     )
     resident_mode = any(path is not None for path in resident_paths)
     if resident_mode and any(path is None for path in resident_paths):
@@ -300,6 +305,7 @@ def run_serial_disaggregated(
         assert resident_setup_control_path is not None
         assert resident_setup_ready_path is not None
         assert resident_admission_events_path is not None
+        assert resident_initial_proposal_events_path is not None
         os.environ.update(
             {
                 "SR_PHASE4_DECODE_READY_MODE": "1",
@@ -317,6 +323,9 @@ def run_serial_disaggregated(
                 "SR_PHASE4_RESIDENT_ADMISSION_EVENTS": str(
                     resident_admission_events_path
                 ),
+                "SR_PHASE4_RESIDENT_INITIAL_PROPOSAL_EVENTS": str(
+                    resident_initial_proposal_events_path
+                ),
             }
         )
     else:
@@ -330,6 +339,7 @@ def run_serial_disaggregated(
             "SR_PHASE4_RESIDENT_SETUP_CONTROL",
             "SR_PHASE4_RESIDENT_SETUP_READY",
             "SR_PHASE4_RESIDENT_ADMISSION_EVENTS",
+            "SR_PHASE4_RESIDENT_INITIAL_PROPOSAL_EVENTS",
         ):
             os.environ.pop(name, None)
     if diagnostics_path is not None:
@@ -585,6 +595,7 @@ def run_serial_disaggregated(
         assert first_forward_path is not None
         assert resident_setup_ready_path is not None
         assert resident_admission_events_path is not None
+        assert resident_initial_proposal_events_path is not None
         from specrhythm.phase4.decode_ready import (
             build_first_target_forward_contract,
             compare_raw_and_decode_outputs,
@@ -607,6 +618,14 @@ def run_serial_disaggregated(
             admission_rows, consumer="serial"
         )
         resident_errors.extend(admission_errors)
+        initial_proposal_rows = CheckpointJsonl(
+            resident_initial_proposal_events_path
+        ).read()
+        initial_proposal_errors = validate_initial_proposal_lifecycle_events(
+            initial_proposal_rows,
+            expected_request_ids=[row.request_id for row in requests],
+        )
+        resident_errors.extend(initial_proposal_errors)
         diagnostics = CheckpointJsonl(diagnostics_path).read() if diagnostics_path else []
         contracts = []
         first_round_by_request = {
@@ -732,6 +751,12 @@ def run_serial_disaggregated(
                     "valid": not admission_errors,
                     "errors": admission_errors,
                     "event_count": len(admission_rows),
+                },
+                "resident_initial_proposal_lifecycle": {
+                    "valid": not initial_proposal_errors,
+                    "errors": initial_proposal_errors,
+                    "event_count": len(initial_proposal_rows),
+                    "artifact_file": resident_initial_proposal_events_path.name,
                 },
             }
         )
