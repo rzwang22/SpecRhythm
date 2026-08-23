@@ -7,16 +7,30 @@ the custom scheduler consumes already-ready proposals independently.
 
 from __future__ import annotations
 
+import json
 import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence, Tuple
 
+from specrhythm.phase4.decode_ready import (
+    DecodeReadyProvenance,
+    ResidentSetupObservation,
+    ResidentWarmStartProvider,
+    validate_decode_ready_manifest,
+)
 from specrhythm.phase4.dual import DualProposal
 from specrhythm.phase4.dual_service import DualDraftClient
 from specrhythm.phase4.manifest import atomic_write_json
 from specrhythm.phase4.request_identity import FrozenPromptIdentityMap
+from specrhythm.phase4.resident_setup import (
+    IncrementalResidentSetup,
+    build_setup_ready,
+    load_setup_control,
+    observation_static_fields,
+    observation_to_dict,
+)
 from specrhythm.phase4.serial import greedy_acceptance, token_prefix_hash
 from specrhythm.phase4.stock_vllm import load_smoke_requests
 from specrhythm.phase4.transport import CheckpointJsonl
@@ -55,6 +69,7 @@ class DualBatchRemoteProposer:
         if self.tp_world_size != 2:
             raise RuntimeError("Phase-4B.1 Target requires TP=2")
         self.client = DualDraftClient(_required_path("SR_PHASE4_DUAL_DRAFT_SOCKET"))
+        self.resident_decode_ready = os.environ.get("SR_PHASE4_DUAL_RESIDENT") == "1"
         self.proposal_log = CheckpointJsonl(_required_path("SR_PHASE4_PROPOSAL_EVENTS"))
         self.verification_log = CheckpointJsonl(
             _required_path("SR_PHASE4_VERIFICATION_EVENTS")
@@ -82,6 +97,24 @@ class DualBatchRemoteProposer:
         self._verify_start: dict[str, dict[str, Any]] = {}
         self._verify_batch_by_request: dict[str, str] = {}
         self._verified_ids: set[str] = set()
+        self.setup_complete = False
+        self.setup_tracker: Optional[IncrementalResidentSetup] = None
+        self.measurement_start_ns: Optional[int] = None
+        if self.resident_decode_ready:
+            self.manifest_path = _required_path("SR_PHASE4_DECODE_READY_MANIFEST")
+            self.setup_control_path = _required_path("SR_PHASE4_RESIDENT_SETUP_CONTROL")
+            self.setup_ready_path = _required_path("SR_PHASE4_RESIDENT_SETUP_READY")
+            self.timing_log = CheckpointJsonl(
+                _required_path("SR_PHASE4_DECODE_READY_TIMING_EVENTS")
+            )
+            context = json.loads(
+                _required_path("SR_PHASE4_DECODE_READY_CONTEXT").read_text(
+                    encoding="utf-8"
+                )
+            )
+            if not isinstance(context, Mapping):
+                raise RuntimeError("decode-ready context must be an object")
+            self.provenance = DecodeReadyProvenance.from_dict(context)
         existing_verifications = self.verification_log.read()
         self._verify_sequence = 1 + max(
             (
@@ -108,6 +141,20 @@ class DualBatchRemoteProposer:
         del sampled_token_ids, slot_mappings
         if request_ids is None:
             raise RuntimeError("Phase-4 worker hook did not provide request IDs")
+        if self.resident_decode_ready and not self.setup_complete:
+            setup = (
+                self._rank_zero_observe_setup(
+                    request_ids, num_tokens_no_spec, token_ids_cpu
+                )
+                if self.tp_rank == 0
+                else None
+            )
+            setup = self.tp_group.broadcast_object(setup, src=0)
+            if not isinstance(setup, Mapping) or setup.get("valid") is not True:
+                raise RuntimeError("incremental resident Dual setup observation failed")
+            if setup.get("complete") is True:
+                self._complete_global_setup(setup)
+            return [[] for _ in request_ids]
         if self.tp_rank == 0:
             result = self._rank_zero_update(request_ids, num_tokens_no_spec, token_ids_cpu)
         else:
@@ -119,6 +166,215 @@ class DualBatchRemoteProposer:
         # Returning empty rows prevents the stock post-step path from creating
         # a second, unverified proposal for any request.
         return [[] for _ in request_ids]
+
+    def _rank_zero_observe_setup(
+        self, request_ids: Sequence[str], num_tokens_no_spec: Any, token_ids_cpu: Any
+    ) -> dict[str, Any]:
+        tracker = self._setup_tracker()
+        for index, internal_id_value in enumerate(request_ids):
+            internal_id = str(internal_id_value)
+            count = int(num_tokens_no_spec[index])
+            tokens = tuple(int(item) for item in token_ids_cpu[index, :count].tolist())
+            stable_id = self.identity.bind(internal_id, tokens)
+            definition = self.definitions[stable_id]
+            generated = tokens[len(definition.prompt_token_ids) :]
+            if len(generated) != 1:
+                raise RuntimeError("resident Dual setup must sample one bootstrap token")
+            logical = definition.prompt_token_ids + (generated[0],)
+            existing = tracker.get(stable_id)
+            if existing is not None:
+                candidate = ResidentSetupObservation(
+                    request_id=stable_id,
+                    internal_target_request_id=internal_id,
+                    prompt_token_ids=definition.prompt_token_ids,
+                    bootstrap_token_id=generated[0],
+                    target_materialized_kv_token_count=len(definition.prompt_token_ids),
+                    target_num_computed_tokens=len(definition.prompt_token_ids),
+                    draft_materialized_kv_token_count=len(logical),
+                    bootstrap_ready_ns=existing.bootstrap_ready_ns,
+                    draft_initialization_complete_ns=(
+                        existing.draft_initialization_complete_ns
+                    ),
+                )
+                if observation_static_fields(candidate) != observation_static_fields(
+                    existing
+                ):
+                    raise RuntimeError(
+                        f"resident Dual bootstrap changed for {stable_id}"
+                    )
+                tracker.record(existing)
+                continue
+            bootstrap_ready_ns = time.monotonic_ns()
+            terminal = _terminal(
+                generated, definition.maximum_new_tokens, self.eos_token_ids
+            )
+            initialized = self.client.call(
+                "execute",
+                {
+                    "work_operation": "initialize",
+                    "row": {
+                        "request_id": stable_id,
+                        "committed_token_ids": list(logical),
+                        "prefix_version": 1,
+                        "prefix_token_sha256": token_prefix_hash(logical),
+                        "terminal": terminal,
+                    },
+                },
+            )
+            if (
+                initialized.get("logical_draft_kv_length") != len(logical)
+                or initialized.get("committed_prefix_hash")
+                != token_prefix_hash(logical)
+                or initialized.get("initial_proposal_generated") is not False
+            ):
+                raise RuntimeError("Draft did not materialize decode-ready state exactly")
+            state = _Request(
+                prompt_token_ids=definition.prompt_token_ids,
+                maximum_new_tokens=definition.maximum_new_tokens,
+                committed_token_ids=logical,
+                generated_token_ids=generated,
+                terminal=terminal,
+            )
+            self.requests[stable_id] = state
+            self._transition(
+                stable_id,
+                "TERMINAL" if terminal else "DRAFT_READY",
+                reason="decode-ready-bootstrap-complete",
+            )
+            observation = ResidentSetupObservation(
+                request_id=stable_id,
+                internal_target_request_id=internal_id,
+                prompt_token_ids=definition.prompt_token_ids,
+                bootstrap_token_id=generated[0],
+                target_materialized_kv_token_count=len(definition.prompt_token_ids),
+                target_num_computed_tokens=len(definition.prompt_token_ids),
+                draft_materialized_kv_token_count=len(logical),
+                bootstrap_ready_ns=bootstrap_ready_ns,
+                draft_initialization_complete_ns=time.monotonic_ns(),
+            )
+            tracker.record(observation)
+            self.timing_log.append(
+                {
+                    "schema_version": "specrhythm.phase4b-decode-ready-timing.v1",
+                    "event": "bootstrap-draft-ready",
+                    "timestamp_ns": observation.draft_initialization_complete_ns,
+                    "request_id": stable_id,
+                    "internal_target_request_id": internal_id,
+                    "initial_proposal_generated": False,
+                }
+            )
+        if not tracker.complete:
+            self._write_report()
+            return {
+                "valid": True,
+                "complete": False,
+                "observed_request_ids": list(tracker.observed_request_ids),
+            }
+        setup_complete_ns = time.monotonic_ns()
+        provisional = ResidentWarmStartProvider().prepare(
+            tracker.observations,
+            self.provenance,
+            setup_start_ns=tracker.setup_start_ns,
+            setup_complete_ns=setup_complete_ns,
+            global_barrier_ns=setup_complete_ns,
+            measurement_start_ns=setup_complete_ns,
+        )
+        errors = validate_decode_ready_manifest(provisional)
+        if errors:
+            raise RuntimeError("resident Dual setup validation failed: " + "; ".join(errors))
+        return {
+            "valid": True,
+            "complete": True,
+            "setup_start_ns": tracker.setup_start_ns,
+            "setup_complete_ns": setup_complete_ns,
+            "observations": [observation_to_dict(row) for row in tracker.observations],
+        }
+
+    def _complete_global_setup(self, setup: Mapping[str, Any]) -> None:
+        self.tp_group.barrier()
+        self.torch.cuda.synchronize()
+        barrier_ns = time.monotonic_ns()
+        measurement_start_ns = time.monotonic_ns() if self.tp_rank == 0 else None
+        measurement_start_ns = self.tp_group.broadcast_object(
+            measurement_start_ns, src=0
+        )
+        if not isinstance(measurement_start_ns, int):
+            raise RuntimeError("resident Dual measurement boundary was not broadcast")
+        if self.tp_rank == 0:
+            observations = setup.get("observations")
+            if not isinstance(observations, list):
+                raise RuntimeError("resident Dual setup observations are missing")
+            manifest = ResidentWarmStartProvider().prepare(
+                [ResidentSetupObservation.from_dict(row) for row in observations],
+                self.provenance,
+                setup_start_ns=int(setup["setup_start_ns"]),
+                setup_complete_ns=int(setup["setup_complete_ns"]),
+                global_barrier_ns=barrier_ns,
+                measurement_start_ns=measurement_start_ns,
+            )
+            atomic_write_json(self.manifest_path, manifest.to_dict())
+            ready = build_setup_ready(
+                manifest,
+                consumer="dual-batch",
+                manifest_path=self.manifest_path,
+                ready_published_ns=time.monotonic_ns(),
+            )
+            atomic_write_json(self.setup_ready_path, ready)
+            self.timing_log.append(
+                {
+                    "schema_version": "specrhythm.phase4b-decode-ready-timing.v1",
+                    "event": "measurement-start",
+                    "timestamp_ns": measurement_start_ns,
+                    "global_barrier_ns": barrier_ns,
+                    "manifest_sha256": manifest.manifest_sha256,
+                    "initial_proposal_generated": False,
+                }
+            )
+            initial_rows = []
+            for request_id, state in self.requests.items():
+                if state.terminal:
+                    continue
+                self._transition(
+                    request_id,
+                    "DRAFTING",
+                    reason="post-measurement-initial-proposal",
+                )
+                initial_rows.append(
+                    {
+                        **self._work_row(request_id, state, terminal=False),
+                        "measurement_start_ns": measurement_start_ns,
+                    }
+                )
+            if initial_rows:
+                self.client.call(
+                    "enqueue",
+                    {"work_operation": "propose_only", "rows": initial_rows},
+                )
+            published: Optional[Mapping[str, Any]] = ready
+        else:
+            published = None
+        published = self.tp_group.broadcast_object(published, src=0)
+        if (
+            not isinstance(published, Mapping)
+            or published.get("global_decode_ready") is not True
+        ):
+            raise RuntimeError("resident Dual setup-ready publication was not broadcast")
+        self.setup_complete = True
+        self.measurement_start_ns = measurement_start_ns
+        self._write_report()
+
+    def _setup_tracker(self) -> IncrementalResidentSetup:
+        if self.setup_tracker is None:
+            expected = tuple(self.definitions)
+            control = load_setup_control(
+                self.setup_control_path,
+                consumer="dual-batch",
+                expected_request_ids=expected,
+            )
+            self.setup_tracker = IncrementalResidentSetup(
+                expected, int(control["setup_start_ns"])
+            )
+        return self.setup_tracker
 
     def on_target_verify_start(
         self,
@@ -203,9 +459,47 @@ class DualBatchRemoteProposer:
                     raise RuntimeError("stale proposal reached Target verify boundary")
                 state.pending_proposal = proposal
                 self._verify_batch_by_request[stable_id] = verify_batch_id
-                self._transition(stable_id, "PROPOSAL_READY")
-                self._transition(stable_id, "VERIFY_READY")
-                self._transition(stable_id, "VERIFYING")
+                if state.lifecycle == "DRAFT_SYNC":
+                    sync_complete_ns = result.get("draft_sync_complete_ns")
+                    if (
+                        not isinstance(sync_complete_ns, int)
+                        or sync_complete_ns > proposal.draft_start_ns
+                    ):
+                        raise RuntimeError(
+                            "next Draft proposal lacks an ordered sync boundary"
+                        )
+                    self._transition(
+                        stable_id,
+                        "DRAFT_READY",
+                        proposal_id=proposal.proposal_id,
+                        reason="draft-sync-complete",
+                        timestamp_ns=sync_complete_ns,
+                    )
+                    self._transition(
+                        stable_id,
+                        "DRAFTING",
+                        proposal_id=proposal.proposal_id,
+                        reason="asynchronous-draft-work-observed",
+                        timestamp_ns=proposal.draft_start_ns,
+                    )
+                self._transition(
+                    stable_id,
+                    "PROPOSAL_READY",
+                    proposal_id=proposal.proposal_id,
+                    reason="proposal-published",
+                )
+                self._transition(
+                    stable_id,
+                    "VERIFY_READY",
+                    proposal_id=proposal.proposal_id,
+                    reason="proposal-installed",
+                )
+                self._transition(
+                    stable_id,
+                    "VERIFYING",
+                    proposal_id=proposal.proposal_id,
+                    reason="target-verification-start",
+                )
         self.tp_group.barrier()
         self.torch.cuda.synchronize()
         self.torch.cuda.nvtx.range_push(
@@ -361,7 +655,7 @@ class DualBatchRemoteProposer:
                     self._work_row(request_id, state, terminal=terminal)
                 )
                 if terminal:
-                    self._transition(request_id, "FINISHED")
+                    self._transition(request_id, "TERMINAL", reason="bootstrap-terminal")
                 else:
                     self._transition(request_id, "DRAFT_READY")
                     self._transition(request_id, "DRAFTING")
@@ -394,6 +688,12 @@ class DualBatchRemoteProposer:
                     {
                         "schema_version": "specrhythm.phase4b-proposal-event.v1",
                         **proposal.to_dict(),
+                        "accepted_draft_token_ids": list(
+                            decision.accepted_draft_token_ids
+                        ),
+                        "rejected_draft_token_ids": list(
+                            decision.rejected_draft_token_ids
+                        ),
                         "accepted_draft_tokens": len(decision.accepted_draft_token_ids),
                         "rejected_draft_tokens": len(decision.rejected_draft_token_ids),
                         "target_correction_token_ids": list(
@@ -402,6 +702,16 @@ class DualBatchRemoteProposer:
                         "target_bonus_token_ids": list(decision.target_bonus_token_ids),
                         "committed_token_ids": list(decision.committed_token_ids),
                         "terminal": terminal,
+                        "terminal_truncation_reason": (
+                            "max_tokens"
+                            if terminal
+                            and len(generated) >= state.maximum_new_tokens
+                            else "eos"
+                            if terminal
+                            and generated
+                            and generated[-1] in self.eos_token_ids
+                            else None
+                        ),
                         "stale": False,
                         "verify_microbatch_id": self._verify_batch_by_request.pop(
                             request_id
@@ -413,17 +723,40 @@ class DualBatchRemoteProposer:
                 state.pending_proposal = None
                 self._transition(request_id, "COMMITTING")
                 if terminal:
-                    self._transition(request_id, "FINISHED")
+                    self._transition(
+                        request_id,
+                        "TERMINAL",
+                        proposal_id=proposal.proposal_id,
+                        reason="verified-terminal-commit",
+                    )
                 else:
-                    self._transition(request_id, "DRAFT_SYNC")
-                    self._transition(request_id, "DRAFT_READY")
-                    self._transition(request_id, "DRAFTING")
+                    self._transition(
+                        request_id,
+                        "DRAFT_SYNC",
+                        proposal_id=proposal.proposal_id,
+                        reason="commit-awaiting-draft-sync",
+                    )
             elif generated != state.generated_token_ids:
                 # A proposal-free one-token tail is the only legal Target-only
                 # decode after bootstrap.
                 delta = prefix[len(state.committed_token_ids) :]
                 if state.pending_proposal is not None or len(delta) != 1 or not terminal:
                     raise RuntimeError("unproposed Target decode advanced a live request")
+                claimed = self.client.call(
+                    "claimed", {"request_ids": [request_id]}
+                ).get("claimed")
+                if not isinstance(claimed, list) or len(claimed) != 1:
+                    raise RuntimeError("Target tail lacks claimed Draft readiness evidence")
+                tail_result = claimed[0]
+                if (
+                    not isinstance(tail_result, Mapping)
+                    or tail_result.get("target_tail") is not True
+                    or tail_result.get("proposal") is not None
+                ):
+                    raise RuntimeError("unproposed Target decode lacks a legal Draft tail")
+                tail_ready_ns = tail_result.get("target_tail_ready_ns")
+                if not isinstance(tail_ready_ns, int):
+                    raise RuntimeError("Target tail readiness timestamp is missing")
                 state.prefix_version += 1
                 state.committed_token_ids = prefix
                 state.generated_token_ids = generated
@@ -438,11 +771,23 @@ class DualBatchRemoteProposer:
                     }
                 )
                 # The asynchronous Draft worker returned a proposal-free tail.
-                self._transition(request_id, "DRAFT_READY")
-                self._transition(request_id, "VERIFY_READY")
-                self._transition(request_id, "VERIFYING")
-                self._transition(request_id, "COMMITTING")
-                self._transition(request_id, "FINISHED")
+                self._transition(
+                    request_id,
+                    "TARGET_TAIL_READY",
+                    reason="proposal-free-terminal-tail-ready",
+                    timestamp_ns=tail_ready_ns,
+                )
+                self._transition(
+                    request_id,
+                    "VERIFYING",
+                    reason="target-tail-verification-start",
+                )
+                self._transition(
+                    request_id, "COMMITTING", reason="target-tail-commit"
+                )
+                self._transition(
+                    request_id, "TERMINAL", reason="target-tail-terminal"
+                )
         self._verified_ids.clear()
         if bootstrap_rows:
             self.client.call(
@@ -472,21 +817,47 @@ class DualBatchRemoteProposer:
             "terminal": terminal,
         }
 
-    def _transition(self, request_id: str, destination: str) -> None:
+    def _transition(
+        self,
+        request_id: str,
+        destination: str,
+        *,
+        proposal_id: Optional[str] = None,
+        reason: str = "runtime-transition",
+        timestamp_ns: Optional[int] = None,
+    ) -> None:
         state = self.requests[request_id]
         source = state.lifecycle
+        legal = {
+            "BOOTSTRAP": {"DRAFT_READY", "TERMINAL"},
+            "DRAFT_READY": {"DRAFTING", "TARGET_TAIL_READY", "TERMINAL"},
+            "DRAFTING": {"PROPOSAL_READY", "TARGET_TAIL_READY", "FAILED"},
+            "PROPOSAL_READY": {"VERIFY_READY", "DROPPED_STALE", "FAILED"},
+            "VERIFY_READY": {"VERIFYING", "DROPPED_STALE", "FAILED"},
+            "VERIFYING": {"COMMITTING", "FAILED"},
+            "COMMITTING": {"DRAFT_SYNC", "TERMINAL", "FAILED"},
+            "DRAFT_SYNC": {"DRAFT_READY", "TARGET_TAIL_READY", "TERMINAL", "FAILED"},
+            "TARGET_TAIL_READY": {"VERIFYING", "TERMINAL", "FAILED"},
+            "TERMINAL": set(),
+            "FAILED": set(),
+        }
+        if destination not in legal.get(source, set()):
+            raise RuntimeError(f"illegal Dual request transition {source}->{destination}")
         state.lifecycle = destination
         self.state_log.append(
             {
                 "schema_version": "specrhythm.phase4b-request-state-event.v1",
                 "request_id": request_id,
+                "internal_request_id": self.stable_to_internal.get(request_id),
                 "source_state": source,
                 "destination_state": destination,
                 "prefix_version": state.prefix_version,
                 "round_id": state.next_round_id,
                 "committed_prefix_length": len(state.committed_token_ids),
                 "committed_prefix_sha256": token_prefix_hash(state.committed_token_ids),
-                "timestamp_ns": time.monotonic_ns(),
+                "proposal_id": proposal_id,
+                "reason": reason,
+                "timestamp_ns": timestamp_ns or time.monotonic_ns(),
             }
         )
 
@@ -506,6 +877,9 @@ class DualBatchRemoteProposer:
                 "target_callback_blocks_on_draft_gpu": False,
                 "one_unverified_proposal_per_request": True,
                 "dependency_speculation": False,
+                "resident_decode_ready": self.resident_decode_ready,
+                "setup_complete": self.setup_complete,
+                "measurement_start_ns": self.measurement_start_ns,
                 "request_identity": {
                     "stable_key": "frozen workload request_id",
                     "internal_key": "opaque vLLM request_id",

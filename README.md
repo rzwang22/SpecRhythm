@@ -6,7 +6,9 @@ free. Phase 3 adds an isolated, optional PyTorch/Transformers correctness collec
 calibration interface; it does not change the control-plane simulator or claim serving-engine
 performance. Phase 4 adds a separate Python 3.11/vLLM v0.25.1 workflow. Phase 4A.1 implements a
 narrow three-GPU Serial Disaggregated correctness path with a persistent remote Draft KV service
-and stock vLLM Target verification; vLLM is not installed into the default simulator environment.
+and stock vLLM Target verification. Phase 4B.1 adds a decode-only asynchronous Dual-Batch
+correctness runner and exact Target/Serial/Dual validator; its 3×A800 gates are pending. vLLM is
+not installed into the default simulator environment.
 
 The repository currently provides:
 
@@ -207,6 +209,22 @@ references, and all 48 end-to-end cells. A_1× exactly reproduces Residual-Proba
 three loads. The dominant oracle gap is within-request candidate selection; however, the canonical
 target is already fully covered by the frozen 1× pool, so this experiment cannot identify real
 missing-target coverage or claim that 8× search is free.
+
+## Phase 4B.1 boundary
+
+Phase 4B.0 correctness infrastructure is frozen. Phase 4B.1 starts Target-only, Serial and Dual
+from independently produced but logically identical immutable decode-ready manifests. Dual
+initializes Draft through `prompt+bootstrap` without a proposal, publishes a TP-barrier-backed
+measurement boundary, and only then starts asynchronous proposal work. The read-only
+`phase4b1-dual-correctness-validate` command checks exact token/termination equality, request and
+proposal lifecycles, scheduler admissibility, Target/Draft logical KV and token accounting,
+Target-blind isolation, cleanup, overlap existence and input artifact immutability.
+
+Mac tests prove these contracts without CUDA. They are not a GPU correctness result. The active
+3×A800 Gate 1/2/3 commands are in
+[docs/phase4b1-dual-correctness-runbook.md](docs/phase4b1-dual-correctness-runbook.md).
+Packed-tree verification, Dual-Eager, KVConnector, serving performance and SLO evaluation remain
+outside this phase.
 
 `input_tokens` is preserved in workloads but is not yet an input to the latency surface.
 Context-dependent latency is not implemented. Until GPU calibration, `D(B,K,C)`, `V(B,K,C)`,

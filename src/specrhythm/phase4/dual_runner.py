@@ -13,7 +13,15 @@ from specrhythm.phase4.batch_invariant import (
     validate_batch_invariant_ranks,
 )
 from specrhythm.phase4.config import Phase4Config
+from specrhythm.phase4.decode_ready import load_decode_ready_manifest
 from specrhythm.phase4.dual import validate_cycle_rows
+from specrhythm.phase4.dual_correctness import (
+    validate_overlap_witness,
+    validate_proposal_lifecycle_events,
+    validate_request_state_events,
+    validate_round_accounting,
+    validate_scheduler_cycles,
+)
 from specrhythm.phase4.dual_service import DualDraftClient
 from specrhythm.phase4.manifest import (
     atomic_write_json,
@@ -26,6 +34,11 @@ from specrhythm.phase4.reference import (
     compare_outputs_to_reference,
     load_reference,
     require_reference_for_mode,
+)
+from specrhythm.phase4.resident_runner import _decode_rows, build_decode_ready_context
+from specrhythm.phase4.resident_setup import (
+    build_setup_control,
+    load_setup_ready,
 )
 from specrhythm.phase4.serial_runner import (
     load_patch_manifest,
@@ -317,6 +330,322 @@ def run_dual_batch(
     return result
 
 
+def run_resident_dual_batch(
+    config: Phase4Config,
+    *,
+    workload_path: Path,
+    request_count: int,
+    environment_path: Path,
+    topology_path: Path,
+    patch_manifest_path: Path,
+    draft_socket_path: Path,
+    draft_ready_path: Path,
+    context_path: Path,
+    decode_ready_manifest_path: Path,
+    timing_events_path: Path,
+    setup_control_path: Path,
+    setup_ready_path: Path,
+    scheduler_events_path: Path,
+    request_state_events_path: Path,
+    proposal_events_path: Path,
+    proposal_lifecycle_path: Path,
+    verification_events_path: Path,
+    draft_work_events_path: Path,
+    transport_events_path: Path,
+    target_diagnostics_path: Path,
+    plugin_report_path: Path,
+    output_checkpoint_path: Path,
+    cycle_events_path: Path,
+    overlap_events_path: Path,
+    runtime_manifest_path: Path,
+    output_path: Path,
+    git_commit: str,
+    microbatch_size: int = 2,
+    test_coordination: str = "none",
+) -> dict[str, Any]:
+    """Run real decode-only resident Dual correctness without performance claims."""
+
+    if request_count not in {2, 5, 100}:
+        raise ValueError("Phase-4B.1 allows only 2, 5, or 100 requests")
+    if microbatch_size < 1:
+        raise ValueError("Dual microbatch size must be positive")
+    if test_coordination not in {"none", "one-ready", "two-ready"}:
+        raise ValueError("unknown test-only readiness coordination")
+    artifacts = (
+        context_path,
+        decode_ready_manifest_path,
+        timing_events_path,
+        setup_control_path,
+        setup_ready_path,
+        scheduler_events_path,
+        request_state_events_path,
+        proposal_events_path,
+        proposal_lifecycle_path,
+        verification_events_path,
+        target_diagnostics_path,
+        plugin_report_path,
+        output_checkpoint_path,
+        cycle_events_path,
+        overlap_events_path,
+        runtime_manifest_path,
+        output_path,
+    )
+    existing = [str(path) for path in artifacts if path.exists()]
+    if existing:
+        raise FileExistsError(
+            "refusing to overwrite resident Dual artifacts: " + ", ".join(existing)
+        )
+    mode_evidence = configure_before_worker_creation("batch-invariant")
+    patch_manifest = load_patch_manifest(patch_manifest_path, config)
+    installed_runner = validate_installed_patch_stack(patch_manifest)
+    environment = _load_object(environment_path)
+    topology = _load_object(topology_path)
+    environment_validation = validate_environment(environment, config)
+    topology_validation = validate_topology(topology, config)
+    setup_errors = [
+        *environment_validation["errors"],
+        *topology_validation["errors"],
+    ]
+    if setup_errors:
+        raise RuntimeError("invalid Phase-4 environment/topology: " + "; ".join(setup_errors))
+    if _visible_physical_ids() != config.target.physical_gpu_ids:
+        raise RuntimeError("resident Dual Target must see configured physical GPUs 1,2")
+    if not draft_socket_path.is_socket() or not draft_ready_path.is_file():
+        raise RuntimeError("resident Dual requires the asynchronous GPU-0 Draft service")
+    draft_ready = _load_object(draft_ready_path)
+    if draft_ready.get("schema_version") != "specrhythm.phase4b-dual-draft-ready.v1":
+        raise RuntimeError("resident Dual Draft readiness has the wrong schema")
+    requests = load_smoke_requests(
+        workload_path,
+        request_count,
+        require_task_mixture=request_count in {5, 100},
+    )
+    if request_count == 100:
+        counts = {
+            task: sum(row.task_class == task for row in requests)
+            for task in ("code", "chat", "summarization")
+        }
+        if counts != {"code": 60, "chat": 20, "summarization": 20}:
+            raise ValueError("100-request correctness workload must be 60/20/20")
+    context = build_decode_ready_context(
+        config,
+        patch_manifest=patch_manifest,
+        workload_path=workload_path,
+        git_commit=git_commit,
+        correctness_mode="batch-invariant",
+    )
+    atomic_write_json(context_path, context)
+    _configure_resident_environment(
+        workload_path=workload_path,
+        draft_socket_path=draft_socket_path,
+        scheduler_events_path=scheduler_events_path,
+        request_state_events_path=request_state_events_path,
+        proposal_events_path=proposal_events_path,
+        proposal_lifecycle_path=proposal_lifecycle_path,
+        verification_events_path=verification_events_path,
+        transport_events_path=transport_events_path,
+        target_diagnostics_path=target_diagnostics_path,
+        plugin_report_path=plugin_report_path,
+        context_path=context_path,
+        decode_ready_manifest_path=decode_ready_manifest_path,
+        timing_events_path=timing_events_path,
+        setup_control_path=setup_control_path,
+        setup_ready_path=setup_ready_path,
+        microbatch_size=microbatch_size,
+        request_count=request_count,
+        test_coordination=test_coordination,
+    )
+    try:
+        import torch
+        from vllm import LLM, SamplingParams
+    except ImportError as error:
+        raise RuntimeError("resident Dual requires the pinned GPU environment") from error
+    if not torch.cuda.is_available():
+        raise RuntimeError("CUDA is unavailable; no resident Dual artifact was created")
+    llm = LLM(
+        model=str(config.target.resolved_model_path),
+        tokenizer=str(config.target.resolved_tokenizer_path),
+        tensor_parallel_size=config.target.tensor_parallel_size,
+        dtype=config.target.dtype,
+        revision=config.target.revision,
+        tokenizer_revision=config.target.tokenizer_revision,
+        trust_remote_code=config.target.trust_remote_code,
+        seed=config.sampling.seed,
+        gpu_memory_utilization=config.target.gpu_memory_utilization,
+        max_model_len=config.max_model_len,
+        enforce_eager=config.enforce_eager,
+        enable_prefix_caching=config.enable_prefix_caching,
+        enable_dbo=False,
+        scheduler_cls="specrhythm.phase4.vllm_dual_scheduler.DualBatchScheduler",
+        speculative_config={
+            "model": "specrhythm.phase4.vllm_dual.DualBatchRemoteProposer",
+            "method": "custom_class",
+            "num_speculative_tokens": config.proposal_budget,
+        },
+        disable_log_stats=False,
+    )
+    worker_ranks = llm.collective_rpc(_worker_runtime_snapshot)
+    rank_errors = validate_worker_ranks(worker_ranks, config.target)
+    batch_validation = validate_batch_invariant_ranks(worker_ranks, requested=True)
+    rank_errors.extend(batch_validation["batch_invariant_validation"]["errors"])
+    if rank_errors:
+        raise RuntimeError("invalid resident Dual Target ranks: " + "; ".join(rank_errors))
+    tokenizer = llm.get_tokenizer()
+    for request in requests:
+        actual = tokenizer.encode(request.prompt_text, add_special_tokens=True)
+        if list(actual) != list(request.prompt_token_ids):
+            raise RuntimeError(f"Target tokenizer disagrees for {request.request_id}")
+    prompts = [{"prompt_token_ids": list(row.prompt_token_ids)} for row in requests]
+    parameters = [
+        SamplingParams(
+            temperature=0.0,
+            top_p=1.0,
+            max_tokens=row.maximum_new_tokens,
+            seed=row.sampling_seed,
+            n=1,
+            logprobs=config.logprobs,
+        )
+        for row in requests
+    ]
+    atomic_write_json(
+        setup_control_path,
+        build_setup_control(
+            consumer="dual-batch",
+            expected_request_ids=[row.request_id for row in requests],
+            setup_start_ns=time.monotonic_ns(),
+        ),
+    )
+    started_ns = time.monotonic_ns()
+    outputs = llm.generate(prompts, parameters, use_tqdm=False)
+    torch.cuda.synchronize()
+    ended_ns = time.monotonic_ns()
+    serialized = _serialize_outputs(outputs, requests)
+    checkpoint = CheckpointJsonl(output_checkpoint_path)
+    for row in serialized:
+        checkpoint.append(row)
+    draft_shutdown = DualDraftClient(draft_socket_path).call("shutdown", {})
+    manifest = load_decode_ready_manifest(_load_object(decode_ready_manifest_path))
+    setup_ready = load_setup_ready(
+        setup_ready_path,
+        manifest_path=decode_ready_manifest_path,
+        consumer="dual-batch",
+        expected_request_ids=[row.request_id for row in requests],
+    )
+    state_rows = CheckpointJsonl(request_state_events_path).read()
+    proposal_rows = CheckpointJsonl(proposal_events_path).read()
+    lifecycle_rows = CheckpointJsonl(proposal_lifecycle_path).read()
+    scheduler_rows = CheckpointJsonl(scheduler_events_path).read()
+    draft_rows = CheckpointJsonl(draft_work_events_path).read()
+    verification_rows = CheckpointJsonl(verification_events_path).read()
+    cycle_rows, overlap_rows = build_cycle_and_overlap_events(
+        draft_rows, verification_rows, proposal_rows
+    )
+    _write_checkpoint_rows(cycle_events_path, cycle_rows, resume=False)
+    _write_checkpoint_rows(overlap_events_path, overlap_rows, resume=False)
+    decode_rows = _decode_rows(serialized, manifest)
+    plugin_report = _load_object(plugin_report_path)
+    errors = [
+        *validate_request_state_events(state_rows),
+        *validate_proposal_lifecycle_events(lifecycle_rows),
+        *validate_scheduler_cycles(scheduler_rows),
+        *validate_round_accounting(proposal_rows),
+        *validate_overlap_witness(overlap_rows),
+        *_validate_request_identity_report(plugin_report, requests),
+    ]
+    measurement_start_ns = manifest.measurement_start_ns
+    for row in lifecycle_rows:
+        if (
+            row.get("lifecycle_state") == "CREATED"
+            and int(row.get("draft_start_ns", -1)) < measurement_start_ns
+        ):
+            errors.append("initial or later Draft proposal predates measurement_start")
+    runtime = build_runtime_manifest(
+        config,
+        role="target",
+        git_commit=git_commit,
+        workload_path=workload_path,
+        environment_path=environment_path,
+        topology_path=topology_path,
+        worker_ranks=worker_ranks,
+        attention_backend=",".join(
+            sorted(
+                {
+                    str(backend)
+                    for row in worker_ranks
+                    for backend in row.get("attention_backends", ())
+                }
+            )
+        ),
+        correctness_mode="batch-invariant",
+        mode_setup=mode_evidence,
+        batch_invariant_validation=batch_validation,
+    )
+    runtime.update(
+        {
+            "stage": "phase4b1-real-decode-only-dual-correctness",
+            "performance_result": False,
+            "decode_ready_manifest_sha256": manifest.manifest_sha256,
+            "installed_runner": installed_runner,
+            "patch_manifest_sha256": sha256_file(patch_manifest_path),
+        }
+    )
+    atomic_write_json(runtime_manifest_path, runtime)
+    result = {
+        "schema_version": "specrhythm.phase4b1-resident-dual-run.v1",
+        "mode": "decode-only-dual-batch",
+        "stage": "phase4b1-real-decode-only-dual-correctness",
+        "valid": not errors,
+        "errors": errors,
+        "gpu_correctness_result": True,
+        "performance_result": False,
+        "reports_speedup": False,
+        "reports_tpot": False,
+        "reports_throughput": False,
+        "reports_goodput": False,
+        "reports_slo_attainment": False,
+        "request_count": request_count,
+        "outputs": serialized,
+        "decode_only_outputs": decode_rows,
+        "decode_ready_manifest_sha256": manifest.manifest_sha256,
+        "global_setup_ready": setup_ready,
+        "run_start_ns": started_ns,
+        "run_end_ns": ended_ns,
+        "worker_ranks": worker_ranks,
+        **batch_validation,
+        "draft_shutdown": draft_shutdown,
+        "request_identity": plugin_report.get("request_identity"),
+        "runtime_semantics": {
+            "execution": "real-asynchronous-dual-batch",
+            "target_blind_draft": True,
+            "initial_proposal_after_measurement_start": True,
+            "proposal_handoff": "asynchronous-ready-only-unix-socket",
+            "target_blocks_waiting_for_draft": False,
+            "target_verification": "vllm-linear-speculative-batched-verification",
+            "packed_tree_verification": False,
+            "dual_eager": False,
+            "kv_connector": False,
+            "test_only_readiness_coordination": test_coordination,
+        },
+        "evidence_counts": {
+            "state_events": len(state_rows),
+            "proposal_rounds": len(proposal_rows),
+            "proposal_lifecycle_events": len(lifecycle_rows),
+            "scheduler_cycles": len(scheduler_rows),
+            "verification_events": len(verification_rows),
+            "overlap_events": len(overlap_rows),
+        },
+        "artifact_sha256": {
+            "workload": sha256_file(workload_path),
+            "decode_ready_manifest": sha256_file(decode_ready_manifest_path),
+            "setup_ready": sha256_file(setup_ready_path),
+            "output_checkpoint": sha256_file(output_checkpoint_path),
+            "runtime_manifest": sha256_file(runtime_manifest_path),
+        },
+    }
+    atomic_write_json(output_path, result)
+    return result
+
+
 def build_cycle_and_overlap_events(
     draft_rows: Sequence[Mapping[str, Any]],
     verify_rows: Sequence[Mapping[str, Any]],
@@ -521,6 +850,38 @@ def _configure_environment(**paths: Any) -> None:
     os.environ["VLLM_BATCH_INVARIANT"] = "1"
     for key, value in mapping.items():
         os.environ[key] = str(value)
+
+
+def _configure_resident_environment(**paths: Any) -> None:
+    _configure_environment(
+        workload_path=paths["workload_path"],
+        draft_socket_path=paths["draft_socket_path"],
+        scheduler_events_path=paths["scheduler_events_path"],
+        request_state_events_path=paths["request_state_events_path"],
+        proposal_events_path=paths["proposal_events_path"],
+        verification_events_path=paths["verification_events_path"],
+        transport_events_path=paths["transport_events_path"],
+        target_diagnostics_path=paths["target_diagnostics_path"],
+        plugin_report_path=paths["plugin_report_path"],
+        microbatch_size=paths["microbatch_size"],
+        request_count=paths["request_count"],
+    )
+    os.environ.update(
+        {
+            "SR_PHASE4_DUAL_RESIDENT": "1",
+            "SR_PHASE4_DECODE_READY_CONTEXT": str(paths["context_path"]),
+            "SR_PHASE4_DECODE_READY_MANIFEST": str(
+                paths["decode_ready_manifest_path"]
+            ),
+            "SR_PHASE4_DECODE_READY_TIMING_EVENTS": str(paths["timing_events_path"]),
+            "SR_PHASE4_RESIDENT_SETUP_CONTROL": str(paths["setup_control_path"]),
+            "SR_PHASE4_RESIDENT_SETUP_READY": str(paths["setup_ready_path"]),
+            "SR_PHASE4_PROPOSAL_LIFECYCLE_EVENTS": str(
+                paths["proposal_lifecycle_path"]
+            ),
+            "SR_PHASE4_DUAL_TEST_COORDINATION": str(paths["test_coordination"]),
+        }
+    )
 
 
 def _validate_request_identity_report(

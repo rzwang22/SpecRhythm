@@ -10,13 +10,14 @@ from __future__ import annotations
 import os
 import time
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Optional
 
 from specrhythm.phase4.admissibility import (
     AdmissibilityDecision,
     AdmissibilitySnapshot,
     ExecutionPhase,
     ProposalEvidence,
+    ScheduledOperation,
     SchedulerRequestState,
     decide_admissibility,
     decision_event,
@@ -27,6 +28,7 @@ from specrhythm.phase4.request_identity import (
     FrozenPromptIdentityMap,
     resolve_stable_ready_request,
 )
+from specrhythm.phase4.resident_setup import load_setup_ready
 from specrhythm.phase4.serial import token_prefix_hash
 from specrhythm.phase4.stock_vllm import load_smoke_requests
 from specrhythm.phase4.transport import CheckpointJsonl
@@ -50,6 +52,13 @@ class DualBatchScheduler(Scheduler):
             raise RuntimeError("Dual-Batch scheduler socket/event paths are required")
         self._dual_client = DualDraftClient(Path(socket_value), timeout_seconds=2.0)
         self._dual_events = CheckpointJsonl(Path(event_value))
+        lifecycle_value = os.environ.get("SR_PHASE4_PROPOSAL_LIFECYCLE_EVENTS")
+        self._dual_proposal_lifecycle = (
+            CheckpointJsonl(Path(lifecycle_value)) if lifecycle_value else None
+        )
+        self._dual_resident = os.environ.get("SR_PHASE4_DUAL_RESIDENT") == "1"
+        if self._dual_resident and self._dual_proposal_lifecycle is None:
+            raise RuntimeError("resident Dual requires proposal lifecycle evidence")
         self._dual_microbatch_size = int(
             os.environ.get("SR_PHASE4_DUAL_MICROBATCH_SIZE", "1")
         )
@@ -65,6 +74,15 @@ class DualBatchScheduler(Scheduler):
             require_task_mixture=request_count in {5, 100},
         )
         self._dual_identity = FrozenPromptIdentityMap.from_definitions(definitions)
+        self._dual_expected_ids = tuple(row.request_id for row in definitions)
+        self._dual_setup_ready: Optional[Mapping[str, Any]] = None
+        if self._dual_resident:
+            self._dual_setup_ready_path = _required_path(
+                "SR_PHASE4_RESIDENT_SETUP_READY"
+            )
+            self._dual_manifest_path = _required_path(
+                "SR_PHASE4_DECODE_READY_MANIFEST"
+            )
         # These collections are stable-ID keyed. vLLM-owned request tables and
         # cadence fields remain internal-ID keyed.
         self._dual_tail_ready: set[str] = set()
@@ -76,6 +94,16 @@ class DualBatchScheduler(Scheduler):
         if ttl_seconds < 0:
             raise RuntimeError("proposal TTL must be non-negative")
         self._dual_proposal_ttl_ns = int(ttl_seconds * 1_000_000_000)
+        self._dual_test_coordination = os.environ.get(
+            "SR_PHASE4_DUAL_TEST_COORDINATION", "none"
+        )
+        if self._dual_test_coordination not in {
+            "none",
+            "one-ready",
+            "two-ready",
+        }:
+            raise RuntimeError("unknown test-only Dual readiness coordination mode")
+        self._dual_test_coordination_satisfied = False
         existing_cycles = self._dual_events.read()
         self._dual_cycle_id = 1 + max(
             (int(row.get("cycle_id", -1)) for row in existing_cycles), default=-1
@@ -83,6 +111,7 @@ class DualBatchScheduler(Scheduler):
 
     def schedule(self, *args: Any, **kwargs: Any) -> Any:
         self._bind_vllm_requests()
+        self._refresh_resident_readiness()
         poll_start = time.monotonic_ns()
         already_ready = sum(
             bool(request.spec_token_ids)
@@ -91,6 +120,24 @@ class DualBatchScheduler(Scheduler):
             for request in self.running
         )
         available = max(0, self._dual_microbatch_size - already_ready)
+        if self._dual_resident and self._dual_setup_ready is None:
+            available = 0
+        if (
+            available
+            and self._dual_test_coordination == "one-ready"
+            and not self._dual_test_coordination_satisfied
+        ):
+            available = min(available, 1)
+        if (
+            available
+            and self._dual_test_coordination == "two-ready"
+            and not self._dual_test_coordination_satisfied
+        ):
+            status = self._dual_client.call("status", {})
+            if len(status.get("ready_request_ids", ())) < 2:
+                available = 0
+            else:
+                self._dual_test_coordination_satisfied = True
         response = (
             self._dual_client.call("poll_ready", {"limit": available})
             if available
@@ -106,6 +153,11 @@ class DualBatchScheduler(Scheduler):
             raise RuntimeError(f"asynchronous Draft failure: {failures}")
         for result in response.get("ready", ()):
             self._accept_ready_result(result)
+        if (
+            self._dual_test_coordination == "one-ready"
+            and response.get("ready")
+        ):
+            self._dual_test_coordination_satisfied = True
         if available:
             pending = response.get("pending_request_ids", ())
             self._dual_drafting = {str(item) for item in pending}
@@ -158,7 +210,15 @@ class DualBatchScheduler(Scheduler):
         for stable_id in stable_verified_ids:
             proposal = self._dual_proposals.get(stable_id)
             if proposal is not None:
+                if proposal.proposal_id in self._dual_consumed_proposals:
+                    raise RuntimeError("one Dual proposal was consumed more than once")
                 self._dual_consumed_proposals.add(proposal.proposal_id)
+                self._emit_proposal_lifecycle(
+                    proposal,
+                    "CONSUMED",
+                    internal_request_id=self._dual_identity.internal_id(stable_id),
+                    reason="stock-scheduled-spec-decode-evidence",
+                )
         self._dual_events.append(
             {
                 "schema_version": "specrhythm.phase4b-scheduler-cycle.v1",
@@ -180,6 +240,8 @@ class DualBatchScheduler(Scheduler):
                 "cadence_field_used_for_draft_readiness": False,
                 "scheduler_class": type(self).__name__,
                 "stock_scheduler_delegated": True,
+                "global_decode_ready": self._dual_setup_ready is not None,
+                "test_only_readiness_coordination": self._dual_test_coordination,
             }
         )
         self._dual_cycle_id += 1
@@ -259,18 +321,41 @@ class DualBatchScheduler(Scheduler):
             proposal=evidence,
             now_ns=time.monotonic_ns(),
         )
-        return snapshot, decide_admissibility(snapshot)
+        decision = decide_admissibility(snapshot)
+        if (
+            self._dual_resident
+            and self._dual_setup_ready is None
+            and phase is ExecutionPhase.TIMED_DECODE
+        ):
+            decision = AdmissibilityDecision(
+                admissible=False,
+                operation=ScheduledOperation.NONE,
+                reason="bootstrap-ready-awaiting-global-boundary",
+                proposal_present=evidence is not None,
+                proposal_valid=False,
+                proposal_ready_timestamp_ns=(
+                    evidence.ready_timestamp_ns if evidence is not None else None
+                ),
+            )
+        return snapshot, decision
 
     def _accept_ready_result(self, result: Mapping[str, Any]) -> None:
         request_id = str(result.get("request_id", ""))
         internal_request_id, request = resolve_stable_ready_request(
             request_id, self._dual_identity, self.requests
         )
-        if request.is_finished():
-            raise RuntimeError(
-                f"ready proposal belongs to terminal stable request {request_id}"
-            )
         proposal_value = result.get("proposal")
+        if request.is_finished():
+            if isinstance(proposal_value, Mapping):
+                proposal = DualProposal.from_dict(proposal_value)
+                self._emit_new_proposal(proposal, internal_request_id)
+                self._emit_proposal_lifecycle(
+                    proposal,
+                    "DROPPED_STALE",
+                    internal_request_id=internal_request_id,
+                    reason="terminal-request",
+                )
+            return
         if proposal_value is None:
             if result.get("target_tail") is not True:
                 raise RuntimeError("ready Draft result contains neither proposal nor tail")
@@ -280,6 +365,7 @@ class DualBatchScheduler(Scheduler):
         if not isinstance(proposal_value, Mapping):
             raise RuntimeError("ready proposal payload is not an object")
         proposal = DualProposal.from_dict(proposal_value)
+        self._emit_new_proposal(proposal, internal_request_id)
         prefix = tuple(int(item) for item in request.all_token_ids)
         errors = []
         if proposal.request_id != request_id:
@@ -298,6 +384,12 @@ class DualBatchScheduler(Scheduler):
         if request.spec_token_ids:
             errors.append("second_unverified_proposal")
         if errors:
+            self._emit_proposal_lifecycle(
+                proposal,
+                "DROPPED_STALE",
+                internal_request_id=internal_request_id,
+                reason=",".join(errors),
+            )
             self._dual_events.append(
                 {
                     "schema_version": "specrhythm.phase4b-stale-proposal.v1",
@@ -313,6 +405,74 @@ class DualBatchScheduler(Scheduler):
         request.spec_token_ids = list(proposal.proposal_token_ids)
         self._dual_proposals[request_id] = proposal
         self._dual_drafting.discard(request_id)
+        self._emit_proposal_lifecycle(
+            proposal,
+            "INSTALLED",
+            internal_request_id=internal_request_id,
+            reason="vllm-spec-token-ids-installed",
+        )
+
+    def _emit_new_proposal(
+        self, proposal: DualProposal, internal_request_id: str
+    ) -> None:
+        self._emit_proposal_lifecycle(
+            proposal,
+            "CREATED",
+            internal_request_id=internal_request_id,
+            timestamp_ns=proposal.created_timestamp_ns,
+            reason="draft-model-proposal-created",
+        )
+        self._emit_proposal_lifecycle(
+            proposal,
+            "PUBLISHED",
+            internal_request_id=internal_request_id,
+            reason="scheduler-polled-ready-service",
+        )
+
+    def _refresh_resident_readiness(self) -> None:
+        if (
+            not self._dual_resident
+            or self._dual_setup_ready is not None
+            or not self._dual_setup_ready_path.is_file()
+        ):
+            return
+        self._dual_setup_ready = load_setup_ready(
+            self._dual_setup_ready_path,
+            manifest_path=self._dual_manifest_path,
+            consumer="dual-batch",
+            expected_request_ids=self._dual_expected_ids,
+        )
+
+    def _emit_proposal_lifecycle(
+        self,
+        proposal: DualProposal,
+        lifecycle_state: str,
+        *,
+        internal_request_id: str,
+        reason: str,
+        timestamp_ns: Optional[int] = None,
+    ) -> None:
+        if self._dual_proposal_lifecycle is None:
+            return
+        self._dual_proposal_lifecycle.append(
+            {
+                "schema_version": "specrhythm.phase4b1-proposal-lifecycle.v1",
+                "proposal_id": proposal.proposal_id,
+                "request_id": proposal.request_id,
+                "internal_request_id": internal_request_id,
+                "round_id": proposal.round_id,
+                "prefix_version": proposal.prefix_version,
+                "prefix_token_count": proposal.prefix_token_count,
+                "prefix_token_sha256": proposal.prefix_token_sha256,
+                "proposal_token_ids": list(proposal.proposal_token_ids),
+                "proposal_length": proposal.proposal_length,
+                "draft_start_ns": proposal.draft_start_ns,
+                "draft_end_ns": proposal.draft_end_ns,
+                "lifecycle_state": lifecycle_state,
+                "timestamp_ns": timestamp_ns or time.monotonic_ns(),
+                "reason": reason,
+            }
+        )
 
     def _bind_vllm_requests(self) -> None:
         """Bind opaque scheduler IDs from token prefixes; never parse ID text."""
@@ -325,3 +485,10 @@ class DualBatchScheduler(Scheduler):
             if table_id != object_id:
                 raise RuntimeError("vLLM request table key disagrees with request.request_id")
             self._dual_identity.bind(table_id, tuple(int(item) for item in request.all_token_ids))
+
+
+def _required_path(name: str) -> Path:
+    value = os.environ.get(name)
+    if not value:
+        raise RuntimeError(f"required resident Dual environment variable is missing: {name}")
+    return Path(value).resolve()

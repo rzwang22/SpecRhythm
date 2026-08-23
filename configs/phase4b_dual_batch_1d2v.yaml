@@ -68,9 +68,10 @@
   "target_model_runner": "v1",
   "enable_thinking": false,
   "result_semantics": {
-    "stage": "phase4b1-dual-batch-correctness-readiness",
+    "stage": "phase4b1-real-decode-only-dual-correctness",
     "serving_performance_result": false,
-    "gpu_correctness_result": true,
+    "gpu_correctness_result_available": false,
+    "gpu_correctness_requires_external_a800_gate": true,
     "overlap_existence_evidence": true,
     "reports_goodput": false,
     "reports_slo_attainment": false,
@@ -80,6 +81,7 @@
     "eager": false,
     "shaping": false,
     "vllm_dbo_enabled": false,
-    "specrhythm_dual_batch_implemented": true
+    "decode_only_dual_batch_runner_implemented": true,
+    "specrhythm_dual_batch_gpu_validated": false
   }
 }

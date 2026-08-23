@@ -30,20 +30,24 @@ class RequestState(str, Enum):
     VERIFYING = "VERIFYING"
     COMMITTING = "COMMITTING"
     DRAFT_SYNC = "DRAFT_SYNC"
-    FINISHED = "FINISHED"
+    TARGET_TAIL_READY = "TARGET_TAIL_READY"
+    TERMINAL = "TERMINAL"
+    # Source compatibility for the Phase-4B.0 contract tests.  New evidence
+    # always serializes the canonical TERMINAL value.
+    FINISHED = "TERMINAL"
     FAILED = "FAILED"
 
 
 _LEGAL_TRANSITIONS = {
-    RequestState.BOOTSTRAP: {RequestState.DRAFT_READY, RequestState.FINISHED},
+    RequestState.BOOTSTRAP: {RequestState.DRAFT_READY, RequestState.TERMINAL},
     RequestState.DRAFT_READY: {
         RequestState.DRAFTING,
-        RequestState.VERIFY_READY,  # proposal-free one-token Target tail
-        RequestState.FINISHED,
+        RequestState.TARGET_TAIL_READY,
+        RequestState.TERMINAL,
     },
     RequestState.DRAFTING: {
         RequestState.PROPOSAL_READY,
-        RequestState.DRAFT_READY,  # proposal-free one-token Target tail
+        RequestState.TARGET_TAIL_READY,
         RequestState.FAILED,
     },
     RequestState.PROPOSAL_READY: {
@@ -59,15 +63,21 @@ _LEGAL_TRANSITIONS = {
     RequestState.VERIFYING: {RequestState.COMMITTING, RequestState.FAILED},
     RequestState.COMMITTING: {
         RequestState.DRAFT_SYNC,
-        RequestState.FINISHED,
+        RequestState.TERMINAL,
         RequestState.FAILED,
     },
     RequestState.DRAFT_SYNC: {
         RequestState.DRAFT_READY,
-        RequestState.FINISHED,
+        RequestState.TARGET_TAIL_READY,
+        RequestState.TERMINAL,
         RequestState.FAILED,
     },
-    RequestState.FINISHED: set(),
+    RequestState.TARGET_TAIL_READY: {
+        RequestState.VERIFYING,
+        RequestState.TERMINAL,
+        RequestState.FAILED,
+    },
+    RequestState.TERMINAL: set(),
     RequestState.FAILED: set(),
 }
 
@@ -202,7 +212,7 @@ class DualRequest:
         self.committed_token_ids += delta
         self.generated_tokens += len(delta)
         self.prefix_version += 1
-        self.transition(RequestState.FINISHED if terminal else RequestState.DRAFT_READY)
+        self.transition(RequestState.TERMINAL if terminal else RequestState.DRAFT_READY)
 
     def start_draft(self) -> None:
         if self.proposal is not None:
@@ -245,7 +255,7 @@ class DualRequest:
         self.next_round_id += 1
         if self.generated_tokens > self.maximum_generated_tokens:
             raise ValueError("committed output exceeds maximum token budget")
-        self.transition(RequestState.FINISHED if terminal else RequestState.DRAFT_SYNC)
+        self.transition(RequestState.TERMINAL if terminal else RequestState.DRAFT_SYNC)
         return decision
 
     def complete_draft_sync(self, logical_draft_kv_length: int) -> None:
@@ -309,7 +319,7 @@ class ProposalReadyQueue:
             proposal = self._values.pop(request_id)
             request = requests.get(request_id)
             if request is None or request.state in {
-                RequestState.FINISHED,
+                RequestState.TERMINAL,
                 RequestState.FAILED,
             }:
                 stale.append({"proposal_id": proposal.proposal_id, "reason": "terminal"})

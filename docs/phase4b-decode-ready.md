@@ -9,7 +9,7 @@ implement KVConnector, NIXL, LMCache, Mooncake, disk-backed KV transfer, or prod
 ```text
 DecodeReadyProvider
   -> immutable DecodeReadyManifest
-  -> Target-only / Serial / future Dual decode consumer
+  -> Target-only / Serial / Dual decode consumer
 ```
 
 ## Resident warm start
@@ -24,7 +24,8 @@ request, untimed setup therefore performs these operations incrementally:
    ready; later prompt/bootstrap work remains admissible.
 5. After the complete frozen set validates, all Target TP ranks cross one CUDA-synchronized
    barrier and `measurement_start_ns` is broadcast.
-6. The manifest is written. Target-only then publishes its atomic setup-ready artifact. Serial
+6. The manifest is written. Target-only and Dual publish atomic setup-ready artifacts containing
+   no proposals. Dual then asynchronously starts round-zero Draft work. Serial
    first creates all round-zero proposals after measurement start and includes them in its atomic
    setup-ready artifact for exact scheduler installation.
 
@@ -64,7 +65,7 @@ GPU placement/TP, setup/barrier/measurement timestamps, and every request's exac
 
 `ResidentSetupObservation` has one canonical JSON-compatible codec. `to_dict()` emits token IDs
 as a JSON list; `from_dict()` strictly validates integer fields and restores
-`prompt_token_ids` to `tuple[int, ...]`. Target, Serial, and future providers must use this loader
+`prompt_token_ids` to `tuple[int, ...]`. Target, Serial, and Dual providers must use this loader
 instead of raw dataclass `**mapping` reconstruction. The in-memory tuple invariant is fail closed.
 
 Validation fails if any request does not satisfy:
@@ -92,7 +93,7 @@ For prompt length `P` and proposal length `K`, the first timed inputs are:
 | Consumer | Token IDs | Positions |
 | --- | --- | --- |
 | Target-only | `[bootstrap]` | `[P]` |
-| Serial / future Dual | `[bootstrap] + proposal[0:K]` | `[P, ..., P+K]` |
+| Serial / Dual | `[bootstrap] + proposal[0:K]` | `[P, ..., P+K]` |
 
 The patched observer records the actual Target input tokens, positions, forward start/end,
 logical/physical KV counts and logits mapping. The first-forward artifact also records proposal

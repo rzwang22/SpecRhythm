@@ -34,7 +34,7 @@ claims.
 | [#1 workload-v0.1](https://github.com/rzwang22/SpecRhythm/pull/1) | merged | strict Mooncake replay, R3 proxy config, validator, manifest, fixture tests and docs | workload plumbing only; proxy payload and illustrative acceptance |
 | [#2 simulator-semantics-v0.2](https://github.com/rzwang22/SpecRhythm/pull/2) | frozen draft; Phase 2 complete, not merged | proposal lifecycle, deterministic tree oracle, tree-aware allocators, base-preserving residual controls, Phase-2 nested search pools and common-snapshot oracle replay, path-aware eager and accounting | pure-Python proxy and oracle upper bounds only; no deployable oracle, measured search cost, GPU integration, or performance claim |
 | [#3 gpu-integration-v0.1](https://github.com/rzwang22/SpecRhythm/pull/3) | draft; Phase 3B.1 and corrected-20 Phase 3C.2 complete; Phase 3C.3 corrected-100 awaiting server run | hardened multi-rank primitives, corrected R3-real traces, common-prefix replay, request-bootstrap statistics, 2x shell decomposition and diagnostic learned ranker | user-run 3×A800 correctness artifacts plus Mac CPU tests; no packed-tree/serving engine, Dual-Batch, SLO, calibrated latency or speedup claim |
-| [#4 vllm-serving-v0.1](https://github.com/rzwang22/SpecRhythm/pull/4) | draft; Phase 4A.1.1 Outcome A frozen; L2 resident Target passed; Serial lifecycle fix awaiting L2-only rerun | explicit ready-only scheduler predicate, incremental resident setup, canonical observation codec, one-shot Serial initial-proposal lifecycle, Target/Serial comparator and first-forward proof | successful `5db8657` Target is immutable read-only evidence; failed double-start Serial is diagnostic-only; no full Gate-B PASS, Dual-Batch Outcome, performance, packed tree, eager, SLO or goodput claim |
+| [#4 vllm-serving-v0.1](https://github.com/rzwang22/SpecRhythm/pull/4) | draft; Phase 4A.1.1 Outcome A and Phase 4B.0 infrastructure frozen; Phase 4B.1 CPU contracts implemented, A800 gates pending | decode-ready Target/Serial plus real asynchronous resident Dual runner, lifecycle/scheduler/KV/accounting evidence and exact triangle validator | Mac CPU contract PASS only for Phase 4B.1; no Dual GPU Outcome A, performance, packed tree, eager, KVConnector, SLO or goodput claim |
 
 ## Phase 4A.0–4A.1: vLLM freeze and Serial Disaggregated correctness
 
@@ -140,17 +140,15 @@ normalization. `ResidentSetupObservation.to_dict/from_dict` is now the only seri
 Target and Serial both use it and reject malformed token types. The resulting L2 Target run passed
 on A800 and is preserved read-only.
 
-The next resident Serial attempt at `5db8657` is diagnostic-only because Draft was accidentally
+The resident Serial attempt at `5db8657` is diagnostic-only because Draft was accidentally
 started twice and its live PID provenance was overwritten. Its manifest/proposal hashes and
 timing/admission logs nevertheless showed correct round-zero publication and first scheduling,
 followed by an erroneous second installation pass after the live prefix advanced. Resident Serial
 now owns each initial proposal through `published -> installed -> consumed`, uses pinned vLLM's
 `scheduled_spec_decode_tokens` as consumption evidence, preserves detailed fail-closed diagnostics,
-and leaves consumed requests exclusively to normal proposer rounds. The only next server action
-is the Serial-only L2 procedure in
-[phase4b-resident-l2-serial-rerun.md](phase4b-resident-l2-serial-rerun.md), reusing the successful
-Target artifact read-only. L5, 100 requests, Phase 4B.1 Dual-Batch, performance, Dual-Eager, and
-SLO evaluation remain blocked.
+and leaves consumed requests exclusively to normal proposer rounds. The subsequent real-A800
+resident Target/Serial reruns passed; Phase 4B.0 correctness infrastructure is frozen and is not
+reinterpreted by the new Dual path.
 
 GPU 0 runs one persistent Draft service. Heavy Draft model work is serialized on its background
 worker queue; Unix-socket calls only enqueue work or poll completed proposals. The Target
@@ -159,12 +157,18 @@ vLLM scheduler. Every proposal carries a canonical ID, round, prefix version/cou
 KV lengths and token list. A mismatch fails before verification; one request cannot own two
 proposals or be drafted through an unverified prefix.
 
-The older Dual runner and validator remain in the Draft PR for the later Phase 4B.1 gate, but this
-round does not execute or reinterpret them. No Outcome A/B/C is currently claimed. Even a future
-Outcome A would establish correctness and overlap existence only—not speedup, goodput, SLO
-attainment, throughput, latency improvement, or production readiness. See
+Phase 4B.1 now starts Dual from the same logical decode-ready state. Draft initialization produces
+no proposal; rank-zero manifest validation and the Target TP barrier precede measurement; first
+proposals are asynchronous and post-boundary. The scheduler emits per-request decisions and a
+separate proposal lifecycle, while the unified validator compares Target, Serial and one or more
+Dual runs exactly, checks keyed repeats and all logical invariants, and proves that it did not
+mutate its inputs. Local CPU tests pass. The 2-request controlled, corrected R3-real 5-request and
+100-request A800 gates have not run, so no Dual Outcome A is currently claimed. Even Outcome A
+would establish correctness and overlap existence only—not speedup, goodput, SLO attainment,
+throughput, latency improvement, or production readiness. See
 [phase4b-decode-ready.md](phase4b-decode-ready.md) and
-[phase4b-dual-batch.md](phase4b-dual-batch.md).
+[phase4b-dual-batch.md](phase4b-dual-batch.md). The active server procedure is
+[phase4b1-dual-correctness-runbook.md](phase4b1-dual-correctness-runbook.md).
 
 ## Phase 3.0: GPU readiness and real-trace runner
 
@@ -476,8 +480,8 @@ compute-waste ratios.
 - `D(B,K,C)`, `V(B,K,C)`, acceptance, confidence, and candidate roof are proxy inputs until GPU
   calibration.
 - R3 proxy lengths are sampled and are not HumanEval, Alpaca, or CNN/DailyMail payloads.
-- Phase 4A.1 has a narrow vLLM linear Serial correctness integration, but no SGLang, MineDraft,
-  packed-tree verification kernel, Dual-Batch/Eager GPU runtime, arrival scheduling, or serving
+- Phase 4B.1 has a decode-only asynchronous linear Dual runner, but its GPU gates are pending. It
+  has no SGLang, packed-tree verification, Dual-Eager, KVConnector, arrival scheduling, or serving
   performance evaluation. The persistent Draft HF adapter is correctness-only.
 - No current result may be cited as evidence of real GPU speedup or full AdaServe/SpecRhythm
   reproduction.

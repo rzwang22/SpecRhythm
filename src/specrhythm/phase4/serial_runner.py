@@ -279,7 +279,7 @@ def run_serial_disaggregated(
     requests = load_smoke_requests(
         workload_path,
         effective_count,
-        require_task_mixture=effective_count == 5,
+        require_task_mixture=effective_count in {5, 100},
     )
     try:
         import torch

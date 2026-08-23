@@ -23,6 +23,7 @@ from specrhythm.phase4.serial import Proposal
 SETUP_CONTROL_SCHEMA = "specrhythm.phase4b-resident-setup-control.v1"
 SETUP_READY_SCHEMA = "specrhythm.phase4b-resident-setup-ready.v1"
 ADMISSION_EVENT_SCHEMA = "specrhythm.phase4b-resident-admission-event.v1"
+RESIDENT_CONSUMERS = {"target-only", "serial", "dual-batch"}
 
 
 class IncrementalResidentSetup:
@@ -86,8 +87,8 @@ class IncrementalResidentSetup:
 def build_setup_control(
     *, consumer: str, expected_request_ids: Sequence[str], setup_start_ns: int
 ) -> dict[str, Any]:
-    if consumer not in {"target-only", "serial"}:
-        raise ValueError("resident setup consumer must be target-only or serial")
+    if consumer not in RESIDENT_CONSUMERS:
+        raise ValueError("resident setup consumer must be target-only, serial, or dual-batch")
     request_ids = [str(item) for item in expected_request_ids]
     if not request_ids or len(set(request_ids)) != len(request_ids):
         raise ValueError("resident setup control requires unique request IDs")
@@ -127,15 +128,17 @@ def build_setup_ready(
     initial_proposals: Sequence[Proposal] = (),
     ready_published_ns: int,
 ) -> dict[str, Any]:
-    if consumer not in {"target-only", "serial"}:
-        raise ValueError("resident readiness consumer must be target-only or serial")
+    if consumer not in RESIDENT_CONSUMERS:
+        raise ValueError(
+            "resident readiness consumer must be target-only, serial, or dual-batch"
+        )
     if ready_published_ns < manifest.measurement_start_ns:
         raise ValueError("resident readiness preceded measurement_start")
     proposals = tuple(initial_proposals)
     proposal_ids = {proposal.request_id for proposal in proposals}
     expected_ids = {request.request_id for request in manifest.requests}
-    if consumer == "target-only" and proposals:
-        raise ValueError("Target-only readiness cannot contain proposals")
+    if consumer in {"target-only", "dual-batch"} and proposals:
+        raise ValueError(f"{consumer} readiness cannot contain proposals")
     if consumer == "serial" and proposal_ids != expected_ids:
         raise ValueError("Serial readiness requires one initial proposal per request")
     if len(proposal_ids) != len(proposals):
@@ -258,8 +261,8 @@ def validate_setup_ready(
         except (TypeError, ValueError) as error:
             errors.append(f"setup-ready initial proposal is invalid: {error}")
     proposal_ids = [proposal.request_id for proposal in proposals]
-    if consumer == "target-only" and proposals:
-        errors.append("Target-only setup-ready contains proposals")
+    if consumer in {"target-only", "dual-batch"} and proposals:
+        errors.append(f"{consumer} setup-ready contains proposals")
     if consumer == "serial" and proposal_ids != expected:
         errors.append("Serial setup-ready proposal request set/order differs")
     for proposal in proposals:
@@ -296,14 +299,16 @@ def resident_admission_decision(
 
     if num_output_tokens < 0:
         raise ValueError("resident request output-token count cannot be negative")
-    if consumer not in {"target-only", "serial"}:
-        raise ValueError("resident setup consumer must be target-only or serial")
+    if consumer not in RESIDENT_CONSUMERS:
+        raise ValueError("resident setup consumer must be target-only, serial, or dual-batch")
     if num_output_tokens == 0:
         return True, "setup-prefill-bootstrap"
     if not global_decode_ready:
         return False, "bootstrap-ready-awaiting-global-boundary"
     if consumer == "serial" and num_output_tokens == 1 and not has_initial_proposal:
         return False, "serial-initial-proposal-not-installed"
+    if consumer == "dual-batch" and num_output_tokens == 1 and not has_initial_proposal:
+        return False, "dual-initial-proposal-not-installed"
     return True, "global-decode-ready"
 
 
@@ -349,6 +354,14 @@ def validate_resident_admission_events(
             and row.get("initial_proposal_installed") is not True
         ):
             errors.append(f"{label} released Serial without an initial proposal")
+        if (
+            consumer == "dual-batch"
+            and output_count == 1
+            and ready
+            and row.get("initial_proposal_installed") is not True
+            and row.get("reason") != "dual-initial-proposal-not-installed"
+        ):
+            errors.append(f"{label} released Dual without an initial proposal")
         if row.get("explicit_request_predicate") is not True:
             errors.append(f"{label} did not use the explicit request predicate")
         if row.get("current_step_arithmetic") is not False:

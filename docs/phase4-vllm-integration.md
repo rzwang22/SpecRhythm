@@ -3,6 +3,26 @@
 Phase 4 is a stacked Draft PR based on the frozen Phase 3 branch. It does not change simulator
 policies or reinterpret Phase 3 full-context measurements as serving latency.
 
+## Phase 4B status
+
+Phase 4B.0 correctness infrastructure has passed the prior real-A800 gates: explicit
+admissibility, incremental resident setup, immutable decode-ready state, Target/Serial exact
+decode equality, stable/internal request identity, and bounded process cleanup. Those artifacts
+remain immutable.
+
+Phase 4B.1 adds a separate real decode-only Dual-Batch correctness path. Target-only, Serial and
+Dual each create an independently timestamped manifest, but the validator requires identical
+logical request state: prompt, bootstrap, prefix hash/count, sampling configuration and workload.
+Dual initializes Draft through the full `prompt+bootstrap` prefix without generating a proposal;
+all first proposal timestamps must follow the global measurement boundary. GPU 0 then drafts
+asynchronously while Target TP2 verifies proposal-ready requests on GPUs 1 and 2.
+
+This repository currently has CPU contract PASS only for Phase 4B.1. The external 3×A800 Gate 1,
+Gate 2 and Gate 3 results have not been run. A positive overlap interval is a correctness witness
+that the implementation is not Serial; it is not evidence that latency was hidden or that any
+performance metric improved. Phase 4B.1 does not implement packed trees, Dual-Eager, KVConnector,
+arrival scheduling, TPOT, throughput, goodput, SLO evaluation or a four-GPU fair comparison.
+
 ## Phase 4A.1 scope
 
 The frozen environment is vLLM `v0.25.1` at commit

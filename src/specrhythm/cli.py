@@ -756,6 +756,88 @@ def build_parser() -> argparse.ArgumentParser:
     phase4_dual_validate.add_argument("--output", required=True)
     phase4_dual_validate.add_argument("--markdown-output", required=True)
 
+    phase4b1_dual_run = subparsers.add_parser(
+        "phase4b1-resident-dual-run",
+        help=(
+            "run real decode-only resident Dual-Batch exact-correctness collection; "
+            "never reports performance"
+        ),
+    )
+    for name in (
+        "config",
+        "workload",
+        "environment",
+        "topology",
+        "patch-manifest",
+        "draft-socket",
+        "draft-ready",
+        "context",
+        "decode-ready-manifest",
+        "timing-events",
+        "setup-control",
+        "setup-ready",
+        "scheduler-events",
+        "request-state-events",
+        "proposal-events",
+        "proposal-lifecycle-events",
+        "verification-events",
+        "draft-work-events",
+        "transport-events",
+        "target-diagnostics",
+        "plugin-report",
+        "output-checkpoint",
+        "cycle-events",
+        "overlap-events",
+        "runtime-manifest",
+        "output",
+    ):
+        phase4b1_dual_run.add_argument(f"--{name}", required=True)
+    phase4b1_dual_run.add_argument(
+        "--request-count", type=int, choices=(2, 5, 100), required=True
+    )
+    phase4b1_dual_run.add_argument("--microbatch-size", type=int, default=2)
+    phase4b1_dual_run.add_argument(
+        "--test-coordination",
+        choices=("none", "one-ready", "two-ready"),
+        default="none",
+    )
+
+    phase4b1_validate = subparsers.add_parser(
+        "phase4b1-dual-correctness-validate",
+        help="read-only exact Target/Serial/Dual decode-only triangle validation",
+    )
+    phase4b1_validate.add_argument("--target", required=True)
+    phase4b1_validate.add_argument("--serial", required=True)
+    phase4b1_validate.add_argument("--dual", action="append", required=True)
+    phase4b1_validate.add_argument("--target-manifest", required=True)
+    phase4b1_validate.add_argument("--serial-manifest", required=True)
+    phase4b1_validate.add_argument("--target-process-lifecycle", required=True)
+    phase4b1_validate.add_argument("--serial-process-lifecycle", required=True)
+    for name in (
+        "dual-manifest",
+        "request-state-events",
+        "proposal-events",
+        "proposal-lifecycle-events",
+        "scheduler-events",
+        "verification-events",
+        "draft-work-events",
+        "target-diagnostics",
+        "overlap-events",
+        "process-lifecycle",
+    ):
+        phase4b1_validate.add_argument(f"--{name}", action="append", required=True)
+    phase4b1_validate.add_argument("--output", required=True)
+    phase4b1_validate.add_argument("--markdown-output", required=True)
+
+    phase4b1_controlled = subparsers.add_parser(
+        "phase4b1-dual-controlled-validate",
+        help="validate controlled one-wait/two-ready/terminal Gate-1 evidence",
+    )
+    phase4b1_controlled.add_argument("--asynchronous-scheduler", required=True)
+    phase4b1_controlled.add_argument("--coordinated-scheduler", required=True)
+    phase4b1_controlled.add_argument("--request-state-events", required=True)
+    phase4b1_controlled.add_argument("--output", required=True)
+
     phase4_resident_target = subparsers.add_parser(
         "phase4-resident-target-run",
         help="run the Phase-4B.0b real-KV decode-only Target correctness gate",
@@ -782,7 +864,7 @@ def build_parser() -> argparse.ArgumentParser:
     ):
         phase4_resident_target.add_argument(f"--{name}", required=True)
     phase4_resident_target.add_argument(
-        "--request-count", type=int, choices=(2, 5), required=True
+        "--request-count", type=int, choices=(2, 5, 100), required=True
     )
     phase4_resident_target.add_argument(
         "--correctness-mode",
@@ -820,7 +902,7 @@ def build_parser() -> argparse.ArgumentParser:
     ):
         phase4_resident_serial.add_argument(f"--{name}", required=True)
     phase4_resident_serial.add_argument(
-        "--request-count", type=int, choices=(2, 5), required=True
+        "--request-count", type=int, choices=(2, 5, 100), required=True
     )
     phase4_resident_serial.add_argument(
         "--correctness-mode",
@@ -1344,6 +1426,150 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 "valid": False,
                 "outcome": "invalid-artifacts",
                 "errors": [str(error)],
+            }
+            _write_json(report, args.output)
+            return 1
+        return 0 if report["valid"] else 1
+    if args.command == "phase4b1-resident-dual-run":
+        from specrhythm.phase4.config import load_phase4_config
+        from specrhythm.phase4.dual_runner import run_resident_dual_batch
+
+        try:
+            report = run_resident_dual_batch(
+                load_phase4_config(args.config),
+                workload_path=Path(args.workload).resolve(),
+                request_count=args.request_count,
+                environment_path=Path(args.environment).resolve(),
+                topology_path=Path(args.topology).resolve(),
+                patch_manifest_path=Path(args.patch_manifest).resolve(),
+                draft_socket_path=Path(args.draft_socket).resolve(),
+                draft_ready_path=Path(args.draft_ready).resolve(),
+                context_path=Path(args.context).resolve(),
+                decode_ready_manifest_path=Path(args.decode_ready_manifest).resolve(),
+                timing_events_path=Path(args.timing_events).resolve(),
+                setup_control_path=Path(args.setup_control).resolve(),
+                setup_ready_path=Path(args.setup_ready).resolve(),
+                scheduler_events_path=Path(args.scheduler_events).resolve(),
+                request_state_events_path=Path(args.request_state_events).resolve(),
+                proposal_events_path=Path(args.proposal_events).resolve(),
+                proposal_lifecycle_path=Path(
+                    args.proposal_lifecycle_events
+                ).resolve(),
+                verification_events_path=Path(args.verification_events).resolve(),
+                draft_work_events_path=Path(args.draft_work_events).resolve(),
+                transport_events_path=Path(args.transport_events).resolve(),
+                target_diagnostics_path=Path(args.target_diagnostics).resolve(),
+                plugin_report_path=Path(args.plugin_report).resolve(),
+                output_checkpoint_path=Path(args.output_checkpoint).resolve(),
+                cycle_events_path=Path(args.cycle_events).resolve(),
+                overlap_events_path=Path(args.overlap_events).resolve(),
+                runtime_manifest_path=Path(args.runtime_manifest).resolve(),
+                output_path=Path(args.output).resolve(),
+                git_commit=_current_git_commit() or "unknown",
+                microbatch_size=args.microbatch_size,
+                test_coordination=args.test_coordination,
+            )
+        except (
+            FileExistsError,
+            FileNotFoundError,
+            ImportError,
+            RuntimeError,
+            ValueError,
+        ) as error:
+            raise SystemExit(f"Phase-4B.1 resident Dual run failed: {error}") from error
+        return 0 if report["valid"] else 1
+    if args.command == "phase4b1-dual-correctness-validate":
+        from specrhythm.phase4.dual_correctness import (
+            VALIDATION_SCHEMA,
+            validate_phase4b1_dual_correctness,
+        )
+
+        try:
+            report = validate_phase4b1_dual_correctness(
+                target_path=Path(args.target).resolve(),
+                serial_path=Path(args.serial).resolve(),
+                dual_paths=[Path(path).resolve() for path in args.dual],
+                target_manifest_path=Path(args.target_manifest).resolve(),
+                serial_manifest_path=Path(args.serial_manifest).resolve(),
+                target_process_lifecycle_path=Path(
+                    args.target_process_lifecycle
+                ).resolve(),
+                serial_process_lifecycle_path=Path(
+                    args.serial_process_lifecycle
+                ).resolve(),
+                dual_manifest_paths=[
+                    Path(path).resolve() for path in args.dual_manifest
+                ],
+                state_event_paths=[
+                    Path(path).resolve() for path in args.request_state_events
+                ],
+                proposal_event_paths=[
+                    Path(path).resolve() for path in args.proposal_events
+                ],
+                proposal_lifecycle_paths=[
+                    Path(path).resolve() for path in args.proposal_lifecycle_events
+                ],
+                scheduler_event_paths=[
+                    Path(path).resolve() for path in args.scheduler_events
+                ],
+                verification_event_paths=[
+                    Path(path).resolve() for path in args.verification_events
+                ],
+                draft_work_event_paths=[
+                    Path(path).resolve() for path in args.draft_work_events
+                ],
+                target_diagnostic_paths=[
+                    Path(path).resolve() for path in args.target_diagnostics
+                ],
+                overlap_event_paths=[
+                    Path(path).resolve() for path in args.overlap_events
+                ],
+                process_lifecycle_paths=[
+                    Path(path).resolve() for path in args.process_lifecycle
+                ],
+                output_path=Path(args.output).resolve(),
+                markdown_path=Path(args.markdown_output).resolve(),
+            )
+        except (
+            FileNotFoundError,
+            json.JSONDecodeError,
+            RuntimeError,
+            ValueError,
+        ) as error:
+            report = {
+                "schema_version": VALIDATION_SCHEMA,
+                "valid": False,
+                "outcome": "FAIL",
+                "errors": [str(error)],
+                "performance_result": False,
+            }
+            _write_json(report, args.output)
+            return 1
+        return 0 if report["valid"] else 1
+    if args.command == "phase4b1-dual-controlled-validate":
+        from specrhythm.phase4.dual_correctness import (
+            CONTROLLED_SCHEMA,
+            validate_controlled_gate,
+        )
+
+        try:
+            report = validate_controlled_gate(
+                asynchronous_scheduler_path=Path(
+                    args.asynchronous_scheduler
+                ).resolve(),
+                coordinated_scheduler_path=Path(
+                    args.coordinated_scheduler
+                ).resolve(),
+                state_event_path=Path(args.request_state_events).resolve(),
+                output_path=Path(args.output).resolve(),
+            )
+        except (FileNotFoundError, json.JSONDecodeError, RuntimeError, ValueError) as error:
+            report = {
+                "schema_version": CONTROLLED_SCHEMA,
+                "valid": False,
+                "outcome": "FAIL",
+                "errors": [str(error)],
+                "performance_result": False,
             }
             _write_json(report, args.output)
             return 1

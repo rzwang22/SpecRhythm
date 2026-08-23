@@ -52,7 +52,9 @@ class DualDraftMachine:
         self.candidate_budget = candidate_budget
         self.requests: dict[str, _DraftState] = {}
 
-    def bootstrap_and_propose(self, row: Mapping[str, Any]) -> dict[str, Any]:
+    def initialize(self, row: Mapping[str, Any]) -> dict[str, Any]:
+        """Materialize the complete decode-ready prefix without proposing."""
+
         request_id = str(row.get("request_id", ""))
         tokens = tuple(row.get("committed_token_ids", ()))
         prefix_version = row.get("prefix_version", -1)
@@ -67,8 +69,49 @@ class DualDraftMachine:
         if bool(row.get("terminal", False)):
             self.requests[request_id].finished = True
             self.backend.finish(request_id)
-            return {"request_id": request_id, "terminal": True, "proposal": None}
-        return self._propose(request_id, row)
+        return {
+            "request_id": request_id,
+            "terminal": bool(row.get("terminal", False)),
+            "proposal": None,
+            "initial_proposal_generated": False,
+            "logical_draft_kv_length": len(tokens),
+            "committed_prefix_hash": token_prefix_hash(tokens),
+            "prefix_version": prefix_version,
+            "next_round_id": 0,
+        }
+
+    def bootstrap_and_propose(self, row: Mapping[str, Any]) -> dict[str, Any]:
+        """Legacy B.0 operation retained for immutable artifact reproducibility."""
+
+        initialized = self.initialize(row)
+        if initialized["terminal"]:
+            return initialized
+        return self._propose(str(row["request_id"]), row)
+
+    def propose_only(self, row: Mapping[str, Any]) -> dict[str, Any]:
+        """Create a proposal only after the decode-ready measurement boundary."""
+
+        request_id = str(row.get("request_id", ""))
+        state = self._state(request_id)
+        if row.get("prefix_version") != state.prefix_version:
+            raise ValueError("proposal-only prefix version mismatch")
+        if tuple(row.get("committed_token_ids", ())) != state.committed_token_ids:
+            raise ValueError("proposal-only committed prefix mismatch")
+        if token_prefix_hash(state.committed_token_ids) != row.get(
+            "prefix_token_sha256"
+        ):
+            raise ValueError("proposal-only committed prefix hash mismatch")
+        measurement_start_ns = row.get("measurement_start_ns")
+        if not isinstance(measurement_start_ns, int) or measurement_start_ns <= 0:
+            raise ValueError("proposal-only requires a positive measurement boundary")
+        result = self._propose(request_id, row)
+        interval = result.get("draft_gpu_interval")
+        if (
+            isinstance(interval, Mapping)
+            and interval.get("host_start_ns", 0) < measurement_start_ns
+        ):
+            raise RuntimeError("initial Draft proposal started before measurement_start")
+        return result
 
     def commit_and_propose(self, row: Mapping[str, Any]) -> dict[str, Any]:
         request_id = str(row.get("request_id", ""))
@@ -101,6 +144,9 @@ class DualDraftMachine:
         state.prefix_version = new_version
         state.next_round_id += 1
         state.proposal = None
+        # The next proposal must begin only after correction/bonus has been
+        # incorporated into the persistent Draft state.
+        draft_sync_complete_ns = time.monotonic_ns()
         terminal = bool(row.get("terminal", False))
         if terminal:
             state.finished = True
@@ -127,10 +173,12 @@ class DualDraftMachine:
             "draft_physical_request_block_observable": False,
             "prefix_version": state.prefix_version,
             "prefix_token_sha256": token_prefix_hash(final_prefix),
+            "draft_sync_complete_ns": draft_sync_complete_ns,
             "terminal": terminal,
             "proposal": next_result.get("proposal"),
             "draft_gpu_interval": next_result.get("draft_gpu_interval"),
             "target_tail": next_result.get("target_tail", False),
+            "target_tail_ready_ns": next_result.get("target_tail_ready_ns"),
         }
 
     def finish_tail(self, row: Mapping[str, Any]) -> dict[str, Any]:
@@ -170,7 +218,12 @@ class DualDraftMachine:
             raise ValueError("remaining output budget must be positive")
         budget = min(self.candidate_budget, max(remaining - 1, 0))
         if budget == 0:
-            return {"request_id": request_id, "target_tail": True, "proposal": None}
+            return {
+                "request_id": request_id,
+                "target_tail": True,
+                "target_tail_ready_ns": time.monotonic_ns(),
+                "proposal": None,
+            }
         self._cuda_synchronize()
         start_event = self._cuda_event()
         end_event = self._cuda_event()
@@ -254,6 +307,7 @@ class DualDraftMachine:
 class _Work:
     operation: str
     row: Mapping[str, Any]
+    response: Optional[queue.Queue[tuple[bool, Any]]] = None
 
 
 class AsyncDualDraftController:
@@ -275,6 +329,7 @@ class AsyncDualDraftController:
     def enqueue(self, operation: str, rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         if operation not in {
             "bootstrap_and_propose",
+            "propose_only",
             "commit_and_propose",
             "finish_tail",
         }:
@@ -292,6 +347,36 @@ class AsyncDualDraftController:
         for row in rows:
             self._work.put(_Work(operation, dict(row)))
         return {"enqueued": request_ids, "blocking_on_draft_gpu": False}
+
+    def execute(
+        self, operation: str, row: Mapping[str, Any], *, timeout_seconds: float = 120.0
+    ) -> dict[str, Any]:
+        """Run setup-only work on the Draft worker and return its evidence.
+
+        This blocking operation is permitted only for pre-measurement resident
+        initialization. Timed proposal work continues to use ``enqueue``.
+        """
+
+        if operation != "initialize":
+            raise ValueError("synchronous Dual Draft execution is setup-only")
+        request_id = str(row.get("request_id", ""))
+        if not request_id:
+            raise ValueError("synchronous Draft setup requires a request ID")
+        response: queue.Queue[tuple[bool, Any]] = queue.Queue(maxsize=1)
+        with self._lock:
+            if request_id in self._inflight:
+                raise ValueError(f"request already has Draft work in flight: {request_id}")
+            self._inflight.add(request_id)
+        self._work.put(_Work(operation, dict(row), response))
+        try:
+            success, value = response.get(timeout=timeout_seconds)
+        except queue.Empty as error:
+            raise RuntimeError("timed out waiting for resident Draft initialization") from error
+        if not success:
+            raise RuntimeError(str(value))
+        if not isinstance(value, dict):
+            raise RuntimeError("resident Draft initialization returned invalid evidence")
+        return value
 
     def poll_ready(self, limit: int) -> dict[str, Any]:
         if limit < 1:
@@ -358,6 +443,8 @@ class AsyncDualDraftController:
                         ):
                             self._ready[request_id] = result
                             self._ready_order.append(request_id)
+                    if work.response is not None:
+                        work.response.put((True, result))
                     self.event_log.append(
                         {
                             "schema_version": "specrhythm.phase4b-draft-work.v1",
@@ -375,6 +462,8 @@ class AsyncDualDraftController:
                     with self._lock:
                         self._inflight.discard(request_id)
                         self._failures[request_id] = message
+                    if work.response is not None:
+                        work.response.put((False, message))
                     self.event_log.append(
                         {
                             "schema_version": "specrhythm.phase4b-draft-work.v1",
@@ -473,6 +562,13 @@ class DualDraftUnixServer:
                 result = self.controller.enqueue(
                     str(payload.get("work_operation", "")), payload.get("rows", ())
                 )
+            elif operation == "execute":
+                row = payload.get("row")
+                if not isinstance(row, Mapping):
+                    raise ValueError("synchronous Draft execution row must be an object")
+                result = self.controller.execute(
+                    str(payload.get("work_operation", "")), row
+                )
             elif operation == "poll_ready":
                 result = self.controller.poll_ready(payload.get("limit", 1))
             elif operation == "claimed":
@@ -511,7 +607,8 @@ class DualDraftUnixServer:
                 "loopback_local_only": True,
                 "host_staging": True,
                 "gpu_kernel_time": False,
-                "blocks_on_draft_gpu": False,
+                "blocks_on_draft_gpu": operation == "execute",
+                "measurement_region": operation != "execute",
                 "success": response["ok"],
             }
         )

@@ -462,13 +462,20 @@ def capture_target_forward(
         if pending is not None:
             prefix = list(getattr(stable_state, "committed_token_ids", prefix))
             round_id = int(pending.round_id)
+        proposal_id = (
+            str(pending.proposal_id) if pending is not None else None
+        )
         row = {
             "schema_version": DIAGNOSTIC_SCHEMA,
             "request_id": definition.request_id,
             "internal_request_id": str(internal_id),
             "round_id": round_id,
+            "proposal_id": proposal_id,
             "committed_prefix_token_ids": prefix,
             "committed_prefix_sha256": token_sha256(prefix),
+            "logical_committed_prefix_count": len(prefix),
+            "target_pending_input_token_id": prefix[-1] if prefix else None,
+            "target_pending_input_position": len(prefix) - 1 if prefix else None,
             "proposal_token_ids": proposal,
             "logical_target_kv_length": len(prefix),
             "physical_kv_num_computed_tokens": computed,

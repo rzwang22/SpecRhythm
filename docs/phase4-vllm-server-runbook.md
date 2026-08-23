@@ -1,5 +1,8 @@
 # Phase 4A.1.1 batch-invariant correctness runbook
 
+> This page is frozen Phase 4A evidence. The active Phase 4B.1 procedure is
+> [phase4b1-dual-correctness-runbook.md](phase4b1-dual-correctness-runbook.md).
+
 Phase 4A.1 default-mode A/B artifacts must remain unchanged. This addendum creates only fresh C/D
 artifacts. It does not run Dual-Batch, Eager, packed trees, SLO/goodput, or a performance test.
 

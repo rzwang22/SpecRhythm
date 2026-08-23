@@ -104,6 +104,31 @@ attention, model weights or TP partitioning. The hook is absent from the stock s
 therefore inert unless the explicit Phase-4B subclass implements it. Dual mode remains fail-closed
 behind `SR_PHASE4_DUAL_BATCH=1`; default and Target-only behavior are unchanged.
 
+## Phase 4B.1 decode-only source boundary
+
+Phase 4B.1 does not add a fourth vLLM patch and does not alter the sampler, model forward, block
+manager, attention backend, C++/CUDA or Triton. It composes the three already-audited hooks with
+two out-of-tree classes:
+
+- `DualBatchScheduler` consumes only proposals already published by the persistent GPU-0 service,
+  installs them in `request.spec_token_ids`, and delegates the actual batch to the pinned stock
+  scheduler. `scheduled_spec_decode_tokens` remains the authoritative consumption evidence.
+- `DualBatchRemoteProposer` first performs resident bootstrap observation. Draft initialization
+  runs on the Draft worker but generates no proposal. Rank zero creates the immutable
+  `DecodeReadyManifest`, performs the Target TP barrier, publishes setup-ready, and only then
+  enqueues the first asynchronous Draft proposals.
+
+The scheduler reads setup-ready from an atomic cross-process artifact; no Python object is shared
+between EngineCore and TP workers. A bootstrapped request is inadmissible before global readiness,
+and remains inadmissible afterward until a matching proposal or legal terminal tail exists. The
+test-only `one-ready` mode caps only the first publication cycle, while `two-ready` polls queue
+metadata without blocking on Draft GPU work. They construct Gate 1 Cases A and B respectively,
+are recorded in run metadata, and are disabled in the production/default `none` path.
+
+The diagnostic observer now carries the proposal ID plus logical pending-token fields. These are
+observations of the existing pinned Target input and do not change it. Non-Oracle Draft messages
+still contain no Target logits, frozen reference output, acceptance labels or future tokens.
+
 Target process ownership is separate from scheduler semantics. Phase 4B.0a launches the Target
 coordinator with Python `start_new_session=True`, records its PID/PGID/session and all observed
 members, propagates the coordinator exit code, and checks the complete owned group. A wrapper that

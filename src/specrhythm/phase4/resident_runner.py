@@ -123,8 +123,8 @@ def run_resident_target(
 ) -> dict[str, Any]:
     """Run a real-KV decode-only Target pass; never derive performance metrics."""
 
-    if request_count not in {2, 5}:
-        raise ValueError("Phase-4B.0b Gate B allows only 2 or 5 requests")
+    if request_count not in {2, 5, 100}:
+        raise ValueError("Phase-4B resident correctness allows only 2, 5, or 100 requests")
     for path in (
         context_path,
         decode_ready_manifest_path,
@@ -166,7 +166,7 @@ def run_resident_target(
     if draft_ready.get("schema_version") != "specrhythm.phase4-draft-service-ready.v1":
         raise RuntimeError("resident Target Draft service evidence has the wrong schema")
     requests = load_smoke_requests(
-        workload_path, request_count, require_task_mixture=request_count == 5
+        workload_path, request_count, require_task_mixture=request_count in {5, 100}
     )
     context = build_decode_ready_context(
         config,

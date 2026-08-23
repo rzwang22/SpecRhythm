@@ -227,6 +227,7 @@ def test_async_draft_controller_correction_bonus_and_one_inflight(tmp_path):
     controller.enqueue("commit_and_propose", [commit])
     second = _wait_ready(controller)
     assert second["proposal"]["round_id"] == 1
+    assert second["draft_sync_complete_ns"] <= second["proposal"]["draft_start_ns"]
     assert backend.rollback_calls == [("A", 1)]
     assert backend.appended == [("A", 20)]
     assert controller.shutdown()["shutdown"] is True
