@@ -3,7 +3,11 @@
 This is the active 3×A800 procedure after Phase 4B.0. It runs correctness only. It must not be
 used to report TPOT, latency, throughput, goodput, SLO, speedup or overlap benefit. Stop on the
 first nonzero command. Never reuse a run directory, delete an earlier failure, or run Gate 2/3
-after an earlier gate fails.
+after an earlier gate fails. In particular, keep the earlier preparation root containing the
+intermittent corrected-100 stock nondeterminism failure unchanged as diagnostic provenance. Use a
+fresh `SR_PHASE4B_ROOT`; do not repeat that failed freeze in place or in new directories merely to
+obtain a favorable pair. A later investigation must be a separately authorized diagnostic run,
+not part of this gate procedure.
 
 ## 1. Exact checkout and environment
 
@@ -37,7 +41,7 @@ test -f "$SR_TARGET_MODEL/config.json"
 test -f "$SR_R3_100"
 test "$(wc -l < "$SR_R3_100")" -eq 100
 test ! -e "$SR_PHASE4B_ROOT"
-mkdir -p "$SR_PHASE4B_ROOT/workloads" "$SR_PHASE4B_ROOT/references"
+mkdir -p "$SR_PHASE4B_ROOT/workloads"
 nvidia-smi -L | tee "$SR_PHASE4B_ROOT/nvidia-smi-L.txt"
 nvidia-smi topo -m | tee "$SR_PHASE4B_ROOT/nvidia-smi-topo.txt"
 
@@ -99,7 +103,13 @@ find "$SR_PHASE4B_ROOT/workloads" -type f -print0 | sort -z | xargs -0 sha256sum
   > "$SR_PHASE4B_ROOT/workload-sha256.txt"
 ```
 
-## 2. Probe, immutable stock references and pinned patch stack
+## 2. Probe stock vLLM only
+
+This section does not freeze any Gate reference and does not apply the patch stack. References are
+measured only immediately before their dependent gate. A failed two-run pair always leaves an
+immutable `stock-determinism-diagnostic.json` containing both raw runs and exact per-request first
+divergences; it never creates a reference and must not be followed by another freeze attempt in
+this gate procedure.
 
 ```bash
 git -C "$SR_VLLM_SOURCE" checkout --detach \
@@ -107,11 +117,7 @@ git -C "$SR_VLLM_SOURCE" checkout --detach \
 test "$(git -C "$SR_VLLM_SOURCE" rev-parse HEAD)" = \
   "752a3a504485790a2e8491cacbb35c137339ad34"
 
-python integrations/vllm/manage_patch.py restore \
-  --vllm-root "$SR_VLLM_ROOT" --source "$SR_VLLM_SOURCE"
-python integrations/vllm/manage_patch.py check \
-  --vllm-root "$SR_VLLM_ROOT" --source "$SR_VLLM_SOURCE" \
-  --manifest "$SR_PHASE4B_ROOT/vllm-stock-check.json"
+phase4b1_restore_stock "$SR_PHASE4B_ROOT/preparation-stock-probe"
 
 env -u CUDA_VISIBLE_DEVICES VLLM_BATCH_INVARIANT=1 specrhythm phase4-probe \
   --config "$SR_PHASE4B_CONFIG" --vllm-source "$SR_VLLM_SOURCE" \
@@ -126,29 +132,6 @@ specrhythm phase4-batch-invariant-preflight \
   --correctness-mode batch-invariant \
   --output "$SR_PHASE4B_ROOT/batch-invariant-preflight.json"
 
-for item in gate1:2:controlled-2 gate2:5:corrected-5 gate3:100:corrected-100; do
-  IFS=: read -r gate count stem <<<"$item"
-  ref="$SR_PHASE4B_ROOT/references/$gate"
-  mkdir -p "$ref"
-  CUDA_VISIBLE_DEVICES=1,2 VLLM_USE_V2_MODEL_RUNNER=0 VLLM_BATCH_INVARIANT=1 \
-  specrhythm phase4-stock-reference \
-    --config "$SR_PHASE4B_CONFIG" \
-    --correctness-mode batch-invariant --request-count "$count" \
-    --workload "$SR_PHASE4B_ROOT/workloads/$stem.jsonl" \
-    --environment "$SR_PHASE4B_ENVIRONMENT" --topology "$SR_PHASE4B_TOPOLOGY" \
-    --runtime-manifest "$ref/runtime-manifest.json" \
-    --output "$ref/stock-target-reference.json" \
-    2>&1 | tee "$ref/stock-reference.log"
-  chmod a-w "$ref/stock-target-reference.json"
-done
-
-python integrations/vllm/manage_patch.py apply \
-  --vllm-root "$SR_VLLM_ROOT" --source "$SR_VLLM_SOURCE" \
-  --manifest "$SR_PHASE4B_ROOT/vllm-patch-stack.json"
-export SR_PHASE4B_PATCH_MANIFEST="$SR_PHASE4B_ROOT/vllm-patch-stack.json"
-python integrations/vllm/manage_patch.py check \
-  --vllm-root "$SR_VLLM_ROOT" --source "$SR_VLLM_SOURCE" \
-  --manifest "$SR_PHASE4B_ROOT/vllm-patched-check.json"
 ```
 
 ## 3. Gate 1: two-request controlled correctness
@@ -161,7 +144,11 @@ results. The different output limits construct Case C.
 ```bash
 export SR_GATE1="$SR_PHASE4B_ROOT/Gate-1-controlled-2"
 export SR_GATE1_WORKLOAD="$SR_PHASE4B_ROOT/workloads/controlled-2.jsonl"
-export SR_GATE1_REFERENCE="$SR_PHASE4B_ROOT/references/gate1/stock-target-reference.json"
+export SR_GATE1_REFERENCE="$SR_GATE1/reference/stock-target-reference.json"
+
+phase4b1_restore_stock "$SR_GATE1/stock-stage"
+phase4b1_freeze_stock_reference "$SR_GATE1/reference" "$SR_GATE1_WORKLOAD" 2
+phase4b1_apply_patch_stack "$SR_GATE1/stock-stage"
 
 phase4b1_run_mode target "$SR_GATE1/target" "$SR_GATE1_WORKLOAD" 2 "$SR_GATE1_REFERENCE"
 phase4b1_run_mode serial "$SR_GATE1/serial" "$SR_GATE1_WORKLOAD" 2 "$SR_GATE1_REFERENCE"
@@ -174,25 +161,33 @@ specrhythm phase4b1-dual-controlled-validate \
   --request-state-events "$SR_GATE1/dual-1/request-state-events.jsonl" \
   --output "$SR_GATE1/controlled-validation.json"
 phase4b1_validate_gate "$SR_GATE1" "$SR_GATE1/dual-1" "$SR_GATE1/dual-2"
+phase4b1_require_outcome_a "$SR_GATE1/validation.json"
 ```
 
-If any command above fails, preserve `$SR_GATE1` and stop.
+If any command above fails, preserve `$SR_GATE1` and stop. In particular, a nondeterministic stock
+pair is a Gate 1 preparation failure even though its diagnostic artifact was written.
 
 ## 4. Gate 2: corrected R3-real five requests (3/1/1)
 
 ```bash
 export SR_GATE2="$SR_PHASE4B_ROOT/Gate-2-corrected-5"
 export SR_GATE2_WORKLOAD="$SR_PHASE4B_ROOT/workloads/corrected-5.jsonl"
-export SR_GATE2_REFERENCE="$SR_PHASE4B_ROOT/references/gate2/stock-target-reference.json"
+export SR_GATE2_REFERENCE="$SR_GATE2/reference/stock-target-reference.json"
+
+phase4b1_require_outcome_a "$SR_GATE1/validation.json"
+phase4b1_restore_stock "$SR_GATE2/stock-stage"
+phase4b1_freeze_stock_reference "$SR_GATE2/reference" "$SR_GATE2_WORKLOAD" 5
+phase4b1_apply_patch_stack "$SR_GATE2/stock-stage"
 
 phase4b1_run_mode target "$SR_GATE2/target" "$SR_GATE2_WORKLOAD" 5 "$SR_GATE2_REFERENCE"
 phase4b1_run_mode serial "$SR_GATE2/serial" "$SR_GATE2_WORKLOAD" 5 "$SR_GATE2_REFERENCE"
 phase4b1_run_mode dual "$SR_GATE2/dual-1" "$SR_GATE2_WORKLOAD" 5 "$SR_GATE2_REFERENCE" none
 phase4b1_run_mode dual "$SR_GATE2/dual-2" "$SR_GATE2_WORKLOAD" 5 "$SR_GATE2_REFERENCE" none
 phase4b1_validate_gate "$SR_GATE2" "$SR_GATE2/dual-1" "$SR_GATE2/dual-2"
+phase4b1_require_outcome_a "$SR_GATE2/validation.json"
 ```
 
-If any command above fails, preserve `$SR_GATE2` and stop.
+If any command above fails, preserve `$SR_GATE2` and stop. Gate 1 remains valid and untouched.
 
 ## 5. Gate 3: corrected R3-real 100 requests (60/20/20)
 
@@ -211,13 +206,22 @@ PY
 
 export SR_GATE3="$SR_PHASE4B_ROOT/Gate-3-corrected-100"
 export SR_GATE3_WORKLOAD="$SR_PHASE4B_ROOT/workloads/corrected-100.jsonl"
-export SR_GATE3_REFERENCE="$SR_PHASE4B_ROOT/references/gate3/stock-target-reference.json"
+export SR_GATE3_REFERENCE="$SR_GATE3/reference/stock-target-reference.json"
+
+phase4b1_restore_stock "$SR_GATE3/stock-stage"
+phase4b1_freeze_stock_reference "$SR_GATE3/reference" "$SR_GATE3_WORKLOAD" 100
+phase4b1_apply_patch_stack "$SR_GATE3/stock-stage"
 
 phase4b1_run_mode target "$SR_GATE3/target" "$SR_GATE3_WORKLOAD" 100 "$SR_GATE3_REFERENCE"
 phase4b1_run_mode serial "$SR_GATE3/serial" "$SR_GATE3_WORKLOAD" 100 "$SR_GATE3_REFERENCE"
 phase4b1_run_mode dual "$SR_GATE3/dual-1" "$SR_GATE3_WORKLOAD" 100 "$SR_GATE3_REFERENCE" none
 phase4b1_validate_gate "$SR_GATE3" "$SR_GATE3/dual-1"
+phase4b1_require_outcome_a "$SR_GATE3/validation.json"
 ```
+
+The corrected-100 freeze executes exactly one pair. If it returns nonzero, inspect
+`$SR_GATE3/reference/stock-determinism-diagnostic.json`, preserve the complete Gate 3 directory,
+and stop. Do not run another freeze to obtain a favorable pair and do not run Gate 3 consumers.
 
 ## 6. Final immutability manifest and expected artifacts
 
@@ -243,7 +247,10 @@ Every mode directory contains its run JSON, decode-ready manifest, setup control
 Target diagnostics, plugin report and process-lifecycle artifact. Dual directories additionally
 contain request-state, proposal-round, proposal-lifecycle, scheduler, verification, Draft-work,
 transport, cycle, overlap and output-checkpoint artifacts. Every gate contains `validation.json`
-and `validation.md`; Gate 1 also contains `controlled-validation.json`.
+and `validation.md`; Gate 1 also contains `controlled-validation.json`. Every attempted gate has
+`reference/stock-determinism-diagnostic.json` with both raw stock runs. The immutable stock
+reference exists only when that same pair is deterministic. `stock-stage/` records the exact
+restore/check and re-applied patch manifests for that gate.
 
 After the commands finish, report the root path and the three validation JSON files, then stop.
 Do not start Phase 4B.2, Dual-Eager, packed-tree verification, KVConnector, performance or SLO

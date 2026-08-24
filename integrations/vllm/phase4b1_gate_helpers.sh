@@ -3,6 +3,116 @@
 # Source after phase4b_run_helpers.sh. These functions collect correctness
 # artifacts only. They intentionally expose no latency/performance switch.
 
+phase4b1_require_patch_environment () {
+  for phase4b1_name in SR_VLLM_ROOT SR_VLLM_SOURCE; do
+    test -n "${!phase4b1_name:-}" || {
+      echo "required vLLM patch environment variable is missing: $phase4b1_name" >&2
+      return 2
+    }
+  done
+}
+
+phase4b1_require_reference_environment () {
+  phase4b1_require_patch_environment || return
+  for phase4b1_name in \
+      SR_PHASE4B_CONFIG SR_PHASE4B_ENVIRONMENT SR_PHASE4B_TOPOLOGY \
+      SR_PHASE4B_COMMIT; do
+    test -n "${!phase4b1_name:-}" || {
+      echo "required stock-reference environment variable is missing: $phase4b1_name" >&2
+      return 2
+    }
+  done
+}
+
+phase4b1_restore_stock () {
+  phase4b1_require_patch_environment || return
+  phase4b1_stage_dir="$1"
+  test ! -e "$phase4b1_stage_dir" || {
+    echo "refusing to reuse immutable stock stage: $phase4b1_stage_dir" >&2
+    return 2
+  }
+  mkdir -p "$phase4b1_stage_dir"
+  python integrations/vllm/manage_patch.py restore \
+    --vllm-root "$SR_VLLM_ROOT" --source "$SR_VLLM_SOURCE"
+  python integrations/vllm/manage_patch.py check \
+    --vllm-root "$SR_VLLM_ROOT" --source "$SR_VLLM_SOURCE" \
+    --manifest "$phase4b1_stage_dir/vllm-stock-check.json"
+}
+
+phase4b1_freeze_stock_reference () {
+  phase4b1_require_reference_environment || return
+  phase4b1_reference_dir="$1"
+  phase4b1_workload="$2"
+  phase4b1_count="$3"
+  test ! -e "$phase4b1_reference_dir" || {
+    echo "refusing to reuse immutable stock reference directory: $phase4b1_reference_dir" >&2
+    return 2
+  }
+  mkdir -p "$phase4b1_reference_dir"
+  if ! CUDA_VISIBLE_DEVICES=1,2 VLLM_USE_V2_MODEL_RUNNER=0 \
+      VLLM_BATCH_INVARIANT=1 \
+      python integrations/vllm/phase4b1_stock_reference.py \
+        --config "$SR_PHASE4B_CONFIG" \
+        --correctness-mode batch-invariant \
+        --request-count "$phase4b1_count" \
+        --workload "$phase4b1_workload" \
+        --environment "$SR_PHASE4B_ENVIRONMENT" \
+        --topology "$SR_PHASE4B_TOPOLOGY" \
+        --runtime-manifest "$phase4b1_reference_dir/runtime-manifest.json" \
+        --determinism-diagnostic \
+          "$phase4b1_reference_dir/stock-determinism-diagnostic.json" \
+        --output "$phase4b1_reference_dir/stock-target-reference.json" \
+        >"$phase4b1_reference_dir/stock-reference.log" 2>&1; then
+    cat "$phase4b1_reference_dir/stock-reference.log" >&2
+    echo "stock reference failed; preserve this directory and do not retry in place" >&2
+    return 1
+  fi
+  python - "$phase4b1_reference_dir/stock-determinism-diagnostic.json" <<'PY'
+import json
+import sys
+value = json.load(open(sys.argv[1], encoding="utf-8"))
+assert value["valid"] is True
+assert value["outcome"] == "deterministic"
+assert value["retry_count"] == 0
+assert value["retry_until_success"] is False
+assert value["divergent_request_count"] == 0
+assert value["reference_freeze_eligible"] is True
+PY
+  test -f "$phase4b1_reference_dir/stock-target-reference.json"
+}
+
+phase4b1_apply_patch_stack () {
+  phase4b1_require_patch_environment || return
+  phase4b1_stage_dir="$1"
+  test -d "$phase4b1_stage_dir" || {
+    echo "patch stage directory does not exist: $phase4b1_stage_dir" >&2
+    return 2
+  }
+  test ! -e "$phase4b1_stage_dir/vllm-patch-stack.json" || {
+    echo "refusing to overwrite gate patch manifest" >&2
+    return 2
+  }
+  python integrations/vllm/manage_patch.py apply \
+    --vllm-root "$SR_VLLM_ROOT" --source "$SR_VLLM_SOURCE" \
+    --manifest "$phase4b1_stage_dir/vllm-patch-stack.json"
+  export SR_PHASE4B_PATCH_MANIFEST="$phase4b1_stage_dir/vllm-patch-stack.json"
+  python integrations/vllm/manage_patch.py check \
+    --vllm-root "$SR_VLLM_ROOT" --source "$SR_VLLM_SOURCE" \
+    --manifest "$phase4b1_stage_dir/vllm-patched-check.json"
+}
+
+phase4b1_require_outcome_a () {
+  python - "$1" <<'PY'
+import json
+import sys
+value = json.load(open(sys.argv[1], encoding="utf-8"))
+assert value["valid"] is True
+assert value["outcome"] == "A"
+assert value["errors"] == []
+assert value["input_artifacts_immutable"] is True
+PY
+}
+
 phase4b1_require_environment () {
   for phase4b1_name in \
       SR_PHASE4B_CONFIG SR_PHASE4B_ENVIRONMENT SR_PHASE4B_TOPOLOGY \
