@@ -1,15 +1,24 @@
 from __future__ import annotations
 
+import importlib.util
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-from integrations.vllm import phase4b1_stock_reference as stock_helper
-from integrations.vllm.phase4b1_stock_reference import (
-    DIAGNOSTIC_SCHEMA,
-    build_stock_determinism_diagnostic,
+SCRIPT = (
+    Path(__file__).resolve().parents[1]
+    / "integrations"
+    / "vllm"
+    / "phase4b1_stock_reference.py"
 )
+SPEC = importlib.util.spec_from_file_location("phase4b1_stock_reference", SCRIPT)
+assert SPEC is not None and SPEC.loader is not None
+stock_helper = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(stock_helper)
+DIAGNOSTIC_SCHEMA = stock_helper.DIAGNOSTIC_SCHEMA
+build_stock_determinism_diagnostic = stock_helper.build_stock_determinism_diagnostic
 
 
 def _smoke():
