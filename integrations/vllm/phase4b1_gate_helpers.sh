@@ -36,6 +36,7 @@ phase4b1_restore_stock () {
     --vllm-root "$SR_VLLM_ROOT" --source "$SR_VLLM_SOURCE"
   python integrations/vllm/manage_patch.py check \
     --vllm-root "$SR_VLLM_ROOT" --source "$SR_VLLM_SOURCE" \
+    --expect-state stock \
     --manifest "$phase4b1_stage_dir/vllm-stock-check.json"
 }
 
@@ -98,6 +99,7 @@ phase4b1_apply_patch_stack () {
   export SR_PHASE4B_PATCH_MANIFEST="$phase4b1_stage_dir/vllm-patch-stack.json"
   python integrations/vllm/manage_patch.py check \
     --vllm-root "$SR_VLLM_ROOT" --source "$SR_VLLM_SOURCE" \
+    --expect-state patched \
     --manifest "$phase4b1_stage_dir/vllm-patched-check.json"
 }
 

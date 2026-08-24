@@ -170,6 +170,13 @@ throughput, latency improvement, or production readiness. See
 [phase4b-dual-batch.md](phase4b-dual-batch.md). The active server procedure is
 [phase4b1-dual-correctness-runbook.md](phase4b1-dual-correctness-runbook.md).
 
+The first Gate-1-only preparation at `b9a0d6d` froze a deterministic controlled-2 stock reference
+and applied all three pinned patches to their exact final hashes, then stopped before any serving
+run because its helper incorrectly reused the stock-only checker for the patched installation.
+This was not a Dual correctness failure. Patch-state validation now has mutually exclusive exact
+`stock` and `patched` modes, immutable success/failure manifests, and explicit helper calls. A
+fresh Gate-1-only A800 rerun is required; the earlier root remains immutable provenance.
+
 ## Phase 3.0: GPU readiness and real-trace runner
 
 Phase 3.0 is stacked on the frozen PR #2 head and does not modify its simulator algorithms or

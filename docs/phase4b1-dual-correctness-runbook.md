@@ -9,6 +9,20 @@ fresh `SR_PHASE4B_ROOT`; do not repeat that failed freeze in place or in new dir
 obtain a favorable pair. A later investigation must be a separately authorized diagnostic run,
 not part of this gate procedure.
 
+The real-A800 root ending in
+`b9a0d6dc.../phase4b1-gate1-only-20260824T053635Z` is also immutable diagnostic provenance.
+Its controlled-2 stock pair was deterministic and its three-layer patch application reached the
+expected runner and scheduler hashes. Preparation then stopped because the helper mistakenly ran
+a stock-state check against that patched installation. No Target, Serial or Dual consumer was
+started, so this root is a control-plane preparation failure, not a Gate 1 correctness failure.
+Do not reuse it.
+
+`phase4b1_restore_stock` now emits an immutable `check --expect-state stock` manifest, while
+`phase4b1_apply_patch_stack` emits a distinct immutable `check --expect-state patched` manifest.
+Each state accepts only its exact pinned runner/scheduler SHA pair; a partial or opposite state
+fails closed. For the recovery run, use a fresh root ending in `phase4b1-gate1-only-...`, execute
+Sections 1–3 only, confirm Gate 1 Outcome A, and stop before Section 4.
+
 ## 1. Exact checkout and environment
 
 ```bash
@@ -28,7 +42,7 @@ export SR_TARGET_MODEL="/root/autodl-tmp/models/Qwen3-32B"
 export SR_VLLM_SOURCE="/root/autodl-tmp/src/vllm-v0.25.1"
 export SR_PHASE3C_COMMIT="34c7ea9836c2595c8a8aeaeb5680709520edd3d8"
 export SR_R3_100="/root/autodl-tmp/SpecRhythm-data/results/phase3c/$SR_PHASE3C_COMMIT/corrected-multiround-100/workload.jsonl"
-export SR_PHASE4B_ROOT="/root/autodl-tmp/SpecRhythm-data/results/phase4/$SR_PHASE4B_COMMIT/phase4b1-dual-correctness-$(date -u +%Y%m%dT%H%M%SZ)"
+export SR_PHASE4B_ROOT="/root/autodl-tmp/SpecRhythm-data/results/phase4/$SR_PHASE4B_COMMIT/phase4b1-gate1-only-$(date -u +%Y%m%dT%H%M%SZ)"
 export SR_PHASE4B_CONFIG="$PWD/configs/phase4b_dual_batch_1d2v.yaml"
 export SR_VLLM_ROOT="$(python - <<'PY'
 from importlib import metadata
@@ -166,6 +180,16 @@ phase4b1_require_outcome_a "$SR_GATE1/validation.json"
 
 If any command above fails, preserve `$SR_GATE1` and stop. In particular, a nondeterministic stock
 pair is a Gate 1 preparation failure even though its diagnostic artifact was written.
+For the current recovery run, also stop after successful `phase4b1_require_outcome_a`; do not run
+Sections 4–6. Record a Gate1-only checksum manifest with:
+
+```bash
+find "$SR_PHASE4B_ROOT" -type f ! -name 'gate1-artifacts-sha256.txt' -print0 \
+  | sort -z | xargs -0 sha256sum > "$SR_PHASE4B_ROOT/gate1-artifacts-sha256.txt"
+cat "$SR_GATE1/stock-stage/vllm-stock-check.json"
+cat "$SR_GATE1/stock-stage/vllm-patched-check.json"
+cat "$SR_GATE1/validation.json"
+```
 
 ## 4. Gate 2: corrected R3-real five requests (3/1/1)
 

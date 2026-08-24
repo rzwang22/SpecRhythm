@@ -29,8 +29,12 @@ scheduler hook in `0002`, and adds observational forward timestamps in `0003`. T
 policy and predicate remain outside vLLM source and are explicitly enabled only for the
 correctness run.
 
-Run `python integrations/vllm/manage_patch.py check ...` before applying the stack. The manager
-checks both exact base/installed file SHA256 values, applies in order without fuzzy matching,
-records every patch plus original/patched source checksums, and restores in reverse order. A
-Phase-4A installation containing only the prior worker patch can still be restored. Do not apply
-the stack to another vLLM commit.
+Run `python integrations/vllm/manage_patch.py check --expect-state stock ...` before applying the
+stack and `check --expect-state patched ...` afterward. Omitting `--expect-state` preserves the
+legacy stock-check behavior. The two states are mutually exclusive exact runner/scheduler SHA256
+pairs; neither accepts partial or opposite-state installations. When `--manifest` is supplied,
+the check publishes a new immutable diagnostic containing the expected state, actual hashes,
+pinned source commit, active patch hashes and validity. The manager applies in order without fuzzy
+matching, records every patch plus original/patched source checksums, and restores in reverse
+order. A Phase-4A installation containing only the prior worker patch can still be restored. Do
+not apply the stack to another vLLM commit.

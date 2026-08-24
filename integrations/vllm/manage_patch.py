@@ -11,7 +11,7 @@ import subprocess
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping, Optional
+from typing import Any, Mapping, Optional, Sequence
 
 BASE_COMMIT = "752a3a504485790a2e8491cacbb35c137339ad34"
 TARGET_FILE = Path("vllm/v1/worker/gpu_model_runner.py")
@@ -38,6 +38,16 @@ LEGACY_PATCHED_SHA256 = (
     "ba307cbfdfa9079c04e1bf9bb6387eb923cbabb1eea811e720a94897ea6483fa"
 )
 LEGACY_PATCH = Path(__file__).parent / "patches" / "0000-phase4a1-legacy-hooks.patch"
+
+STOCK_STATE = {
+    str(TARGET_FILE): BASE_SHA256,
+    str(SCHEDULER_FILE): SCHEDULER_BASE_SHA256,
+}
+PATCHED_STATE = {
+    str(TARGET_FILE): PATCHED_SHA256,
+    str(SCHEDULER_FILE): SCHEDULER_PATCHED_SHA256,
+}
+EXPECTED_STATES = {"stock": STOCK_STATE, "patched": PATCHED_STATE}
 
 
 def sha256(path: Path) -> str:
@@ -93,13 +103,146 @@ def atomic_json(path: Path, value: Mapping[str, Any]) -> None:
         raise
 
 
-def main() -> int:
+def exclusive_json(path: Path, value: Mapping[str, Any]) -> None:
+    """Atomically publish a JSON artifact without replacing an existing file."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    temporary_path = Path(temporary)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump(value, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.link(temporary_path, path)
+        path.chmod(0o444)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+
+
+def expected_state_hashes(expected_state: str) -> Mapping[str, str]:
+    try:
+        return EXPECTED_STATES[expected_state]
+    except KeyError as error:
+        raise ValueError(f"unknown vLLM patch state: {expected_state}") from error
+
+
+def patch_stack(active_runner_patch: Path = PATCH) -> list[Mapping[str, Any]]:
+    return [
+        {
+            "order": 1,
+            "patch_file": active_runner_patch.name,
+            "patch_sha256": sha256(active_runner_patch),
+            "target_file": str(TARGET_FILE),
+            "original_source_sha256": BASE_SHA256,
+            "patched_source_sha256": WORKER_HOOKS_SHA256,
+        },
+        {
+            "order": 2,
+            "patch_file": SCHEDULER_PATCH.name,
+            "patch_sha256": sha256(SCHEDULER_PATCH),
+            "target_file": str(SCHEDULER_FILE),
+            "original_source_sha256": SCHEDULER_BASE_SHA256,
+            "patched_source_sha256": SCHEDULER_PATCHED_SHA256,
+        },
+        {
+            "order": 3,
+            "patch_file": TIMING_PATCH.name,
+            "patch_sha256": sha256(TIMING_PATCH),
+            "target_file": str(TARGET_FILE),
+            "original_source_sha256": WORKER_HOOKS_SHA256,
+            "patched_source_sha256": PATCHED_SHA256,
+        },
+    ]
+
+
+def build_check_report(
+    *,
+    root: Path,
+    actual: Mapping[str, str],
+    expected_state: str,
+    verified_source_commit: Optional[str],
+) -> Mapping[str, Any]:
+    expected = expected_state_hashes(expected_state)
+    errors = [
+        f"{relative} SHA256 is {actual[relative]}, expected {expected_sha}"
+        for relative, expected_sha in expected.items()
+        if actual[relative] != expected_sha
+    ]
+    stack = patch_stack()
+    return {
+        "schema_version": "specrhythm.vllm-patch-state-check.v1",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "operation": "check",
+        "expected_state": expected_state,
+        "valid": not errors,
+        "errors": errors,
+        "vllm_version": "0.25.1",
+        "vllm_base_commit": BASE_COMMIT,
+        "pinned_source_commit": BASE_COMMIT,
+        "verified_source_commit": verified_source_commit,
+        "vllm_root": str(root),
+        "actual_runner_sha256": actual[str(TARGET_FILE)],
+        "actual_scheduler_sha256": actual[str(SCHEDULER_FILE)],
+        "expected_runner_sha256": expected[str(TARGET_FILE)],
+        "expected_scheduler_sha256": expected[str(SCHEDULER_FILE)],
+        "active_patch_hashes": {
+            row["patch_file"]: row["patch_sha256"] for row in stack
+        },
+        "patch_stack": stack,
+        "patch_stack_applied": expected_state == "patched" and not errors,
+        "patch_applied": actual[str(TARGET_FILE)] == PATCHED_SHA256,
+        "source_files": {
+            relative: {
+                "actual_sha256": actual[relative],
+                "expected_sha256": expected[relative],
+            }
+            for relative in sorted(actual)
+        },
+        "manifest_immutable": True,
+    }
+
+
+def run_state_check(
+    *,
+    root: Path,
+    actual: Mapping[str, str],
+    expected_state: str,
+    verified_source_commit: Optional[str],
+    manifest: Optional[Path],
+) -> int:
+    report = build_check_report(
+        root=root,
+        actual=actual,
+        expected_state=expected_state,
+        verified_source_commit=verified_source_commit,
+    )
+    if manifest is not None:
+        exclusive_json(manifest, report)
+    print(json.dumps(report, indent=2, sort_keys=True))
+    if not report["valid"]:
+        raise SystemExit(
+            f"refusing check --expect-state {expected_state}: "
+            + "; ".join(report["errors"])
+        )
+    return 0
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("operation", choices=("check", "apply", "restore"))
     parser.add_argument("--vllm-root", required=True)
     parser.add_argument("--source")
     parser.add_argument("--manifest")
-    args = parser.parse_args()
+    parser.add_argument(
+        "--expect-state",
+        choices=tuple(EXPECTED_STATES),
+        help="exact installed state required by check (default: stock)",
+    )
+    args = parser.parse_args(argv)
+    if args.operation != "check" and args.expect_state is not None:
+        parser.error("--expect-state is valid only with the check operation")
     root = Path(args.vllm_root).resolve()
     source = Path(args.source).resolve() if args.source else None
     commit = source_commit(source)
@@ -109,7 +252,15 @@ def main() -> int:
         if not path.is_file():
             raise SystemExit(f"missing installed vLLM file: {path}")
     before = {str(TARGET_FILE): sha256(target), str(SCHEDULER_FILE): sha256(scheduler)}
-    if args.operation in {"check", "apply"}:
+    if args.operation == "check":
+        return run_state_check(
+            root=root,
+            actual=before,
+            expected_state=args.expect_state or "stock",
+            verified_source_commit=commit,
+            manifest=Path(args.manifest).resolve() if args.manifest else None,
+        )
+    if args.operation == "apply":
         expected = {
             str(TARGET_FILE): {BASE_SHA256},
             str(SCHEDULER_FILE): {SCHEDULER_BASE_SHA256},
@@ -169,43 +320,13 @@ def main() -> int:
             SCHEDULER_PATCHED_SHA256 if args.operation == "apply" else SCHEDULER_BASE_SHA256
         ),
     }
-    if args.operation == "check":
-        expected_after = {
-            str(TARGET_FILE): BASE_SHA256,
-            str(SCHEDULER_FILE): SCHEDULER_BASE_SHA256,
-        }
     for relative, expected_sha in expected_after.items():
         if after[relative] != expected_sha:
             raise SystemExit(
                 f"post-operation {relative} SHA256 is {after[relative]}, "
                 f"expected {expected_sha}"
             )
-    stack = [
-        {
-            "order": 1,
-            "patch_file": active_runner_patch.name,
-            "patch_sha256": sha256(active_runner_patch),
-            "target_file": str(TARGET_FILE),
-            "original_source_sha256": BASE_SHA256,
-            "patched_source_sha256": WORKER_HOOKS_SHA256,
-        },
-        {
-            "order": 2,
-            "patch_file": SCHEDULER_PATCH.name,
-            "patch_sha256": sha256(SCHEDULER_PATCH),
-            "target_file": str(SCHEDULER_FILE),
-            "original_source_sha256": SCHEDULER_BASE_SHA256,
-            "patched_source_sha256": SCHEDULER_PATCHED_SHA256,
-        },
-        {
-            "order": 3,
-            "patch_file": TIMING_PATCH.name,
-            "patch_sha256": sha256(TIMING_PATCH),
-            "target_file": str(TARGET_FILE),
-            "original_source_sha256": WORKER_HOOKS_SHA256,
-            "patched_source_sha256": PATCHED_SHA256,
-        },
-    ]
+    stack = patch_stack(active_runner_patch)
     report = {
         "schema_version": "specrhythm.vllm-base-and-patch-manifest.v1",
         "timestamp": datetime.now(timezone.utc).isoformat(),
