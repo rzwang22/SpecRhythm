@@ -362,6 +362,7 @@ def run_resident_dual_batch(
     git_commit: str,
     microbatch_size: int = 2,
     test_coordination: str = "none",
+    overlap_requirement: str = "required",
 ) -> dict[str, Any]:
     """Run real decode-only resident Dual correctness without performance claims."""
 
@@ -371,6 +372,8 @@ def run_resident_dual_batch(
         raise ValueError("Dual microbatch size must be positive")
     if test_coordination not in {"none", "one-ready", "two-ready"}:
         raise ValueError("unknown test-only readiness coordination")
+    if overlap_requirement not in {"required", "separate-gate"}:
+        raise ValueError("unknown overlap requirement")
     artifacts = (
         context_path,
         decode_ready_manifest_path,
@@ -544,14 +547,16 @@ def run_resident_dual_batch(
     _write_checkpoint_rows(overlap_events_path, overlap_rows, resume=False)
     decode_rows = _decode_rows(serialized, manifest)
     plugin_report = _load_object(plugin_report_path)
+    overlap_errors = validate_overlap_witness(overlap_rows)
     errors = [
         *validate_request_state_events(state_rows),
         *validate_proposal_lifecycle_events(lifecycle_rows),
         *validate_scheduler_cycles(scheduler_rows),
         *validate_round_accounting(proposal_rows),
-        *validate_overlap_witness(overlap_rows),
         *_validate_request_identity_report(plugin_report, requests),
     ]
+    if overlap_requirement == "required":
+        errors.extend(overlap_errors)
     measurement_start_ns = manifest.measurement_start_ns
     for row in lifecycle_rows:
         if (
@@ -625,6 +630,12 @@ def run_resident_dual_batch(
             "dual_eager": False,
             "kv_connector": False,
             "test_only_readiness_coordination": test_coordination,
+            "overlap_requirement": overlap_requirement,
+        },
+        "overlap_gate": {
+            "required_for_run_validity": overlap_requirement == "required",
+            "valid": not overlap_errors,
+            "errors": overlap_errors,
         },
         "evidence_counts": {
             "state_events": len(state_rows),

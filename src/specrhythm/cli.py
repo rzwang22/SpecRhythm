@@ -801,6 +801,12 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("none", "one-ready", "two-ready"),
         default="none",
     )
+    phase4b1_dual_run.add_argument(
+        "--overlap-requirement",
+        choices=("required", "separate-gate"),
+        default="required",
+        help="keep physical overlap mandatory or report it for a separate gate",
+    )
 
     phase4b1_validate = subparsers.add_parser(
         "phase4b1-dual-correctness-validate",
@@ -828,6 +834,26 @@ def build_parser() -> argparse.ArgumentParser:
         phase4b1_validate.add_argument(f"--{name}", action="append", required=True)
     phase4b1_validate.add_argument("--output", required=True)
     phase4b1_validate.add_argument("--markdown-output", required=True)
+    phase4b1_validate.add_argument(
+        "--overlap-requirement",
+        choices=("required", "separate-gate"),
+        default="required",
+    )
+
+    phase4b1_overlap_diagnose = subparsers.add_parser(
+        "phase4b1-overlap-diagnose",
+        help="read-only nearest Draft/Verify interval diagnosis",
+    )
+    phase4b1_overlap_diagnose.add_argument(
+        "--draft-work-events", action="append", required=True
+    )
+    phase4b1_overlap_diagnose.add_argument(
+        "--verification-events", action="append", required=True
+    )
+    phase4b1_overlap_diagnose.add_argument(
+        "--overlap-events", action="append", required=True
+    )
+    phase4b1_overlap_diagnose.add_argument("--output", required=True)
 
     phase4b1_controlled = subparsers.add_parser(
         "phase4b1-dual-controlled-validate",
@@ -1468,6 +1494,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 git_commit=_current_git_commit() or "unknown",
                 microbatch_size=args.microbatch_size,
                 test_coordination=args.test_coordination,
+                overlap_requirement=args.overlap_requirement,
             )
         except (
             FileExistsError,
@@ -1529,6 +1556,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 ],
                 output_path=Path(args.output).resolve(),
                 markdown_path=Path(args.markdown_output).resolve(),
+                overlap_requirement=args.overlap_requirement,
             )
         except (
             FileNotFoundError,
@@ -1540,6 +1568,35 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 "schema_version": VALIDATION_SCHEMA,
                 "valid": False,
                 "outcome": "FAIL",
+                "errors": [str(error)],
+                "performance_result": False,
+            }
+            _write_json(report, args.output)
+            return 1
+        return 0 if report["valid"] else 1
+    if args.command == "phase4b1-overlap-diagnose":
+        from specrhythm.phase4.dual_correctness import (
+            OVERLAP_DIAGNOSTIC_SCHEMA,
+            diagnose_overlap_artifacts,
+        )
+
+        try:
+            report = diagnose_overlap_artifacts(
+                draft_work_paths=[
+                    Path(path).resolve() for path in args.draft_work_events
+                ],
+                verification_paths=[
+                    Path(path).resolve() for path in args.verification_events
+                ],
+                overlap_paths=[
+                    Path(path).resolve() for path in args.overlap_events
+                ],
+                output_path=Path(args.output).resolve(),
+            )
+        except (FileNotFoundError, json.JSONDecodeError, RuntimeError, ValueError) as error:
+            report = {
+                "schema_version": OVERLAP_DIAGNOSTIC_SCHEMA,
+                "valid": False,
                 "errors": [str(error)],
                 "performance_result": False,
             }

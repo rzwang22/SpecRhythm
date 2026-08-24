@@ -223,11 +223,20 @@ def validate_admissibility_events(rows: Sequence[Mapping[str, Any]]) -> list[str
             errors.append(f"{prefix}: unsupported schema")
         if row.get("scheduled") and not row.get("admissible"):
             errors.append(f"{prefix}: inadmissible request was scheduled")
-        if row.get("scheduled") and row.get("scheduled_operation") == "none":
+        if (
+            row.get("scheduled")
+            and row.get("scheduled_operation") == ScheduledOperation.NONE.value
+        ):
             errors.append(f"{prefix}: scheduled request has no operation")
-        if not row.get("scheduled") and row.get("scheduled_operation") != "none":
+        if (
+            not row.get("scheduled")
+            and row.get("scheduled_operation") != ScheduledOperation.NONE.value
+        ):
             errors.append(f"{prefix}: unscheduled request names an operation")
-        if row.get("scheduled_operation") == "verify" and not row.get("proposal_valid"):
+        if (
+            row.get("scheduled_operation") == ScheduledOperation.VERIFY.value
+            and not row.get("proposal_valid")
+        ):
             errors.append(f"{prefix}: verify lacks a valid proposal")
     return errors
 
@@ -257,15 +266,19 @@ def validate_gate_a_construction(
             continue
         scheduled = set(cycle.get("scheduled_request_ids", ()))
         if (
-            waiting.get("specrhythm_state") in {"WAITING_DRAFT", "DRAFTING"}
-            and waiting.get("execution_phase") == "timed-decode"
+            waiting.get("specrhythm_state")
+            in {
+                SchedulerRequestState.WAITING_DRAFT.value,
+                SchedulerRequestState.DRAFTING.value,
+            }
+            and waiting.get("execution_phase") == ExecutionPhase.TIMED_DECODE.value
             and waiting.get("admissible") is False
             and waiting.get("scheduled") is False
             and not waiting.get("target_input_token_positions")
-            and prefill.get("execution_phase") == "setup-prefill"
+            and prefill.get("execution_phase") == ExecutionPhase.SETUP_PREFILL.value
             and prefill.get("admissible") is True
             and prefill.get("scheduled") is True
-            and prefill.get("scheduled_operation") == "prefill"
+            and prefill.get("scheduled_operation") == ScheduledOperation.PREFILL.value
             and scheduled == {prefill_request_id}
         ):
             matches.append(int(cycle.get("cycle_id", -1)))

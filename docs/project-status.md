@@ -162,10 +162,13 @@ no proposal; rank-zero manifest validation and the Target TP barrier precede mea
 proposals are asynchronous and post-boundary. The scheduler emits per-request decisions and a
 separate proposal lifecycle, while the unified validator compares Target, Serial and one or more
 Dual runs exactly, checks keyed repeats and all logical invariants, and proves that it did not
-mutate its inputs. Local CPU tests pass. The 2-request controlled, corrected R3-real 5-request and
-100-request A800 gates have not run, so no Dual Outcome A is currently claimed. Even Outcome A
-would establish correctness and overlap existence only—not speedup, goodput, SLO attainment,
-throughput, latency improvement, or production readiness. See
+mutate its inputs. Local CPU tests pass. A complete two-request run at `3ee1c3e` passed Target,
+Serial, both Dual executions, controlled Cases A/B/C, the exact output triangle, keyed
+repeatability and every semantic component except the scheduler validator and physical overlap.
+The scheduler failures are confirmed validator contract bugs: setup-prefill was judged by
+timed-decode rules and `legal-target-tail` was compared with a stale literal. The two requests
+produced no positive cross-request GPU interval. Therefore the preserved result is not a final
+Gate1 Outcome A and carries no performance claim. See
 [phase4b-decode-ready.md](phase4b-decode-ready.md) and
 [phase4b-dual-batch.md](phase4b-dual-batch.md). The active server procedure is
 [phase4b1-dual-correctness-runbook.md](phase4b1-dual-correctness-runbook.md).
@@ -183,7 +186,15 @@ Resident Serial then failed only when the common Target-forward observer accesse
 requests for speculative verification. Dual-1/Dual-2 did not run, so Gate1 remains not evaluated.
 The observer is now proposal-protocol-aware: it preserves a real canonical Dual ID and records
 `null` for Serial or no pending proposal. The Serial schema, execution semantics and all Dual
-scheduler/state/lifecycle logic remain unchanged. A full fresh Gate1-only rerun is pending.
+scheduler/state/lifecycle logic remain unchanged.
+
+Gate semantics are now separated without weakening evidence. Gate1 is controlled two-request
+semantic correctness and reports overlap independently. Gate1.5/Gate2 keeps positive physical
+overlap mandatory on at least five requests through the unchanged asynchronous path. Default
+validation remains overlap-required; only the controlled Gate1 runbook opts into the explicit
+`separate-gate` profile. The helper also preserves run and validator exit codes while always
+checking cleanup. A fresh Gate1-only rerun is pending; Gate1.5, Gate2/3, performance and SLO work
+remain blocked.
 
 ## Phase 3.0: GPU readiness and real-trace runner
 

@@ -5,10 +5,12 @@ from pathlib import Path
 
 import pytest
 
+from specrhythm import cli
 from specrhythm.phase4.admissibility import (
     AdmissibilitySnapshot,
     ExecutionPhase,
     ProposalEvidence,
+    ScheduledOperation,
     SchedulerRequestState,
     decide_admissibility,
     decision_event,
@@ -21,6 +23,8 @@ from specrhythm.phase4.decode_ready import (
 )
 from specrhythm.phase4.dual_correctness import (
     compare_consumer_triangle,
+    diagnose_overlap_artifacts,
+    diagnose_overlap_timing,
     validate_controlled_gate,
     validate_draft_sync,
     validate_overlap_witness,
@@ -28,6 +32,7 @@ from specrhythm.phase4.dual_correctness import (
     validate_proposal_lifecycle_events,
     validate_request_state_events,
     validate_round_accounting,
+    validate_scheduler_cycles,
     validate_verification_contracts,
 )
 from specrhythm.phase4.dual_service import DualDraftMachine
@@ -213,6 +218,92 @@ def test_cross_request_overlap_witness_requires_real_placement():
     assert validate_overlap_witness([witness])
 
 
+def test_overlap_diagnostic_reports_exact_nearest_zero_duration_pair(tmp_path):
+    draft = [
+        {
+            "request_id": "B",
+            "result": {
+                "proposal": {"proposal_id": "pB", "round_id": 0},
+                "draft_gpu_interval": {
+                    "host_start_ns": 10,
+                    "host_end_ns": 20,
+                    "physical_gpu_id": 0,
+                },
+            },
+        }
+    ]
+    verification = [
+        {
+            "verify_microbatch_id": "vA",
+            "verify_request_ids": ["A"],
+            "verify_host_start_ns": 25,
+            "verify_host_end_ns": 40,
+            "target_physical_gpu_ids": [1, 2],
+        }
+    ]
+    report = diagnose_overlap_timing(
+        draft, verification, [{"overlap_duration_ns": 0}]
+    )
+    assert report["valid"] is True
+    assert report["positive_overlap_observed"] is False
+    assert report["nearest_pair"] == {
+        "draft_request_id": "B",
+        "proposal_id": "pB",
+        "draft_round_id": 0,
+        "verify_microbatch_id": "vA",
+        "verify_request_ids": ["A"],
+        "draft_host_interval_ns": [10, 20],
+        "verify_host_interval_ns": [25, 40],
+        "signed_intersection_ns": -5,
+        "overlap_duration_ns": 0,
+        "separation_ns": 5,
+        "ordering": "draft-before-verify",
+        "draft_physical_gpu_id": 0,
+        "target_physical_gpu_ids": [1, 2],
+    }
+
+    paths = []
+    for name, rows in (
+        ("draft", draft),
+        ("verify", verification),
+        ("overlap", [{"overlap_duration_ns": 0}]),
+    ):
+        path = tmp_path / f"{name}.jsonl"
+        for row in rows:
+            CheckpointJsonl(path).append(row)
+        paths.append(path)
+    before = {str(path): sha256_file(path) for path in paths}
+    artifact = diagnose_overlap_artifacts(
+        draft_work_paths=[paths[0]],
+        verification_paths=[paths[1]],
+        overlap_paths=[paths[2]],
+        output_path=tmp_path / "diagnosis.json",
+    )
+    assert artifact["valid"] is True
+    assert artifact["input_artifacts_immutable"] is True
+    assert before == {str(path): sha256_file(path) for path in paths}
+    cli_output = tmp_path / "diagnosis-cli.json"
+    assert (
+        cli.main(
+            [
+                "phase4b1-overlap-diagnose",
+                "--draft-work-events",
+                str(paths[0]),
+                "--verification-events",
+                str(paths[1]),
+                "--overlap-events",
+                str(paths[2]),
+                "--output",
+                str(cli_output),
+            ]
+        )
+        == 0
+    )
+    assert json.loads(cli_output.read_text())["runs"][0]["nearest_pair"][
+        "separation_ns"
+    ] == 5
+
+
 def test_controlled_gate_proves_waiting_batching_and_terminal_progress(tmp_path):
     async_path = tmp_path / "async.jsonl"
     coordinated_path = tmp_path / "coordinated.jsonl"
@@ -273,7 +364,101 @@ def test_controlled_gate_proves_waiting_batching_and_terminal_progress(tmp_path)
     assert report["valid"] is True
 
 
-def test_full_triangle_validator_is_read_only_and_raw_order_is_diagnostic(tmp_path):
+def test_scheduler_validator_allows_real_waiting_setup_prefill_event():
+    snapshot = _snapshot(
+        "A",
+        SchedulerRequestState.WAITING_DRAFT,
+        proposal=False,
+        phase=ExecutionPhase.SETUP_PREFILL,
+    )
+    decision = decide_admissibility(snapshot)
+    assert decision.operation is ScheduledOperation.PREFILL
+    row = decision_event(
+        snapshot,
+        decision,
+        cycle_id=0,
+        scheduler_step=0,
+        scheduled=True,
+        target_input_positions=(0, 1, 2),
+    )
+    assert validate_scheduler_cycles([_scheduler_cycle_for(row)]) == []
+
+
+def test_scheduler_validator_rejects_waiting_timed_decode_scheduling():
+    snapshot = _snapshot(
+        "A", SchedulerRequestState.WAITING_DRAFT, proposal=False
+    )
+    row = decision_event(
+        snapshot,
+        decide_admissibility(snapshot),
+        cycle_id=0,
+        scheduler_step=0,
+        scheduled=True,
+        target_input_positions=(2,),
+    )
+    errors = validate_scheduler_cycles([_scheduler_cycle_for(row)])
+    assert any("waiting request consumed Target budget" in item for item in errors)
+
+
+def test_scheduler_validator_rejects_drafting_timed_decode_positions():
+    snapshot = _snapshot("A", SchedulerRequestState.DRAFTING, proposal=False)
+    row = decision_event(
+        snapshot,
+        decide_admissibility(snapshot),
+        cycle_id=0,
+        scheduler_step=0,
+        scheduled=False,
+        target_input_positions=(2,),
+    )
+    errors = validate_scheduler_cycles([_scheduler_cycle_for(row)])
+    assert any("waiting request owns Target positions" in item for item in errors)
+
+
+def test_scheduler_validator_accepts_exact_legal_target_tail():
+    snapshot = _snapshot(
+        "A", SchedulerRequestState.TARGET_TAIL_READY, proposal=False
+    )
+    decision = decide_admissibility(snapshot)
+    assert decision.operation is ScheduledOperation.TARGET_TAIL
+    row = decision_event(
+        snapshot,
+        decision,
+        cycle_id=0,
+        scheduler_step=0,
+        scheduled=True,
+        target_input_positions=(2,),
+    )
+    assert validate_scheduler_cycles([_scheduler_cycle_for(row)]) == []
+
+
+def test_scheduler_validator_rejects_arbitrary_timed_decode_advancement():
+    snapshot = _snapshot(
+        "A", SchedulerRequestState.TARGET_TAIL_READY, proposal=False
+    )
+    row = decision_event(
+        snapshot,
+        decide_admissibility(snapshot),
+        cycle_id=0,
+        scheduler_step=0,
+        scheduled=True,
+        target_input_positions=(2,),
+    )
+    row["scheduled_operation"] = "arbitrary-target-work"
+    errors = validate_scheduler_cycles([_scheduler_cycle_for(row)])
+    assert any("unexplained live Target advancement" in item for item in errors)
+
+
+@pytest.mark.parametrize(
+    ("overlap_requirement", "overlap_duration_ns", "expected_valid"),
+    (
+        ("required", 5, True),
+        ("required", 0, False),
+        ("separate-gate", 0, True),
+    ),
+)
+def test_full_triangle_validator_is_read_only_and_raw_order_is_diagnostic(
+    tmp_path, overlap_requirement, overlap_duration_ns, expected_valid
+):
     manifest = _manifest().to_dict()
     manifest_paths = [tmp_path / f"m-{index}.json" for index in range(4)]
     for path in manifest_paths:
@@ -310,7 +495,9 @@ def test_full_triangle_validator_is_read_only_and_raw_order_is_diagnostic(tmp_pa
             ],
             "drafts": [_draft_row(request) for request in order],
             "diagnostics": [_diagnostic(request) for request in order],
-            "overlaps": [_overlap()],
+            "overlaps": [
+                {**_overlap(), "overlap_duration_ns": overlap_duration_ns}
+            ],
         }
         for name, rows in values.items():
             path = tmp_path / f"{name}-{run_index}.jsonl"
@@ -350,14 +537,26 @@ def test_full_triangle_validator_is_read_only_and_raw_order_is_diagnostic(tmp_pa
         process_lifecycle_paths=artifacts["processes"],
         output_path=tmp_path / "validation.json",
         markdown_path=tmp_path / "validation.md",
+        overlap_requirement=overlap_requirement,
     )
-    assert report["valid"] is True
-    assert report["outcome"] == "A"
+    assert report["valid"] is expected_valid
+    assert report["outcome"] == ("A" if expected_valid else "FAIL")
+    assert report["overlap_requirement"] == overlap_requirement
+    assert report["overlap_gate"]["valid"] is bool(overlap_duration_ns)
+    assert report["dual_runs"][0]["overlap"]["valid"] is bool(
+        overlap_duration_ns
+    )
     assert report["repeat_comparisons"][0]["raw_event_order_equal"] is False
     assert before == {str(path): sha256_file(path) for path in inputs}
 
 
-def _snapshot(request_id, state, *, proposal):
+def _snapshot(
+    request_id,
+    state,
+    *,
+    proposal,
+    phase=ExecutionPhase.TIMED_DECODE,
+):
     evidence = ProposalEvidence(
         request_id=request_id,
         internal_request_id=f"opaque-{request_id}",
@@ -372,7 +571,7 @@ def _snapshot(request_id, state, *, proposal):
         internal_request_id=f"opaque-{request_id}",
         stable_request_id=request_id,
         state=state,
-        execution_phase=ExecutionPhase.TIMED_DECODE,
+        execution_phase=phase,
         prefix_version=1,
         round_id=0,
         prefix_token_count=3,
@@ -383,6 +582,16 @@ def _snapshot(request_id, state, *, proposal):
         proposal=evidence,
         now_ns=3,
     )
+
+
+def _scheduler_cycle_for(row):
+    return {
+        "cycle_id": row["cycle_id"],
+        "scheduled_request_ids": (
+            [row["request_id"]] if row["scheduled"] else []
+        ),
+        "request_admissibility": [row],
+    }
 
 
 def _state_rows(request_id, proposal_id):

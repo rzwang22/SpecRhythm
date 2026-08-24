@@ -11,7 +11,12 @@ import json
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Optional, Sequence
 
-from specrhythm.phase4.admissibility import validate_admissibility_events
+from specrhythm.phase4.admissibility import (
+    ExecutionPhase,
+    ScheduledOperation,
+    SchedulerRequestState,
+    validate_admissibility_events,
+)
 from specrhythm.phase4.correctness_validation import compare_round_semantics
 from specrhythm.phase4.decode_ready import load_decode_ready_manifest
 from specrhythm.phase4.manifest import atomic_write_json, sha256_file
@@ -21,6 +26,7 @@ from specrhythm.phase4.transport import CheckpointJsonl
 
 VALIDATION_SCHEMA = "specrhythm.phase4b1-dual-correctness-validation.v1"
 CONTROLLED_SCHEMA = "specrhythm.phase4b1-controlled-gate-validation.v1"
+OVERLAP_DIAGNOSTIC_SCHEMA = "specrhythm.phase4b1-overlap-timing-diagnostic.v1"
 
 _LEGAL_STATES = {
     "BOOTSTRAP": {"DRAFT_READY", "TERMINAL"},
@@ -58,11 +64,14 @@ def validate_phase4b1_dual_correctness(
     process_lifecycle_paths: Sequence[Path],
     output_path: Path,
     markdown_path: Optional[Path] = None,
+    overlap_requirement: str = "required",
 ) -> dict[str, Any]:
     """Validate one Target, one Serial, and one or more immutable Dual runs."""
 
     if not dual_paths:
         raise ValueError("at least one decode-only Dual run is required")
+    if overlap_requirement not in {"required", "separate-gate"}:
+        raise ValueError("unknown overlap requirement")
     paired = (
         dual_manifest_paths,
         state_event_paths,
@@ -175,6 +184,8 @@ def validate_phase4b1_dual_correctness(
             )
         )
         for name, component_errors in values.items():
+            if name == "overlap" and overlap_requirement == "separate-gate":
+                continue
             errors.extend(
                 f"Dual-{index + 1} {name}: {item}" for item in component_errors
             )
@@ -214,6 +225,9 @@ def validate_phase4b1_dual_correctness(
         errors.append("validator mutated one or more input artifacts")
     errors = list(dict.fromkeys(errors))
     valid = not errors
+    overlap_observed = [
+        component["overlap"]["valid"] for component in component_results
+    ]
     result = {
         "schema_version": VALIDATION_SCHEMA,
         "valid": valid,
@@ -221,6 +235,20 @@ def validate_phase4b1_dual_correctness(
         "errors": errors,
         "performance_result": False,
         "correctness_scope": "real-decode-only-dual-batch",
+        "gate_profile": (
+            "controlled-correctness"
+            if overlap_requirement == "separate-gate"
+            else "correctness-and-overlap-existence"
+        ),
+        "overlap_requirement": overlap_requirement,
+        "overlap_gate": {
+            "required_for_validation": overlap_requirement == "required",
+            "valid": all(overlap_observed),
+            "observed_per_run": overlap_observed,
+            "claim_permitted": (
+                overlap_requirement == "required" and all(overlap_observed)
+            ),
+        },
         "decode_ready_manifest_identity_equal": manifest_identity_equal,
         "triangle": triangle,
         "dual_runs": component_results,
@@ -229,7 +257,11 @@ def validate_phase4b1_dual_correctness(
         "input_sha256_before": before,
         "input_sha256_after": after,
         "claim_boundary": (
-            "Correctness and real cross-request overlap existence only; no TPOT, "
+            "Controlled semantic correctness only; real cross-request GPU overlap "
+            "is a separate required gate and is not established by this result. No "
+            "TPOT, throughput, goodput, SLO, speedup, or overlap-benefit claim."
+            if overlap_requirement == "separate-gate"
+            else "Correctness and real cross-request overlap existence only; no TPOT, "
             "throughput, goodput, SLO, speedup, or overlap-benefit claim."
         ),
     }
@@ -504,26 +536,69 @@ def validate_scheduler_cycles(rows: Sequence[Mapping[str, Any]]) -> list[str]:
             scheduled = row.get("scheduled") is True
             operation = row.get("scheduled_operation")
             state = row.get("specrhythm_state")
-            if state in {"WAITING_DRAFT", "DRAFTING"} and scheduled:
+            phase = row.get("execution_phase")
+            waiting = state in {
+                SchedulerRequestState.WAITING_DRAFT.value,
+                SchedulerRequestState.DRAFTING.value,
+            }
+            timed_waiting = waiting and phase == ExecutionPhase.TIMED_DECODE.value
+            setup_prefill = (
+                waiting
+                and phase == ExecutionPhase.SETUP_PREFILL.value
+                and scheduled
+                and operation == ScheduledOperation.PREFILL.value
+            )
+            if timed_waiting and scheduled:
                 errors.append(f"{request_id}: waiting request consumed Target budget")
-            if state in {"WAITING_DRAFT", "DRAFTING"} and row.get(
+            if timed_waiting and row.get(
                 "target_input_token_positions"
             ):
                 errors.append(f"{request_id}: waiting request owns Target positions")
-            if state == "TERMINAL":
+            if waiting and phase == ExecutionPhase.SETUP_PREFILL.value and scheduled:
+                if not setup_prefill:
+                    errors.append(f"{request_id}: invalid setup-prefill advancement")
+            if (
+                waiting
+                and phase == ExecutionPhase.SETUP_PREFILL.value
+                and row.get("target_input_token_positions")
+                and not setup_prefill
+            ):
+                errors.append(f"{request_id}: setup-prefill positions lack legal prefill")
+            if state == SchedulerRequestState.TERMINAL.value:
                 seen_terminal.add(request_id)
                 if scheduled:
                     errors.append(f"{request_id}: terminal request was scheduled")
             if request_id in seen_terminal and scheduled:
                 errors.append(f"{request_id}: request was scheduled after terminal evidence")
-            if operation == "verify" and not row.get("proposal_valid"):
+            if (
+                operation == ScheduledOperation.VERIFY.value
+                and not row.get("proposal_valid")
+            ):
                 errors.append(f"{request_id}: Target verification lacks matching proposal")
             if (
                 scheduled
-                and row.get("execution_phase") == "timed-decode"
-                and operation not in {"verify", "target-tail"}
+                and phase == ExecutionPhase.TIMED_DECODE.value
+                and operation
+                not in {
+                    ScheduledOperation.VERIFY.value,
+                    ScheduledOperation.TARGET_TAIL.value,
+                }
             ):
                 errors.append(f"{request_id}: unexplained live Target advancement")
+            if operation == ScheduledOperation.TARGET_TAIL.value:
+                tail_valid = (
+                    scheduled
+                    and row.get("admissible") is True
+                    and state == SchedulerRequestState.TARGET_TAIL_READY.value
+                    and row.get("proposal_present") is False
+                    and row.get("proposal_valid") is False
+                    and not row.get("spec_token_ids")
+                    and len(row.get("target_input_token_positions", ())) == 1
+                )
+                if not tail_valid:
+                    errors.append(
+                        f"{request_id}: legal Target tail contract is incomplete"
+                    )
             if scheduled != (request_id in scheduled_ids):
                 errors.append(f"{request_id}: cycle summary/decision scheduling mismatch")
             if row.get("admissible") and not scheduled:
@@ -832,6 +907,185 @@ def validate_overlap_witness(rows: Sequence[Mapping[str, Any]]) -> list[str]:
     return ["no positive cross-request GPU Draft/Target overlap witness exists"]
 
 
+def diagnose_overlap_timing(
+    draft_rows: Sequence[Mapping[str, Any]],
+    verification_rows: Sequence[Mapping[str, Any]],
+    recorded_overlap_rows: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Find the exact nearest disjoint-request Draft/Verify interval pair."""
+
+    errors = []
+    drafts = []
+    for row in draft_rows:
+        result = row.get("result")
+        proposal = result.get("proposal") if isinstance(result, Mapping) else None
+        interval = (
+            result.get("draft_gpu_interval")
+            if isinstance(result, Mapping)
+            else None
+        )
+        if not isinstance(proposal, Mapping) or not isinstance(interval, Mapping):
+            continue
+        start = interval.get("host_start_ns")
+        end = interval.get("host_end_ns")
+        if not isinstance(start, int) or not isinstance(end, int) or start >= end:
+            errors.append(f"{row.get('request_id')}: invalid Draft host interval")
+            continue
+        drafts.append(
+            {
+                "request_id": str(row.get("request_id", "")),
+                "proposal_id": str(proposal.get("proposal_id", "")),
+                "round_id": proposal.get("round_id"),
+                "host_start_ns": start,
+                "host_end_ns": end,
+                "physical_gpu_id": interval.get("physical_gpu_id"),
+            }
+        )
+    verifications = []
+    seen_batches = set()
+    for row in verification_rows:
+        batch_id = row.get("verify_microbatch_id")
+        if batch_id in seen_batches:
+            continue
+        seen_batches.add(batch_id)
+        start = row.get("verify_host_start_ns")
+        end = row.get("verify_host_end_ns")
+        if not isinstance(start, int) or not isinstance(end, int) or start >= end:
+            errors.append(f"{batch_id}: invalid Verify host interval")
+            continue
+        verifications.append(
+            {
+                "verify_microbatch_id": batch_id,
+                "request_ids": [
+                    str(item) for item in row.get("verify_request_ids", ())
+                ],
+                "host_start_ns": start,
+                "host_end_ns": end,
+                "target_physical_gpu_ids": row.get("target_physical_gpu_ids", []),
+            }
+        )
+    pairs = []
+    for draft in drafts:
+        for verification in verifications:
+            if draft["request_id"] in verification["request_ids"]:
+                continue
+            intersection_ns = min(
+                draft["host_end_ns"], verification["host_end_ns"]
+            ) - max(draft["host_start_ns"], verification["host_start_ns"])
+            if draft["host_end_ns"] <= verification["host_start_ns"]:
+                ordering = "draft-before-verify"
+            elif verification["host_end_ns"] <= draft["host_start_ns"]:
+                ordering = "verify-before-draft"
+            else:
+                ordering = "overlap"
+            pairs.append(
+                {
+                    "draft_request_id": draft["request_id"],
+                    "proposal_id": draft["proposal_id"],
+                    "draft_round_id": draft["round_id"],
+                    "verify_microbatch_id": verification["verify_microbatch_id"],
+                    "verify_request_ids": verification["request_ids"],
+                    "draft_host_interval_ns": [
+                        draft["host_start_ns"],
+                        draft["host_end_ns"],
+                    ],
+                    "verify_host_interval_ns": [
+                        verification["host_start_ns"],
+                        verification["host_end_ns"],
+                    ],
+                    "signed_intersection_ns": intersection_ns,
+                    "overlap_duration_ns": max(0, intersection_ns),
+                    "separation_ns": max(0, -intersection_ns),
+                    "ordering": ordering,
+                    "draft_physical_gpu_id": draft["physical_gpu_id"],
+                    "target_physical_gpu_ids": verification[
+                        "target_physical_gpu_ids"
+                    ],
+                }
+            )
+    if not pairs:
+        errors.append("no disjoint-request Draft/Verify interval pair exists")
+    pairs.sort(
+        key=lambda row: (
+            row["separation_ns"],
+            -row["overlap_duration_ns"],
+            row["draft_host_interval_ns"][0],
+            str(row["verify_microbatch_id"]),
+        )
+    )
+    positive = any(row["overlap_duration_ns"] > 0 for row in pairs)
+    recorded_positive = any(
+        isinstance(row.get("overlap_duration_ns"), int)
+        and row["overlap_duration_ns"] > 0
+        for row in recorded_overlap_rows
+    )
+    if positive != recorded_positive:
+        errors.append("raw intervals and recorded overlap events disagree")
+    return {
+        "schema_version": OVERLAP_DIAGNOSTIC_SCHEMA,
+        "valid": not errors,
+        "errors": errors,
+        "draft_interval_count": len(drafts),
+        "verification_interval_count": len(verifications),
+        "disjoint_pair_count": len(pairs),
+        "positive_overlap_observed": positive,
+        "recorded_positive_overlap_observed": recorded_positive,
+        "nearest_pair": pairs[0] if pairs else None,
+        "zero_duration_explanation": (
+            None
+            if positive
+            else "every disjoint pair has a non-positive signed interval intersection"
+        ),
+        "performance_result": False,
+    }
+
+
+def diagnose_overlap_artifacts(
+    *,
+    draft_work_paths: Sequence[Path],
+    verification_paths: Sequence[Path],
+    overlap_paths: Sequence[Path],
+    output_path: Path,
+) -> dict[str, Any]:
+    if not draft_work_paths or not (
+        len(draft_work_paths) == len(verification_paths) == len(overlap_paths)
+    ):
+        raise ValueError("overlap diagnosis requires equally paired non-empty inputs")
+    inputs = [*draft_work_paths, *verification_paths, *overlap_paths]
+    before = {str(path.resolve()): sha256_file(path) for path in inputs}
+    runs = [
+        diagnose_overlap_timing(
+            CheckpointJsonl(draft_path).read(),
+            CheckpointJsonl(verify_path).read(),
+            CheckpointJsonl(overlap_path).read(),
+        )
+        for draft_path, verify_path, overlap_path in zip(
+            draft_work_paths, verification_paths, overlap_paths
+        )
+    ]
+    after = {str(path.resolve()): sha256_file(path) for path in inputs}
+    immutable = before == after
+    errors = [
+        f"run {index + 1}: {error}"
+        for index, run in enumerate(runs)
+        for error in run["errors"]
+    ]
+    if not immutable:
+        errors.append("diagnosis mutated an input artifact")
+    result = {
+        "schema_version": OVERLAP_DIAGNOSTIC_SCHEMA,
+        "valid": not errors,
+        "errors": errors,
+        "runs": runs,
+        "input_artifacts_immutable": immutable,
+        "input_sha256_before": before,
+        "input_sha256_after": after,
+        "performance_result": False,
+    }
+    atomic_write_json(output_path, result)
+    return result
+
+
 def validate_measurement_boundary(
     manifest: Any,
     lifecycle_rows: Sequence[Mapping[str, Any]],
@@ -994,6 +1248,9 @@ def _markdown(value: Mapping[str, Any]) -> str:
         f"- Outcome: **{value['outcome']}**",
         f"- Exact Target/Serial/Dual triangle: `{value['triangle']['valid']}`",
         f"- Decode-ready identity equal: `{value['decode_ready_manifest_identity_equal']}`",
+        f"- Gate profile: `{value['gate_profile']}`",
+        f"- Overlap requirement: `{value['overlap_requirement']}`",
+        f"- Positive overlap gate: `{value['overlap_gate']['valid']}`",
         f"- Input artifacts immutable: `{value['input_artifacts_immutable']}`",
         "",
         str(value["claim_boundary"]),

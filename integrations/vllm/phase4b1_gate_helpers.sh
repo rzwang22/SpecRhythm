@@ -172,6 +172,12 @@ phase4b1_run_mode () {
   phase4b1_count="$4"
   phase4b1_reference="$5"
   phase4b1_coordination="${6:-none}"
+  phase4b1_overlap_requirement="${PHASE4B1_OVERLAP_REQUIREMENT:-required}"
+  test "$phase4b1_overlap_requirement" = required || \
+      test "$phase4b1_overlap_requirement" = separate-gate || {
+    echo "overlap requirement must be required or separate-gate" >&2
+    return 2
+  }
   test "$phase4b1_mode" = target || test "$phase4b1_mode" = serial || \
       test "$phase4b1_mode" = dual || {
     echo "mode must be target, serial, or dual" >&2
@@ -273,21 +279,43 @@ phase4b1_run_mode () {
       --overlap-events "$phase4b1_dir/overlap-events.jsonl"
       --runtime-manifest "$phase4b1_dir/runtime-manifest.json"
       --microbatch-size 2 --test-coordination "$phase4b1_coordination"
+      --overlap-requirement "$phase4b1_overlap_requirement"
       --output "$phase4b1_dir/resident-dual.json"
     )
   fi
-  phase4b_run_target_with_cleanup \
-    "$PHASE4B1_DRAFT_PID" "$phase4b1_dir/target.log" \
-    "$phase4b1_dir/draft-service.log" -- \
-    env CUDA_VISIBLE_DEVICES=1,2 VLLM_USE_V2_MODEL_RUNNER=0 \
-      VLLM_BATCH_INVARIANT=1 "${phase4b1_command[@]}"
-  test ! -S "$phase4b1_socket"
-  test ! -e "$PHASE4B_RUN_GUARD"
+  if phase4b_run_target_with_cleanup \
+      "$PHASE4B1_DRAFT_PID" "$phase4b1_dir/target.log" \
+      "$phase4b1_dir/draft-service.log" -- \
+      env CUDA_VISIBLE_DEVICES=1,2 VLLM_USE_V2_MODEL_RUNNER=0 \
+        VLLM_BATCH_INVARIANT=1 "${phase4b1_command[@]}"; then
+    phase4b1_run_status=0
+  else
+    phase4b1_run_status="$?"
+  fi
+  phase4b1_cleanup_status=0
+  if test -S "$phase4b1_socket"; then
+    echo "cleanup failed: Draft socket remains: $phase4b1_socket" >&2
+    phase4b1_cleanup_status=1
+  fi
+  if test -e "$PHASE4B_RUN_GUARD"; then
+    echo "cleanup failed: lifecycle guard remains: $PHASE4B_RUN_GUARD" >&2
+    phase4b1_cleanup_status=1
+  fi
+  if test "$phase4b1_run_status" -ne 0; then
+    return "$phase4b1_run_status"
+  fi
+  return "$phase4b1_cleanup_status"
 }
 
 phase4b1_validate_gate () {
   phase4b1_gate="$1"
   shift
+  phase4b1_overlap_requirement="${PHASE4B1_OVERLAP_REQUIREMENT:-required}"
+  test "$phase4b1_overlap_requirement" = required || \
+      test "$phase4b1_overlap_requirement" = separate-gate || {
+    echo "overlap requirement must be required or separate-gate" >&2
+    return 2
+  }
   phase4b1_target="$phase4b1_gate/target"
   phase4b1_serial="$phase4b1_gate/serial"
   phase4b1_args=(
@@ -314,9 +342,18 @@ phase4b1_validate_gate () {
       --process-lifecycle "$phase4b1_dual/process-lifecycle.json"
     )
   done
-  "${phase4b1_args[@]}" \
-    --output "$phase4b1_gate/validation.json" \
-    --markdown-output "$phase4b1_gate/validation.md"
+  if "${phase4b1_args[@]}" \
+      --overlap-requirement "$phase4b1_overlap_requirement" \
+      --output "$phase4b1_gate/validation.json" \
+      --markdown-output "$phase4b1_gate/validation.md"; then
+    phase4b1_validation_status=0
+  else
+    phase4b1_validation_status="$?"
+  fi
+  if test "$phase4b1_validation_status" -ne 0; then
+    echo "Gate validator failed with status $phase4b1_validation_status" >&2
+    return "$phase4b1_validation_status"
+  fi
   python - "$phase4b1_gate/validation.json" <<'PY'
 import json
 import sys

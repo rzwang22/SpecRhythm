@@ -32,6 +32,30 @@ resume or accept either earlier root. Rerun the complete Section 1–3 chain in 
 under the new commit, including a new stock pair, Target, Serial, both Dual controls and both
 validators.
 
+The complete real-A800 root under `3ee1c3ec4007d3e835bc7d7f385d2d3b5c3c3e8a`
+is also immutable. Preparation, Target, Serial diagnostics compatibility, both Dual executions,
+the controlled scheduler construction, exact output triangle, keyed repeatability, state/proposal
+lifecycle, accounting, verification, Draft sync, target blindness, measurement boundary and
+cleanup all passed. Its unified validation still failed: the scheduler validator rejected legal
+setup-prefill and the authoritative `legal-target-tail` value, while the controlled two-request
+workload produced no positive physical overlap. The helper then masked each nonzero Dual rc after
+successful cleanup. Classify this root as controlled construction PASS, exact-token triangle PASS,
+semantic components PASS, repeatability PASS, scheduler validator false-positive FAIL, physical
+overlap NOT OBSERVED, final Gate1 NOT YET ACHIEVED, performance claim NONE.
+
+The gate structure is now explicit. Gate 1 uses `overlap-requirement=separate-gate`: its outcome
+is controlled semantic correctness, while the same report retains `overlap.valid=false` and
+forbids an overlap claim. Gate 1.5/Gate 2 uses the default `required` mode with at least five
+requests and must produce a positive disjoint-request GPU Draft/Target interval. It is the overlap
+existence gate. No sleep, model slowdown, scheduler-state proxy or manufactured interval is
+allowed. Gate 3 remains blocked until both earlier gates pass.
+
+The old overlap JSONL stores only actual intersections, so a zero row cannot identify the nearest
+non-overlapping pair by itself. `phase4b1-overlap-diagnose` reads the immutable Draft-work,
+verification and overlap files together and reports each run's exact nearest host intervals,
+signed intersection, separation, ordering and physical placement. Write its output outside the
+old root. It is diagnostic-only and never converts scheduler concurrency into physical overlap.
+
 `phase4b1_restore_stock` now emits an immutable `check --expect-state stock` manifest, while
 `phase4b1_apply_patch_stack` emits a distinct immutable `check --expect-state patched` manifest.
 Each state accepts only its exact pinned runner/scheduler SHA pair; a partial or opposite state
@@ -181,16 +205,31 @@ phase4b1_apply_patch_stack "$SR_GATE1/stock-stage"
 
 phase4b1_run_mode target "$SR_GATE1/target" "$SR_GATE1_WORKLOAD" 2 "$SR_GATE1_REFERENCE"
 phase4b1_run_mode serial "$SR_GATE1/serial" "$SR_GATE1_WORKLOAD" 2 "$SR_GATE1_REFERENCE"
-phase4b1_run_mode dual "$SR_GATE1/dual-1" "$SR_GATE1_WORKLOAD" 2 "$SR_GATE1_REFERENCE" one-ready
-phase4b1_run_mode dual "$SR_GATE1/dual-2" "$SR_GATE1_WORKLOAD" 2 "$SR_GATE1_REFERENCE" two-ready
+PHASE4B1_OVERLAP_REQUIREMENT=separate-gate \
+phase4b1_run_mode dual "$SR_GATE1/dual-1" "$SR_GATE1_WORKLOAD" 2 \
+  "$SR_GATE1_REFERENCE" one-ready
+PHASE4B1_OVERLAP_REQUIREMENT=separate-gate \
+phase4b1_run_mode dual "$SR_GATE1/dual-2" "$SR_GATE1_WORKLOAD" 2 \
+  "$SR_GATE1_REFERENCE" two-ready
 
 specrhythm phase4b1-dual-controlled-validate \
   --asynchronous-scheduler "$SR_GATE1/dual-1/scheduler-events.jsonl" \
   --coordinated-scheduler "$SR_GATE1/dual-2/scheduler-events.jsonl" \
   --request-state-events "$SR_GATE1/dual-1/request-state-events.jsonl" \
   --output "$SR_GATE1/controlled-validation.json"
+PHASE4B1_OVERLAP_REQUIREMENT=separate-gate \
 phase4b1_validate_gate "$SR_GATE1" "$SR_GATE1/dual-1" "$SR_GATE1/dual-2"
 phase4b1_require_outcome_a "$SR_GATE1/validation.json"
+
+python - "$SR_GATE1/validation.json" <<'PY'
+import json
+import sys
+value = json.load(open(sys.argv[1], encoding="utf-8"))
+assert value["gate_profile"] == "controlled-correctness"
+assert value["overlap_requirement"] == "separate-gate"
+assert value["overlap_gate"]["required_for_validation"] is False
+assert value["overlap_gate"]["claim_permitted"] is False
+PY
 ```
 
 If any command above fails, preserve `$SR_GATE1` and stop. In particular, a nondeterministic stock
@@ -206,7 +245,11 @@ cat "$SR_GATE1/stock-stage/vllm-patched-check.json"
 cat "$SR_GATE1/validation.json"
 ```
 
-## 4. Gate 2: corrected R3-real five requests (3/1/1)
+## 4. Gate 1.5 / Gate 2: corrected five-request positive-overlap existence
+
+This gate is not authorized by a Gate 1 correctness result alone. Run it only after review of the
+Gate 1 artifacts. The unchanged asynchronous production path must naturally create Draft backlog;
+physical overlap remains mandatory and its absence returns nonzero.
 
 ```bash
 export SR_GATE2="$SR_PHASE4B_ROOT/Gate-2-corrected-5"
@@ -220,8 +263,13 @@ phase4b1_apply_patch_stack "$SR_GATE2/stock-stage"
 
 phase4b1_run_mode target "$SR_GATE2/target" "$SR_GATE2_WORKLOAD" 5 "$SR_GATE2_REFERENCE"
 phase4b1_run_mode serial "$SR_GATE2/serial" "$SR_GATE2_WORKLOAD" 5 "$SR_GATE2_REFERENCE"
-phase4b1_run_mode dual "$SR_GATE2/dual-1" "$SR_GATE2_WORKLOAD" 5 "$SR_GATE2_REFERENCE" none
-phase4b1_run_mode dual "$SR_GATE2/dual-2" "$SR_GATE2_WORKLOAD" 5 "$SR_GATE2_REFERENCE" none
+PHASE4B1_OVERLAP_REQUIREMENT=required \
+phase4b1_run_mode dual "$SR_GATE2/dual-1" "$SR_GATE2_WORKLOAD" 5 \
+  "$SR_GATE2_REFERENCE" none
+PHASE4B1_OVERLAP_REQUIREMENT=required \
+phase4b1_run_mode dual "$SR_GATE2/dual-2" "$SR_GATE2_WORKLOAD" 5 \
+  "$SR_GATE2_REFERENCE" none
+PHASE4B1_OVERLAP_REQUIREMENT=required \
 phase4b1_validate_gate "$SR_GATE2" "$SR_GATE2/dual-1" "$SR_GATE2/dual-2"
 phase4b1_require_outcome_a "$SR_GATE2/validation.json"
 ```
