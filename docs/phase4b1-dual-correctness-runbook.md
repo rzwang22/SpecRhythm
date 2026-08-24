@@ -17,6 +17,21 @@ a stock-state check against that patched installation. No Target, Serial or Dual
 started, so this root is a control-plane preparation failure, not a Gate 1 correctness failure.
 Do not reuse it.
 
+The subsequent fresh root under commit `7e4f8711934fe10cb829e1947e62179c11a0209d`
+is likewise immutable. It validates the explicit stock/patched state checks on A800 and contains a
+successful resident Target run. Resident Serial then reached its first real speculative Target
+verification and stopped in the observational hook because that shared hook accessed the
+Dual-only `proposal_id` field on a Serial `Proposal`. Dual-1 and Dual-2 were not started and Gate 1
+Outcome was not evaluated. Classify that root exactly as: preparation/control-plane PASS, Target
+PASS, Serial diagnostics-compatibility FAIL, both Dual runs NOT RUN, Gate1 NOT EVALUATED.
+
+The observer now records a canonical proposal ID only when the pending protocol actually provides
+one. Serial proposals retain `proposal_id=null`; no synthetic Dual identity is created and the
+Serial protocol is unchanged. Because this modifies production experiment diagnostics, do not
+resume or accept either earlier root. Rerun the complete Section 1–3 chain in a fresh directory
+under the new commit, including a new stock pair, Target, Serial, both Dual controls and both
+validators.
+
 `phase4b1_restore_stock` now emits an immutable `check --expect-state stock` manifest, while
 `phase4b1_apply_patch_stack` emits a distinct immutable `check --expect-state patched` manifest.
 Each state accepts only its exact pinned runner/scheduler SHA pair; a partial or opposite state

@@ -177,6 +177,14 @@ This was not a Dual correctness failure. Patch-state validation now has mutually
 `stock` and `patched` modes, immutable success/failure manifests, and explicit helper calls. A
 fresh Gate-1-only A800 rerun is required; the earlier root remains immutable provenance.
 
+That rerun at `7e4f871` validated both explicit state checks on A800 and completed resident Target.
+Resident Serial then failed only when the common Target-forward observer accessed the Dual-only
+`proposal_id` attribute on the legacy Serial `Proposal`; its scheduler had already submitted both
+requests for speculative verification. Dual-1/Dual-2 did not run, so Gate1 remains not evaluated.
+The observer is now proposal-protocol-aware: it preserves a real canonical Dual ID and records
+`null` for Serial or no pending proposal. The Serial schema, execution semantics and all Dual
+scheduler/state/lifecycle logic remain unchanged. A full fresh Gate1-only rerun is pending.
+
 ## Phase 3.0: GPU readiness and real-trace runner
 
 Phase 3.0 is stacked on the frozen PR #2 head and does not modify its simulator algorithms or

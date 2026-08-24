@@ -36,6 +36,17 @@ def token_sha256(token_ids: Sequence[int]) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def diagnostic_proposal_id(pending: Any) -> Optional[str]:
+    """Return a canonical Dual proposal ID when the proposal protocol has one.
+
+    The Serial ``Proposal`` protocol intentionally has no canonical
+    ``proposal_id``.  Diagnostics must not synthesize a Dual identity for it.
+    """
+
+    raw_proposal_id = getattr(pending, "proposal_id", None)
+    return str(raw_proposal_id) if raw_proposal_id is not None else None
+
+
 def logits_position_mapping(
     proposal_token_ids: Sequence[int],
     *,
@@ -462,9 +473,7 @@ def capture_target_forward(
         if pending is not None:
             prefix = list(getattr(stable_state, "committed_token_ids", prefix))
             round_id = int(pending.round_id)
-        proposal_id = (
-            str(pending.proposal_id) if pending is not None else None
-        )
+        proposal_id = diagnostic_proposal_id(pending)
         row = {
             "schema_version": DIAGNOSTIC_SCHEMA,
             "request_id": definition.request_id,
