@@ -11,6 +11,7 @@ from typing import Any, Mapping, Sequence, Tuple
 import pytest
 
 from specrhythm import cli
+from specrhythm.phase4 import stock_vllm
 from specrhythm.phase4.dual import (
     DualCycle,
     DualProposal,
@@ -37,6 +38,82 @@ from specrhythm.phase4.request_identity import (
     resolve_stable_ready_request,
 )
 from specrhythm.phase4.transport import CheckpointJsonl
+from specrhythm.phase4.vllm_dual import validate_target_rank_identity
+
+
+def test_active_cuda_identity_uses_current_device_not_process_rank(
+    monkeypatch,
+):
+    class Properties:
+        name = "A800"
+
+    class Cuda:
+        @staticmethod
+        def current_device():
+            return 0
+
+        @staticmethod
+        def get_device_properties(device):
+            assert device == 0
+            return Properties()
+
+    class Torch:
+        cuda = Cuda()
+
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "2")
+    monkeypatch.setattr(stock_vllm, "_nvidia_uuid", lambda physical: f"GPU-{physical}")
+    assert stock_vllm.active_cuda_device_identity(Torch()) == {
+        "logical_cuda_index": 0,
+        "physical_gpu_id": 2,
+        "gpu_uuid": "GPU-2",
+        "gpu_name": "A800",
+        "cuda_visible_devices": "2",
+    }
+
+
+def test_target_rank_identity_rejects_aliases_and_worker_disagreement():
+    workers = [_rank_identity(0, 1), _rank_identity(1, 2)]
+    rows = [_rank_identity(0, 1), _rank_identity(1, 2)]
+    assert validate_target_rank_identity(rows, 2, workers) == []
+
+    aliased = json.loads(json.dumps(rows))
+    aliased[1]["physical_gpu_id"] = 1
+    assert any(
+        "alias one physical GPU" in item
+        for item in validate_target_rank_identity(aliased, 2)
+    )
+
+    same_uuid = json.loads(json.dumps(rows))
+    same_uuid[1]["gpu_uuid"] = "GPU-1"
+    assert any(
+        "same GPU UUID" in item
+        for item in validate_target_rank_identity(same_uuid, 2)
+    )
+
+    incomplete = rows[:1]
+    errors = validate_target_rank_identity(incomplete, 2)
+    assert any("rank count" in item for item in errors)
+    assert any("TP ranks are incomplete" in item for item in errors)
+
+    disagreement = json.loads(json.dumps(rows))
+    disagreement[1]["logical_cuda_index"] = 0
+    assert any(
+        "disagrees with worker evidence" in item
+        for item in validate_target_rank_identity(disagreement, 2, workers)
+    )
+
+
+def _rank_identity(rank, physical):
+    return {
+        "global_rank": rank,
+        "local_rank": rank,
+        "tp_rank": rank,
+        "logical_cuda_index": rank,
+        "physical_gpu_id": physical,
+        "gpu_uuid": f"GPU-{physical}",
+        "cuda_events": True,
+        "cuda_synchronized": True,
+    }
 
 
 def make_request(request_id="A", prefix=(1, 2), *, maximum=16):

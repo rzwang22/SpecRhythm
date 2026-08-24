@@ -62,6 +62,7 @@ class AdmissibilitySnapshot:
     spec_token_ids: Tuple[int, ...]
     proposal: Optional[ProposalEvidence] = None
     now_ns: int = 0
+    target_tail_ready_timestamp_ns: Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -186,6 +187,9 @@ def decision_event(
     target_forward_start_ns: Optional[int] = None,
     target_forward_end_ns: Optional[int] = None,
 ) -> dict[str, Any]:
+    proposal_consumed = bool(
+        snapshot.proposal is not None and snapshot.proposal.consumed
+    )
     return {
         "schema_version": "specrhythm.phase4b-scheduler-admissibility.v1",
         "cycle_id": cycle_id,
@@ -197,6 +201,10 @@ def decision_event(
         "prefix_version": snapshot.prefix_version,
         "round_id": snapshot.round_id,
         "proposal_present": decision.proposal_present,
+        "proposal_consumed": proposal_consumed,
+        "live_proposal_present": bool(
+            decision.proposal_present and not proposal_consumed
+        ),
         "proposal_valid": decision.proposal_valid,
         "proposal_ready_timestamp_ns": decision.proposal_ready_timestamp_ns,
         "admissible": decision.admissible,
@@ -208,6 +216,11 @@ def decision_event(
         "num_computed_tokens": snapshot.num_computed_tokens,
         "num_output_tokens": snapshot.num_output_tokens,
         "spec_token_ids": list(snapshot.spec_token_ids),
+        "target_tail_ready": bool(
+            snapshot.state is SchedulerRequestState.TARGET_TAIL_READY
+            and snapshot.target_tail_ready_timestamp_ns is not None
+        ),
+        "target_tail_ready_timestamp_ns": snapshot.target_tail_ready_timestamp_ns,
         "target_input_token_positions": list(target_input_positions),
         "target_forward_start_ns": target_forward_start_ns,
         "target_forward_end_ns": target_forward_end_ns,

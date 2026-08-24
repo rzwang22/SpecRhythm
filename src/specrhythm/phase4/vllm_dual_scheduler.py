@@ -86,6 +86,7 @@ class DualBatchScheduler(Scheduler):
         # These collections are stable-ID keyed. vLLM-owned request tables and
         # cadence fields remain internal-ID keyed.
         self._dual_tail_ready: set[str] = set()
+        self._dual_tail_ready_ns: dict[str, int] = {}
         self._dual_proposals: dict[str, DualProposal] = {}
         self._dual_consumed_proposals: set[str] = set()
         self._dual_drafting: set[str] = set()
@@ -207,6 +208,7 @@ class DualBatchScheduler(Scheduler):
             )
         for stable_id in stable_scheduled_ids:
             self._dual_tail_ready.discard(stable_id)
+            self._dual_tail_ready_ns.pop(stable_id, None)
         for stable_id in stable_verified_ids:
             proposal = self._dual_proposals.get(stable_id)
             if proposal is not None:
@@ -320,6 +322,7 @@ class DualBatchScheduler(Scheduler):
             spec_token_ids=tuple(int(item) for item in request.spec_token_ids),
             proposal=evidence,
             now_ns=time.monotonic_ns(),
+            target_tail_ready_timestamp_ns=self._dual_tail_ready_ns.get(stable_id),
         )
         decision = decide_admissibility(snapshot)
         if (
@@ -359,7 +362,11 @@ class DualBatchScheduler(Scheduler):
         if proposal_value is None:
             if result.get("target_tail") is not True:
                 raise RuntimeError("ready Draft result contains neither proposal nor tail")
+            ready_ns = result.get("target_tail_ready_ns")
+            if not isinstance(ready_ns, int) or ready_ns <= 0:
+                raise RuntimeError("ready Draft target tail lacks a readiness timestamp")
             self._dual_tail_ready.add(request_id)
+            self._dual_tail_ready_ns[request_id] = ready_ns
             self._dual_drafting.discard(request_id)
             return
         if not isinstance(proposal_value, Mapping):

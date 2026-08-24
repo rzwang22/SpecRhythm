@@ -32,7 +32,10 @@ from specrhythm.phase4.resident_setup import (
     observation_to_dict,
 )
 from specrhythm.phase4.serial import greedy_acceptance, token_prefix_hash
-from specrhythm.phase4.stock_vllm import load_smoke_requests
+from specrhythm.phase4.stock_vllm import (
+    active_cuda_device_identity,
+    load_smoke_requests,
+)
 from specrhythm.phase4.transport import CheckpointJsonl
 
 
@@ -540,8 +543,7 @@ class DualBatchRemoteProposer:
         self.torch.cuda.nvtx.range_pop()
         host_end = time.monotonic_ns()
         self.tp_group.barrier()
-        physical = _physical_gpu_id()
-        uuid = self.torch.cuda.get_device_properties(0).uuid
+        identity = active_cuda_device_identity(self.torch)
         local_rows = []
         for internal_id in internal_verify_ids:
             start = self._verify_start.get(internal_id)
@@ -555,9 +557,13 @@ class DualBatchRemoteProposer:
                     "global_rank": int(self.dist.get_rank()),
                     "local_rank": int(os.environ.get("LOCAL_RANK", self.tp_rank)),
                     "tp_rank": self.tp_rank,
-                    "logical_cuda_index": 0,
-                    "physical_gpu_id": physical,
-                    "gpu_uuid": str(uuid),
+                    "logical_cuda_index": identity["logical_cuda_index"],
+                    "physical_gpu_id": identity["physical_gpu_id"],
+                    "gpu_uuid": identity["gpu_uuid"],
+                    "cuda_visible_devices": identity["cuda_visible_devices"],
+                    "device_identity_source": (
+                        "active-cuda-device-plus-visible-physical-binding"
+                    ),
                     "host_start_ns": start["host_start_ns"],
                     "host_end_ns": host_end,
                     "cuda_elapsed_ns": int(start["event"].elapsed_time(end_event) * 1_000_000),
@@ -585,8 +591,14 @@ class DualBatchRemoteProposer:
                     self._verify_start[internal_id]["proposal"]
                 )
                 evidence = [row for row in rank_rows if row["request_id"] == stable_id]
-                if len(evidence) != self.tp_world_size:
-                    raise RuntimeError("Target verify is missing TP-rank identity evidence")
+                identity_errors = validate_target_rank_identity(
+                    evidence, self.tp_world_size
+                )
+                if identity_errors:
+                    raise RuntimeError(
+                        "invalid Target verify TP identity evidence: "
+                        + "; ".join(identity_errors)
+                    )
                 self.verification_log.append(
                     {
                         "schema_version": "specrhythm.phase4b-verification-event.v1",
@@ -612,6 +624,9 @@ class DualBatchRemoteProposer:
                         "target_tp": self.tp_world_size,
                         "target_physical_gpu_ids": sorted(
                             {row["physical_gpu_id"] for row in evidence}
+                        ),
+                        "target_device_identity_semantics": (
+                            "per-rank-active-cuda-device-cross-checked-by-runner-worker-snapshot"
                         ),
                     }
                 )
@@ -909,14 +924,53 @@ def _required_path(name: str) -> Path:
     return Path(value)
 
 
-def _physical_gpu_id() -> int:
-    visible = os.environ.get("CUDA_VISIBLE_DEVICES")
-    if visible:
-        values = [item.strip() for item in visible.split(",") if item.strip()]
-        local_rank = int(os.environ.get("LOCAL_RANK", "0"))
-        if local_rank < len(values) and values[local_rank].isdigit():
-            return int(values[local_rank])
-    return int(os.environ.get("LOCAL_RANK", "0"))
+def validate_target_rank_identity(
+    rows: Sequence[Mapping[str, Any]],
+    tensor_parallel_size: int,
+    authoritative_worker_rows: Sequence[Mapping[str, Any]] = (),
+) -> list[str]:
+    """Validate per-forward TP identities and optional worker-snapshot agreement."""
+
+    errors = []
+    if len(rows) != tensor_parallel_size:
+        errors.append("Target verify rank count differs from TP size")
+    if {row.get("tp_rank") for row in rows} != set(range(tensor_parallel_size)):
+        errors.append("Target verify TP ranks are incomplete")
+    if len({row.get("global_rank") for row in rows}) != len(rows):
+        errors.append("Target verify global ranks are not unique")
+    physical = [row.get("physical_gpu_id") for row in rows]
+    if any(not isinstance(item, int) for item in physical):
+        errors.append("Target verify physical GPU identity is missing")
+    elif len(set(physical)) != len(rows):
+        errors.append("Target verify TP ranks alias one physical GPU")
+    uuids = [str(row.get("gpu_uuid", "")) for row in rows]
+    if any(not item for item in uuids):
+        errors.append("Target verify GPU UUID is missing")
+    elif len(set(uuids)) != len(rows):
+        errors.append("Target verify TP ranks report the same GPU UUID")
+    if any(
+        row.get("cuda_events") is not True
+        or row.get("cuda_synchronized") is not True
+        for row in rows
+    ):
+        errors.append("Target verify rank timing lacks synchronized CUDA events")
+    if authoritative_worker_rows:
+        workers = {row.get("global_rank"): row for row in authoritative_worker_rows}
+        for row in rows:
+            worker = workers.get(row.get("global_rank"))
+            if worker is None:
+                errors.append("Target verify rank lacks authoritative worker evidence")
+                continue
+            if (
+                row.get("physical_gpu_id") != worker.get("physical_gpu_id")
+                or row.get("gpu_uuid") != worker.get("gpu_uuid")
+                or row.get("logical_cuda_index")
+                != worker.get("logical_cuda_index")
+            ):
+                errors.append(
+                    "Target verify logical/physical identity disagrees with worker evidence"
+                )
+    return list(dict.fromkeys(errors))
 
 
 def _logical_generated(values: Sequence[int], maximum: int) -> Tuple[int, ...]:

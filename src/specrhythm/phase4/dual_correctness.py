@@ -8,6 +8,7 @@ the only successful classification is outcome A.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Optional, Sequence
 
@@ -21,12 +22,15 @@ from specrhythm.phase4.correctness_validation import compare_round_semantics
 from specrhythm.phase4.decode_ready import load_decode_ready_manifest
 from specrhythm.phase4.manifest import atomic_write_json, sha256_file
 from specrhythm.phase4.process_lifecycle import validate_lifecycle_artifact
+from specrhythm.phase4.resident_setup import validate_setup_ready
 from specrhythm.phase4.serial import token_prefix_hash
 from specrhythm.phase4.transport import CheckpointJsonl
+from specrhythm.phase4.vllm_dual import validate_target_rank_identity
 
-VALIDATION_SCHEMA = "specrhythm.phase4b1-dual-correctness-validation.v1"
+VALIDATION_SCHEMA = "specrhythm.phase4b1-dual-correctness-validation.v2"
 CONTROLLED_SCHEMA = "specrhythm.phase4b1-controlled-gate-validation.v1"
 OVERLAP_DIAGNOSTIC_SCHEMA = "specrhythm.phase4b1-overlap-timing-diagnostic.v1"
+LEGACY_GATE1_COMMIT = "3ee1c3ec4007d3e835bc7d7f385d2d3b5c3c3e8a"
 
 _LEGAL_STATES = {
     "BOOTSTRAP": {"DRAFT_READY", "TERMINAL"},
@@ -65,6 +69,7 @@ def validate_phase4b1_dual_correctness(
     output_path: Path,
     markdown_path: Optional[Path] = None,
     overlap_requirement: str = "required",
+    legacy_source_commit: Optional[str] = None,
 ) -> dict[str, Any]:
     """Validate one Target, one Serial, and one or more immutable Dual runs."""
 
@@ -72,6 +77,8 @@ def validate_phase4b1_dual_correctness(
         raise ValueError("at least one decode-only Dual run is required")
     if overlap_requirement not in {"required", "separate-gate"}:
         raise ValueError("unknown overlap requirement")
+    if legacy_source_commit not in {None, LEGACY_GATE1_COMMIT}:
+        raise ValueError("unsupported legacy read-only revalidation source")
     paired = (
         dual_manifest_paths,
         state_event_paths,
@@ -105,6 +112,19 @@ def validate_phase4b1_dual_correctness(
         *overlap_event_paths,
         *process_lifecycle_paths,
     ]
+    if legacy_source_commit is not None:
+        preserved_root = Path(
+            os.path.commonpath([str(path.resolve()) for path in inputs])
+        )
+        destinations = [output_path, *([markdown_path] if markdown_path else [])]
+        if any(
+            destination.resolve() == preserved_root
+            or preserved_root in destination.resolve().parents
+            for destination in destinations
+        ):
+            raise ValueError(
+                "legacy revalidation outputs must be outside the preserved artifact root"
+            )
     before = {str(path.resolve()): sha256_file(path) for path in inputs}
     target = _read_object(target_path)
     serial = _read_object(serial_path)
@@ -132,9 +152,7 @@ def validate_phase4b1_dual_correctness(
     ]
     errors: list[str] = []
 
-    for label, run in [("Target", target), ("Serial", serial), *[
-        (f"Dual-{index + 1}", run) for index, run in enumerate(duals)
-    ]]:
+    for label, run in [("Target", target), ("Serial", serial)]:
         if run.get("valid") is not True:
             errors.append(f"{label} run is not valid")
 
@@ -142,6 +160,10 @@ def validate_phase4b1_dual_correctness(
     manifest_identity_equal = all(item == identities[0] for item in identities[1:])
     if not manifest_identity_equal:
         errors.append("Target/Serial/Dual decode-ready logical manifest identities differ")
+    if legacy_source_commit is not None and any(
+        item.specrhythm_git_commit != legacy_source_commit for item in manifests[2:]
+    ):
+        errors.append("Dual decode-ready provenance differs from legacy source commit")
     for label, lifecycle in zip(("Target", "Serial"), baseline_lifecycles):
         errors.extend(f"{label} cleanup: {item}" for item in validate_cleanup(lifecycle))
 
@@ -151,13 +173,31 @@ def validate_phase4b1_dual_correctness(
         errors.extend(triangle["errors"])
 
     component_results = []
+    overlap_evaluations = []
     for index in range(len(duals)):
+        worker_rows = duals[index].get("worker_ranks", ())
+        if not isinstance(worker_rows, list):
+            worker_rows = []
+        overlap_evaluation = evaluate_overlap_witness(
+            overlaps[index],
+            authoritative_worker_rows=worker_rows,
+            expected_target_physical_gpu_ids=manifests[
+                index + 2
+            ].target_physical_gpu_ids,
+            allow_legacy_device_supersession=legacy_source_commit is not None,
+        )
+        overlap_evaluations.append(overlap_evaluation)
         values = {
             "state_machine": validate_request_state_events(states[index]),
             "proposal_lifecycle": validate_proposal_lifecycle_events(
                 lifecycles[index]
             ),
-            "scheduler": validate_scheduler_cycles(schedulers[index]),
+            "scheduler": validate_scheduler_cycles(
+                schedulers[index],
+                proposal_lifecycle_rows=lifecycles[index],
+                state_rows=states[index],
+                draft_rows=draft_work[index],
+            ),
             "token_accounting": validate_round_accounting(rounds[index]),
             "verification_contract": validate_verification_contracts(
                 rounds[index], verifications[index], diagnostics[index]
@@ -171,7 +211,12 @@ def validate_phase4b1_dual_correctness(
             "measurement_boundary": validate_measurement_boundary(
                 manifests[index + 2], lifecycles[index], draft_work[index]
             ),
-            "overlap": validate_overlap_witness(overlaps[index]),
+            "runner_invariants": validate_dual_runner_evidence(
+                duals[index],
+                manifests[index + 2],
+                dual_manifest_paths[index],
+            ),
+            "overlap": overlap_evaluation["errors"],
             "cleanup": validate_cleanup(process_lifecycles[index]),
         }
         values["token_accounting"].extend(
@@ -184,13 +229,53 @@ def validate_phase4b1_dual_correctness(
             )
         )
         for name, component_errors in values.items():
-            if name == "overlap" and overlap_requirement == "separate-gate":
+            if name == "overlap":
                 continue
             errors.extend(
                 f"Dual-{index + 1} {name}: {item}" for item in component_errors
             )
+        recomputed = {
+            name: {"valid": not value, "errors": value}
+            for name, value in values.items()
+        }
+        authority = classify_embedded_dual_verdict(
+            duals[index],
+            scheduler_rows=schedulers[index],
+            scheduler_errors=values["scheduler"],
+            overlap_requirement=overlap_requirement,
+            overlap_evaluation=overlap_evaluation,
+            legacy_source_commit=legacy_source_commit,
+        )
+        authority["recomputed_components"] = {
+            name: value["valid"] for name, value in recomputed.items()
+        }
+        authority["recomputed_semantic_valid"] = all(
+            value["valid"]
+            for name, value in recomputed.items()
+            if name != "overlap"
+        )
+        if authority["remaining_embedded_errors"]:
+            errors.extend(
+                f"Dual-{index + 1} embedded verdict: {item}"
+                for item in authority["remaining_embedded_errors"]
+            )
         component_results.append(
-            {name: {"valid": not value, "errors": value} for name, value in values.items()}
+            {
+                **recomputed,
+                "overlap_evidence": overlap_evaluation,
+                "embedded_verdict_authority": authority,
+                "recomputed_semantic_valid": authority[
+                    "recomputed_semantic_valid"
+                ],
+            }
+        )
+
+    if overlap_requirement == "required" and not any(
+        value["hardware_placement_qualified_overlap_observed"]
+        for value in overlap_evaluations
+    ):
+        errors.append(
+            "no Dual run has a hardware-qualified positive cross-request GPU overlap witness"
         )
 
     repeats = []
@@ -225,8 +310,12 @@ def validate_phase4b1_dual_correctness(
         errors.append("validator mutated one or more input artifacts")
     errors = list(dict.fromkeys(errors))
     valid = not errors
-    overlap_observed = [
-        component["overlap"]["valid"] for component in component_results
+    temporal_overlap_observed = [
+        value["temporal_overlap_observed"] for value in overlap_evaluations
+    ]
+    qualified_overlap_observed = [
+        value["hardware_placement_qualified_overlap_observed"]
+        for value in overlap_evaluations
     ]
     result = {
         "schema_version": VALIDATION_SCHEMA,
@@ -241,12 +330,22 @@ def validate_phase4b1_dual_correctness(
             else "correctness-and-overlap-existence"
         ),
         "overlap_requirement": overlap_requirement,
+        "legacy_read_only_revalidation": {
+            "enabled": legacy_source_commit is not None,
+            "source_commit": legacy_source_commit,
+        },
         "overlap_gate": {
             "required_for_validation": overlap_requirement == "required",
-            "valid": all(overlap_observed),
-            "observed_per_run": overlap_observed,
+            "valid": any(qualified_overlap_observed),
+            "temporal_observed_per_run": temporal_overlap_observed,
+            "hardware_qualified_observed_per_run": qualified_overlap_observed,
+            "at_least_one_temporal_overlap": any(temporal_overlap_observed),
+            "at_least_one_hardware_qualified_overlap": any(
+                qualified_overlap_observed
+            ),
             "claim_permitted": (
-                overlap_requirement == "required" and all(overlap_observed)
+                overlap_requirement == "required"
+                and any(qualified_overlap_observed)
             ),
         },
         "decode_ready_manifest_identity_equal": manifest_identity_equal,
@@ -514,7 +613,13 @@ def validate_proposal_lifecycle_events(rows: Sequence[Mapping[str, Any]]) -> lis
     return errors
 
 
-def validate_scheduler_cycles(rows: Sequence[Mapping[str, Any]]) -> list[str]:
+def validate_scheduler_cycles(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    proposal_lifecycle_rows: Sequence[Mapping[str, Any]] = (),
+    state_rows: Sequence[Mapping[str, Any]] = (),
+    draft_rows: Sequence[Mapping[str, Any]] = (),
+) -> list[str]:
     errors = []
     decisions = []
     ready_deferrals: dict[str, int] = {}
@@ -586,18 +691,17 @@ def validate_scheduler_cycles(rows: Sequence[Mapping[str, Any]]) -> list[str]:
             ):
                 errors.append(f"{request_id}: unexplained live Target advancement")
             if operation == ScheduledOperation.TARGET_TAIL.value:
-                tail_valid = (
-                    scheduled
-                    and row.get("admissible") is True
-                    and state == SchedulerRequestState.TARGET_TAIL_READY.value
-                    and row.get("proposal_present") is False
-                    and row.get("proposal_valid") is False
-                    and not row.get("spec_token_ids")
-                    and len(row.get("target_input_token_positions", ())) == 1
+                tail_errors = _validate_target_tail_decision(
+                    row,
+                    cycle,
+                    proposal_lifecycle_rows=proposal_lifecycle_rows,
+                    state_rows=state_rows,
+                    draft_rows=draft_rows,
                 )
-                if not tail_valid:
+                if tail_errors:
                     errors.append(
-                        f"{request_id}: legal Target tail contract is incomplete"
+                        f"{request_id}: legal Target tail contract is incomplete: "
+                        + ", ".join(tail_errors)
                     )
             if scheduled != (request_id in scheduled_ids):
                 errors.append(f"{request_id}: cycle summary/decision scheduling mismatch")
@@ -611,6 +715,142 @@ def validate_scheduler_cycles(rows: Sequence[Mapping[str, Any]]) -> list[str]:
     if not rows:
         errors.append("scheduler decision evidence is empty")
     return errors
+
+
+def _validate_target_tail_decision(
+    row: Mapping[str, Any],
+    cycle: Mapping[str, Any],
+    *,
+    proposal_lifecycle_rows: Sequence[Mapping[str, Any]],
+    state_rows: Sequence[Mapping[str, Any]],
+    draft_rows: Sequence[Mapping[str, Any]],
+) -> list[str]:
+    """Prove a proposal-free tail while allowing consumed proposal history."""
+
+    errors = []
+    request_id = str(row.get("request_id", ""))
+    if row.get("execution_phase") != ExecutionPhase.TIMED_DECODE.value:
+        errors.append("not timed decode")
+    if row.get("scheduled") is not True:
+        errors.append("not scheduled")
+    if row.get("admissible") is not True:
+        errors.append("not admissible")
+    if row.get("specrhythm_state") != SchedulerRequestState.TARGET_TAIL_READY.value:
+        errors.append("state is not TARGET_TAIL_READY")
+    if row.get("proposal_valid") is not False:
+        errors.append("proposal is still valid")
+    if row.get("spec_token_ids"):
+        errors.append("speculative tokens are non-empty")
+    if len(row.get("target_input_token_positions", ())) != 1:
+        errors.append("Target advancement is not exactly one position")
+
+    proposal_present = row.get("proposal_present") is True
+    explicit_live = row.get("live_proposal_present")
+    if explicit_live is True:
+        errors.append("a live proposal remains")
+    consumed = _consumed_proposal_before_tail(
+        row, cycle, proposal_lifecycle_rows
+    )
+    if proposal_present and not consumed:
+        errors.append("retained proposal is not proven consumed")
+    if (
+        proposal_present
+        and "proposal_consumed" in row
+        and row.get("proposal_consumed") is not True
+    ):
+        errors.append("retained proposal is marked unconsumed")
+
+    ready_ns = _tail_ready_timestamp(row, draft_rows)
+    if ready_ns is None:
+        errors.append("Draft target-tail readiness is missing")
+    else:
+        ready_states = [
+            event
+            for event in state_rows
+            if event.get("request_id") == request_id
+            and event.get("destination_state")
+            == SchedulerRequestState.TARGET_TAIL_READY.value
+            and event.get("timestamp_ns") == ready_ns
+        ]
+        if not ready_states:
+            errors.append("Draft readiness is not state-aligned")
+        if not _terminal_tail_state_sequence(request_id, ready_ns, state_rows):
+            errors.append("one-token tail lacks ordered terminal state evidence")
+    return errors
+
+
+def _consumed_proposal_before_tail(
+    row: Mapping[str, Any],
+    cycle: Mapping[str, Any],
+    lifecycle_rows: Sequence[Mapping[str, Any]],
+) -> bool:
+    request_id = str(row.get("request_id", ""))
+    tail_boundary = cycle.get("poll_end_ns", cycle.get("poll_start_ns"))
+    candidates = [
+        event
+        for event in lifecycle_rows
+        if event.get("request_id") == request_id
+        and event.get("lifecycle_state") == "CONSUMED"
+        and event.get("round_id") == row.get("round_id")
+        and event.get("prefix_version") == row.get("prefix_version")
+    ]
+    if not candidates:
+        return False
+    if not isinstance(tail_boundary, int):
+        return False
+    return any(
+        isinstance(event.get("timestamp_ns"), int)
+        and event["timestamp_ns"] <= tail_boundary
+        for event in candidates
+    )
+
+
+def _tail_ready_timestamp(
+    row: Mapping[str, Any], draft_rows: Sequence[Mapping[str, Any]]
+) -> Optional[int]:
+    request_id = str(row.get("request_id", ""))
+    explicit = row.get("target_tail_ready_timestamp_ns")
+    candidates = []
+    for draft in draft_rows:
+        result = draft.get("result")
+        if draft.get("request_id") != request_id or not isinstance(result, Mapping):
+            continue
+        if (
+            result.get("target_tail") is True
+            and result.get("proposal") is None
+            and result.get("terminal") is not True
+            and isinstance(result.get("target_tail_ready_ns"), int)
+        ):
+            candidates.append(result["target_tail_ready_ns"])
+    if isinstance(explicit, int):
+        if row.get("target_tail_ready") is not True or explicit not in candidates:
+            return None
+        return explicit
+    return candidates[-1] if len(candidates) == 1 else None
+
+
+def _terminal_tail_state_sequence(
+    request_id: str,
+    ready_ns: int,
+    state_rows: Sequence[Mapping[str, Any]],
+) -> bool:
+    required = (
+        SchedulerRequestState.TARGET_TAIL_READY.value,
+        "VERIFYING",
+        "COMMITTING",
+        SchedulerRequestState.TERMINAL.value,
+    )
+    transitions = [
+        event
+        for event in state_rows
+        if event.get("request_id") == request_id
+        and isinstance(event.get("timestamp_ns"), int)
+        and event["timestamp_ns"] >= ready_ns
+        and event.get("destination_state") in required
+    ]
+    transitions.sort(key=lambda event: event["timestamp_ns"])
+    observed = tuple(event.get("destination_state") for event in transitions)
+    return observed[: len(required)] == required
 
 
 def validate_round_accounting(rows: Sequence[Mapping[str, Any]]) -> list[str]:
@@ -892,19 +1132,351 @@ def validate_target_blind_isolation(
     return errors
 
 
-def validate_overlap_witness(rows: Sequence[Mapping[str, Any]]) -> list[str]:
+def validate_dual_runner_evidence(
+    run: Mapping[str, Any],
+    manifest: Any,
+    manifest_path: Path,
+) -> list[str]:
+    """Recompute runner-only invariants instead of trusting run.valid."""
+
+    errors = []
+    expected_ids = [row.request_id for row in manifest.requests]
+    workers = run.get("worker_ranks")
+    if not isinstance(workers, list):
+        errors.append("authoritative Target worker ranks are missing")
+        workers = []
+    errors.extend(
+        _validate_authoritative_worker_rows(
+            workers,
+            manifest.target_tensor_parallel_size,
+            manifest.target_physical_gpu_ids,
+        )
+    )
+
+    identity = run.get("request_identity")
+    if not isinstance(identity, Mapping):
+        errors.append("request identity/plugin binding evidence is missing")
+    else:
+        if identity.get("mapping_source") != "unique frozen prompt_token_ids":
+            errors.append("request identity did not use frozen prompt tokens")
+        if identity.get("suffix_parsing") is not False:
+            errors.append("opaque internal request IDs were parsed")
+        bindings = identity.get("bindings")
+        if not isinstance(bindings, list) or any(
+            not isinstance(row, Mapping) for row in bindings
+        ):
+            errors.append("request identity bindings are missing or malformed")
+        else:
+            internal = [str(row.get("internal_request_id", "")) for row in bindings]
+            stable = [str(row.get("request_id", "")) for row in bindings]
+            if (
+                any(not item for item in internal)
+                or len(internal) != len(set(internal))
+                or len(stable) != len(set(stable))
+                or set(stable) != set(expected_ids)
+                or identity.get("bound_request_count") != len(bindings)
+            ):
+                errors.append("request identity bindings do not cover the cohort exactly")
+
+    setup_ready = run.get("global_setup_ready")
+    if not isinstance(setup_ready, Mapping):
+        errors.append("global setup-ready evidence is missing")
+    else:
+        errors.extend(
+            f"setup-ready: {item}"
+            for item in validate_setup_ready(
+                setup_ready,
+                manifest_path=manifest_path,
+                consumer="dual-batch",
+                expected_request_ids=expected_ids,
+            )
+        )
+
+    shutdown = run.get("draft_shutdown")
+    if not isinstance(shutdown, Mapping):
+        errors.append("Draft service shutdown evidence is missing")
+    elif (
+        shutdown.get("shutdown") is not True
+        or shutdown.get("request_count") != len(expected_ids)
+        or shutdown.get("failures") != {}
+        or shutdown.get("inflight_request_ids") != []
+        or shutdown.get("work_queue_depth") != 0
+    ):
+        errors.append("Draft service shutdown evidence is incomplete")
+
+    outputs = run.get("decode_only_outputs", run.get("outputs", ()))
+    output_ids = [
+        str(row.get("request_id", ""))
+        for row in outputs
+        if isinstance(row, Mapping)
+    ] if isinstance(outputs, list) else []
+    if (
+        run.get("request_count") != len(expected_ids)
+        or len(output_ids) != len(set(output_ids))
+        or set(output_ids) != set(expected_ids)
+    ):
+        errors.append("runner output/request cohort identity is incomplete")
+    return list(dict.fromkeys(errors))
+
+
+def classify_embedded_dual_verdict(
+    run: Mapping[str, Any],
+    *,
+    scheduler_rows: Sequence[Mapping[str, Any]],
+    scheduler_errors: Sequence[str],
+    overlap_requirement: str,
+    overlap_evaluation: Mapping[str, Any],
+    legacy_source_commit: Optional[str],
+) -> dict[str, Any]:
+    """Classify every historical embedded error using structural raw evidence."""
+
+    embedded_valid = run.get("valid") is True
+    raw_errors = run.get("errors", ())
+    embedded_errors = [str(item) for item in raw_errors] if isinstance(
+        raw_errors, list
+    ) else ["embedded run errors are missing or malformed"]
+    supersedable = {}
+    if legacy_source_commit is not None and not scheduler_errors:
+        supersedable.update(_legacy_scheduler_error_proofs(scheduler_rows))
+    overlap_error = "no positive cross-request GPU Draft/Target overlap witness exists"
+    if legacy_source_commit is not None:
+        if overlap_requirement == "separate-gate":
+            supersedable[overlap_error] = "excluded-by-controlled-semantic-gate"
+        elif overlap_evaluation.get(
+            "hardware_placement_qualified_overlap_observed"
+        ) is True:
+            supersedable[overlap_error] = (
+                "raw-temporal-witness-plus-authoritative-worker-topology"
+            )
+
+    superseded = []
+    remaining = []
+    if embedded_valid and embedded_errors:
+        remaining.append("embedded valid=true artifact contains errors")
+    elif not embedded_valid and not embedded_errors:
+        remaining.append("embedded valid=false artifact has no classified errors")
+    for error in embedded_errors:
+        proof = supersedable.get(error)
+        if not embedded_valid and proof is not None:
+            superseded.append({"error": error, "proof": proof})
+        elif error:
+            remaining.append(error)
+    if legacy_source_commit is None and not embedded_valid:
+        remaining = embedded_errors or ["embedded Dual run is not valid"]
+        superseded = []
+    return {
+        "embedded_run_valid": embedded_valid,
+        "embedded_run_errors": embedded_errors,
+        "superseded_legacy_errors": superseded,
+        "remaining_embedded_errors": list(dict.fromkeys(remaining)),
+        "legacy_source_commit": legacy_source_commit,
+    }
+
+
+def _legacy_scheduler_error_proofs(
+    scheduler_rows: Sequence[Mapping[str, Any]],
+) -> dict[str, str]:
+    proofs = {}
+    for cycle in scheduler_rows:
+        for row in cycle.get("request_admissibility", ()):
+            request_id = str(row.get("request_id", ""))
+            legal_setup = (
+                row.get("specrhythm_state")
+                in {
+                    SchedulerRequestState.WAITING_DRAFT.value,
+                    SchedulerRequestState.DRAFTING.value,
+                }
+                and row.get("execution_phase") == ExecutionPhase.SETUP_PREFILL.value
+                and row.get("scheduled") is True
+                and row.get("scheduled_operation")
+                == ScheduledOperation.PREFILL.value
+            )
+            if legal_setup:
+                proofs[f"{request_id}: waiting request consumed Target budget"] = (
+                    "current-phase-aware-scheduler-validation"
+                )
+                if row.get("target_input_token_positions"):
+                    proofs[f"{request_id}: waiting request owns Target positions"] = (
+                        "current-phase-aware-scheduler-validation"
+                    )
+            if (
+                row.get("scheduled_operation")
+                == ScheduledOperation.TARGET_TAIL.value
+                and row.get("specrhythm_state")
+                == SchedulerRequestState.TARGET_TAIL_READY.value
+            ):
+                proofs[f"{request_id}: unexplained live Target advancement"] = (
+                    "authoritative-scheduled-operation-enum"
+                )
+                proofs[f"{request_id}: legal Target tail contract is incomplete"] = (
+                    "consumed-lifecycle-plus-draft-readiness-plus-terminal-state-proof"
+                )
+    return proofs
+
+
+def evaluate_overlap_witness(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    authoritative_worker_rows: Sequence[Mapping[str, Any]] = (),
+    expected_target_physical_gpu_ids: Sequence[int] = (1, 2),
+    allow_legacy_device_supersession: bool = False,
+) -> dict[str, Any]:
+    """Separate temporal overlap from hardware-placement qualification."""
+
+    expected = sorted(int(item) for item in expected_target_physical_gpu_ids)
+    workers = list(authoritative_worker_rows)
+    worker_errors = _validate_authoritative_worker_rows(
+        workers, len(expected), expected
+    ) if workers else ["authoritative Target worker evidence is missing"]
+    temporal = []
+    qualified = []
+    invalid_attribution = []
     for row in rows:
-        if (
-            isinstance(row.get("overlap_duration_ns"), int)
-            and row["overlap_duration_ns"] > 0
+        duration = row.get("overlap_duration_ns")
+        if not (
+            isinstance(duration, int)
+            and duration > 0
             and row.get("request_sets_disjoint") is True
             and row.get("draft_physical_gpu_ids") == [0]
-            and row.get("target_physical_gpu_ids") == [1, 2]
             and row.get("draft_cuda_events") is True
-            and len(row.get("target_rank_intervals", ())) == 2
         ):
-            return []
-    return ["no positive cross-request GPU Draft/Target overlap witness exists"]
+            continue
+        temporal.append(dict(row))
+        rank_rows = row.get("target_rank_intervals", ())
+        direct_errors = validate_target_rank_identity(
+            rank_rows if isinstance(rank_rows, list) else (),
+            len(expected),
+            workers,
+        )
+        direct_placement = (
+            row.get("target_physical_gpu_ids") == expected and not direct_errors
+        )
+        if direct_placement:
+            qualified.append(
+                {
+                    "row": dict(row),
+                    "attribution_source": "verification-rank-events",
+                    "historical_event_instrumentation_invalid": False,
+                }
+            )
+            continue
+        legacy_signature = _legacy_aliased_verify_identity(
+            rank_rows if isinstance(rank_rows, list) else (),
+            len(expected),
+            workers,
+        ) and row.get("target_physical_gpu_ids") == sorted(
+            {item.get("physical_gpu_id") for item in rank_rows}
+        )
+        if legacy_signature:
+            invalid_attribution.append(dict(row))
+        if (
+            allow_legacy_device_supersession
+            and legacy_signature
+            and not worker_errors
+        ):
+            qualified.append(
+                {
+                    "row": dict(row),
+                    "attribution_source": "authoritative-worker-ranks-supersede-legacy-event",
+                    "historical_event_instrumentation_invalid": True,
+                }
+            )
+    return {
+        "temporal_overlap_observed": bool(temporal),
+        "hardware_placement_qualified_overlap_observed": bool(qualified),
+        "temporal_witness_count": len(temporal),
+        "qualified_witness_count": len(qualified),
+        "historical_event_instrumentation_invalid": bool(invalid_attribution),
+        "authoritative_worker_topology_valid": not worker_errors,
+        "authoritative_worker_errors": worker_errors,
+        "qualified_witnesses": qualified,
+        "errors": (
+            []
+            if qualified
+            else ["no hardware-qualified positive cross-request GPU overlap witness exists"]
+        ),
+    }
+
+
+def validate_overlap_witness(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    authoritative_worker_rows: Sequence[Mapping[str, Any]] = (),
+    expected_target_physical_gpu_ids: Sequence[int] = (1, 2),
+    allow_legacy_device_supersession: bool = False,
+) -> list[str]:
+    return evaluate_overlap_witness(
+        rows,
+        authoritative_worker_rows=authoritative_worker_rows,
+        expected_target_physical_gpu_ids=expected_target_physical_gpu_ids,
+        allow_legacy_device_supersession=allow_legacy_device_supersession,
+    )["errors"]
+
+
+def _legacy_aliased_verify_identity(
+    rows: Sequence[Mapping[str, Any]],
+    tensor_parallel_size: int,
+    authoritative_worker_rows: Sequence[Mapping[str, Any]],
+) -> bool:
+    aliased_pair = {
+        (row.get("physical_gpu_id"), _canonical_gpu_uuid(row.get("gpu_uuid")))
+        for row in rows
+    }
+    worker_pairs = {
+        (
+            row.get("physical_gpu_id"),
+            _canonical_gpu_uuid(row.get("gpu_uuid")),
+        )
+        for row in authoritative_worker_rows
+    }
+    return bool(
+        len(rows) == tensor_parallel_size
+        and {row.get("tp_rank") for row in rows} == set(range(tensor_parallel_size))
+        and len({row.get("global_rank") for row in rows}) == tensor_parallel_size
+        and len({row.get("physical_gpu_id") for row in rows}) == 1
+        and len({row.get("gpu_uuid") for row in rows}) == 1
+        and len(aliased_pair) == 1
+        and aliased_pair <= worker_pairs
+        and all(
+            row.get("cuda_events") is True
+            and row.get("cuda_synchronized") is True
+            for row in rows
+        )
+    )
+
+
+def _canonical_gpu_uuid(value: Any) -> str:
+    result = str(value or "").strip().lower()
+    return result[4:] if result.startswith("gpu-") else result
+
+
+def _validate_authoritative_worker_rows(
+    rows: Sequence[Mapping[str, Any]],
+    tensor_parallel_size: int,
+    expected_physical_gpu_ids: Sequence[int],
+) -> list[str]:
+    errors = []
+    if len(rows) != tensor_parallel_size:
+        errors.append("worker rank count differs from Target TP size")
+    if {row.get("global_rank") for row in rows} != set(range(tensor_parallel_size)):
+        errors.append("worker global ranks are incomplete")
+    if {row.get("physical_gpu_id") for row in rows} != set(
+        expected_physical_gpu_ids
+    ):
+        errors.append("worker physical GPU set differs from decode-ready placement")
+    uuids = [str(row.get("gpu_uuid", "")) for row in rows]
+    if any(not item for item in uuids) or len(set(uuids)) != len(rows):
+        errors.append("worker GPU UUIDs are missing or aliased")
+    for row in rows:
+        if row.get("world_size") != tensor_parallel_size:
+            errors.append("worker world size differs from Target TP size")
+        if row.get("parameter_count", 0) <= 0 or row.get("parameter_bytes", 0) <= 0:
+            errors.append("worker rank lacks model parameters")
+        if row.get("allocated_memory_bytes", 0) <= 0:
+            errors.append("worker rank lacks allocated CUDA memory")
+        if row.get("all_parameters_on_expected_device") is not True:
+            errors.append("worker parameters are not on the active CUDA device")
+    return list(dict.fromkeys(errors))
 
 
 def diagnose_overlap_timing(

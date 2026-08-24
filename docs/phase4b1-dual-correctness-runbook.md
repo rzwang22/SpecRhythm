@@ -27,28 +27,41 @@ PASS, Serial diagnostics-compatibility FAIL, both Dual runs NOT RUN, Gate1 NOT E
 
 The observer now records a canonical proposal ID only when the pending protocol actually provides
 one. Serial proposals retain `proposal_id=null`; no synthetic Dual identity is created and the
-Serial protocol is unchanged. Because this modifies production experiment diagnostics, do not
-resume or accept either earlier root. Rerun the complete Section 1–3 chain in a fresh directory
-under the new commit, including a new stock pair, Target, Serial, both Dual controls and both
-validators.
+Serial protocol is unchanged. The complete `3ee1c3e` root below is the fresh run that followed
+that fix; the earlier partial roots remain provenance only.
 
 The complete real-A800 root under `3ee1c3ec4007d3e835bc7d7f385d2d3b5c3c3e8a`
 is also immutable. Preparation, Target, Serial diagnostics compatibility, both Dual executions,
 the controlled scheduler construction, exact output triangle, keyed repeatability, state/proposal
 lifecycle, accounting, verification, Draft sync, target blindness, measurement boundary and
-cleanup all passed. Its unified validation still failed: the scheduler validator rejected legal
-setup-prefill and the authoritative `legal-target-tail` value, while the controlled two-request
-workload produced no positive physical overlap. The helper then masked each nonzero Dual rc after
-successful cleanup. Classify this root as controlled construction PASS, exact-token triangle PASS,
-semantic components PASS, repeatability PASS, scheduler validator false-positive FAIL, physical
-overlap NOT OBSERVED, final Gate1 NOT YET ACHIEVED, performance claim NONE.
+cleanup all passed. Read-only diagnosis established a 57.989848 ms disjoint-request temporal
+Draft/Verify overlap in Dual-1. Dual-2 has zero overlap and a 426.967646 ms separation, as expected
+from its test-only two-ready coordination. The historical verification rows incorrectly attribute
+both TP ranks to GPU1/the same UUID; the independently validated worker snapshots prove the actual
+Target workers are GPU1 and GPU2. Never rewrite the old JSONL.
+
+The remaining scheduler error was also instrumentation-only. `proposal_present=true` on the legal
+tail means a consumed proposal remains in the scheduler's historical map; it does not mean live
+speculative tokens remain. Current validation accepts this only when exact proposal lifecycle,
+Draft target-tail readiness and terminal state evidence prove that the proposal was consumed
+before the one-position tail. New events explicitly serialize `proposal_consumed`,
+`live_proposal_present` and the tail readiness timestamp.
 
 The gate structure is now explicit. Gate 1 uses `overlap-requirement=separate-gate`: its outcome
-is controlled semantic correctness, while the same report retains `overlap.valid=false` and
-forbids an overlap claim. Gate 1.5/Gate 2 uses the default `required` mode with at least five
-requests and must produce a positive disjoint-request GPU Draft/Target interval. It is the overlap
-existence gate. No sleep, model slowdown, scheduler-state proxy or manufactured interval is
-allowed. Gate 3 remains blocked until both earlier gates pass.
+is controlled semantic correctness and its report preserves per-run temporal and
+hardware-qualified overlap evidence. It does not require both controlled runs to overlap and does
+not authorize an overlap-benefit claim. Gate 1.5/Gate 2 uses the default `required` mode with at
+least five requests and must produce at least one positive disjoint-request GPU0 Draft/GPU1-2
+Target witness under default asynchronous coordination. No sleep, model slowdown, scheduler-state
+proxy or manufactured interval is allowed. Gate 3 remains blocked until both earlier gates pass.
+
+The unified validator has an explicit legacy authority mode for this one immutable source commit.
+It recomputes every semantic and runner-only invariant from raw evidence, records the embedded
+historical verdict as provenance, supersedes only exact structurally proven obsolete errors and
+fails on every remaining error. It also uses authoritative `worker_ranks` to supersede the known
+per-verify aliasing bug while retaining `historical_event_instrumentation_invalid=true`. Invoke
+this mode only with `--legacy-source-commit 3ee1c3ec4007d3e835bc7d7f385d2d3b5c3c3e8a`
+and write all outputs outside the preserved tree.
 
 The old overlap JSONL stores only actual intersections, so a zero row cannot identify the nearest
 non-overlapping pair by itself. `phase4b1-overlap-diagnose` reads the immutable Draft-work,
@@ -59,8 +72,102 @@ old root. It is diagnostic-only and never converts scheduler concurrency into ph
 `phase4b1_restore_stock` now emits an immutable `check --expect-state stock` manifest, while
 `phase4b1_apply_patch_stack` emits a distinct immutable `check --expect-state patched` manifest.
 Each state accepts only its exact pinned runner/scheduler SHA pair; a partial or opposite state
-fails closed. For the recovery run, use a fresh root ending in `phase4b1-gate1-only-...`, execute
-Sections 1–3 only, confirm Gate 1 Outcome A, and stop before Section 4.
+fails closed. Do not start a new GPU recovery run for the present task. First perform only the
+legacy read-only revalidation below and keep its output outside the `3ee1c3e` tree.
+
+## 0. Close the preserved Gate 1 by read-only revalidation
+
+This section starts no model process and performs no CUDA forward. Resolve exactly one preserved
+Gate directory, create a new analysis directory under the current code commit, then run both the
+timing diagnostic and the explicit legacy authority mode.
+
+```bash
+set -euo pipefail
+cd /root/autodl-tmp/src/SpecRhythm
+git fetch origin codex/vllm-serving-v0.1
+git switch --detach origin/codex/vllm-serving-v0.1
+export SR_REVALIDATOR_COMMIT="$(git rev-parse HEAD)"
+test -z "$(git status --short)"
+
+conda activate /root/autodl-tmp/envs/specrhythm-phase4-vllm-0.25.1
+python -m pip install -e '.[dev]' --no-deps
+
+export SR_LEGACY_COMMIT="3ee1c3ec4007d3e835bc7d7f385d2d3b5c3c3e8a"
+export SR_LEGACY_BASE="/root/autodl-tmp/SpecRhythm-data/results/phase4/$SR_LEGACY_COMMIT"
+mapfile -t SR_GATE_MATCHES < <(
+  find "$SR_LEGACY_BASE" -type d -name 'Gate-1-controlled-2' -print | sort
+)
+printf '%s\n' "${SR_GATE_MATCHES[@]}"
+test "${#SR_GATE_MATCHES[@]}" -eq 1
+export SR_LEGACY_GATE1="${SR_GATE_MATCHES[0]}"
+export SR_READ_ONLY_OUT="/root/autodl-tmp/SpecRhythm-data/results/phase4/$SR_REVALIDATOR_COMMIT/read-only-3ee1c3e-$(date -u +%Y%m%dT%H%M%SZ)"
+test ! -e "$SR_READ_ONLY_OUT"
+mkdir -p "$SR_READ_ONLY_OUT"
+
+specrhythm phase4b1-overlap-diagnose \
+  --draft-work-events "$SR_LEGACY_GATE1/dual-1/draft-work-events.jsonl" \
+  --draft-work-events "$SR_LEGACY_GATE1/dual-2/draft-work-events.jsonl" \
+  --verification-events "$SR_LEGACY_GATE1/dual-1/verification-events.jsonl" \
+  --verification-events "$SR_LEGACY_GATE1/dual-2/verification-events.jsonl" \
+  --overlap-events "$SR_LEGACY_GATE1/dual-1/overlap-events.jsonl" \
+  --overlap-events "$SR_LEGACY_GATE1/dual-2/overlap-events.jsonl" \
+  --output "$SR_READ_ONLY_OUT/overlap-diagnosis.json"
+```
+
+Build the validator arguments without using `phase4b1_validate_gate`, because that helper writes
+inside its gate root:
+
+```bash
+SR_VALIDATE=(
+  specrhythm phase4b1-dual-correctness-validate
+  --target "$SR_LEGACY_GATE1/target/resident-target.json"
+  --serial "$SR_LEGACY_GATE1/serial/resident-serial.json"
+  --target-manifest "$SR_LEGACY_GATE1/target/decode-ready-manifest.json"
+  --serial-manifest "$SR_LEGACY_GATE1/serial/decode-ready-manifest.json"
+  --target-process-lifecycle "$SR_LEGACY_GATE1/target/process-lifecycle.json"
+  --serial-process-lifecycle "$SR_LEGACY_GATE1/serial/process-lifecycle.json"
+)
+for SR_DUAL in "$SR_LEGACY_GATE1/dual-1" "$SR_LEGACY_GATE1/dual-2"; do
+  SR_VALIDATE+=(
+    --dual "$SR_DUAL/resident-dual.json"
+    --dual-manifest "$SR_DUAL/decode-ready-manifest.json"
+    --request-state-events "$SR_DUAL/request-state-events.jsonl"
+    --proposal-events "$SR_DUAL/proposal-events.jsonl"
+    --proposal-lifecycle-events "$SR_DUAL/proposal-lifecycle-events.jsonl"
+    --scheduler-events "$SR_DUAL/scheduler-events.jsonl"
+    --verification-events "$SR_DUAL/verification-events.jsonl"
+    --draft-work-events "$SR_DUAL/draft-work-events.jsonl"
+    --target-diagnostics "$SR_DUAL/target-diagnostics.jsonl"
+    --overlap-events "$SR_DUAL/overlap-events.jsonl"
+    --process-lifecycle "$SR_DUAL/process-lifecycle.json"
+  )
+done
+"${SR_VALIDATE[@]}" \
+  --overlap-requirement separate-gate \
+  --legacy-source-commit "$SR_LEGACY_COMMIT" \
+  --output "$SR_READ_ONLY_OUT/revalidation.json" \
+  --markdown-output "$SR_READ_ONLY_OUT/revalidation.md"
+
+python - "$SR_READ_ONLY_OUT/revalidation.json" <<'PY'
+import json
+import sys
+
+value = json.load(open(sys.argv[1], encoding="utf-8"))
+assert value["valid"] is True and value["outcome"] == "A"
+assert value["input_artifacts_immutable"] is True
+assert value["triangle"]["valid"] is True
+assert value["overlap_gate"]["temporal_observed_per_run"] == [True, False]
+assert value["overlap_gate"]["hardware_qualified_observed_per_run"] == [True, False]
+assert value["overlap_gate"]["claim_permitted"] is False
+for run in value["dual_runs"]:
+    assert run["recomputed_semantic_valid"] is True
+    authority = run["embedded_verdict_authority"]
+    assert authority["remaining_embedded_errors"] == []
+PY
+```
+
+Stop after this section and return `revalidation.json` and `overlap-diagnosis.json` for review.
+Do not continue to Gate 1.5, Gate 2 or Gate 3.
 
 ## 1. Exact checkout and environment
 

@@ -839,6 +839,10 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("required", "separate-gate"),
         default="required",
     )
+    phase4b1_validate.add_argument(
+        "--legacy-source-commit",
+        help="explicit immutable source commit for supported read-only revalidation",
+    )
 
     phase4b1_overlap_diagnose = subparsers.add_parser(
         "phase4b1-overlap-diagnose",
@@ -1557,6 +1561,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 output_path=Path(args.output).resolve(),
                 markdown_path=Path(args.markdown_output).resolve(),
                 overlap_requirement=args.overlap_requirement,
+                legacy_source_commit=args.legacy_source_commit,
             )
         except (
             FileNotFoundError,

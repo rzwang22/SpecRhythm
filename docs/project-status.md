@@ -34,7 +34,7 @@ claims.
 | [#1 workload-v0.1](https://github.com/rzwang22/SpecRhythm/pull/1) | merged | strict Mooncake replay, R3 proxy config, validator, manifest, fixture tests and docs | workload plumbing only; proxy payload and illustrative acceptance |
 | [#2 simulator-semantics-v0.2](https://github.com/rzwang22/SpecRhythm/pull/2) | frozen draft; Phase 2 complete, not merged | proposal lifecycle, deterministic tree oracle, tree-aware allocators, base-preserving residual controls, Phase-2 nested search pools and common-snapshot oracle replay, path-aware eager and accounting | pure-Python proxy and oracle upper bounds only; no deployable oracle, measured search cost, GPU integration, or performance claim |
 | [#3 gpu-integration-v0.1](https://github.com/rzwang22/SpecRhythm/pull/3) | draft; Phase 3B.1 and corrected-20 Phase 3C.2 complete; Phase 3C.3 corrected-100 awaiting server run | hardened multi-rank primitives, corrected R3-real traces, common-prefix replay, request-bootstrap statistics, 2x shell decomposition and diagnostic learned ranker | user-run 3×A800 correctness artifacts plus Mac CPU tests; no packed-tree/serving engine, Dual-Batch, SLO, calibrated latency or speedup claim |
-| [#4 vllm-serving-v0.1](https://github.com/rzwang22/SpecRhythm/pull/4) | draft; Phase 4A.1.1 Outcome A and Phase 4B.0 infrastructure frozen; Phase 4B.1 CPU contracts implemented, A800 gates pending | decode-ready Target/Serial plus real asynchronous resident Dual runner, lifecycle/scheduler/KV/accounting evidence and exact triangle validator | Mac CPU contract PASS only for Phase 4B.1; no Dual GPU Outcome A, performance, packed tree, eager, KVConnector, SLO or goodput claim |
+| [#4 vllm-serving-v0.1](https://github.com/rzwang22/SpecRhythm/pull/4) | draft; Phase 4A.1.1 Outcome A and Phase 4B.0 frozen; Phase 4B.1 controlled real-A800 evidence complete, legacy read-only closure implemented | decode-ready Target/Serial plus real asynchronous resident Dual runner, lifecycle/scheduler/KV/accounting evidence, exact triangle and explicit evidence-authority validator | controlled correctness evidence only; no performance, packed tree, eager, KVConnector, SLO or goodput claim |
 
 ## Phase 4A.0–4A.1: vLLM freeze and Serial Disaggregated correctness
 
@@ -164,11 +164,15 @@ separate proposal lifecycle, while the unified validator compares Target, Serial
 Dual runs exactly, checks keyed repeats and all logical invariants, and proves that it did not
 mutate its inputs. Local CPU tests pass. A complete two-request run at `3ee1c3e` passed Target,
 Serial, both Dual executions, controlled Cases A/B/C, the exact output triangle, keyed
-repeatability and every semantic component except the scheduler validator and physical overlap.
-The scheduler failures are confirmed validator contract bugs: setup-prefill was judged by
-timed-decode rules and `legal-target-tail` was compared with a stale literal. The two requests
-produced no positive cross-request GPU interval. Therefore the preserved result is not a final
-Gate1 Outcome A and carries no performance claim. See
+repeatability and all underlying semantic components. Read-only replay resolved the remaining
+instrumentation issues. A legal Target tail may retain historical proposal metadata only when a
+prior `CONSUMED` lifecycle event proves there is no live proposal; Draft readiness and the ordered
+one-token terminal transitions remain mandatory. Dual-1 contains a real 57.989848 ms
+cross-request temporal overlap; Dual-2 intentionally has none under two-ready coordination. The
+historical per-verify rows alias both TP ranks to GPU1 because they used process rank/device zero,
+while authoritative worker snapshots already prove Target placement on GPUs 1 and 2. Current
+instrumentation uses the actual active CUDA device and cross-validates rank, physical GPU and UUID.
+The preserved result remains a correctness artifact only and carries no performance claim. See
 [phase4b-decode-ready.md](phase4b-decode-ready.md) and
 [phase4b-dual-batch.md](phase4b-dual-batch.md). The active server procedure is
 [phase4b1-dual-correctness-runbook.md](phase4b1-dual-correctness-runbook.md).
@@ -189,12 +193,14 @@ The observer is now proposal-protocol-aware: it preserves a real canonical Dual 
 scheduler/state/lifecycle logic remain unchanged.
 
 Gate semantics are now separated without weakening evidence. Gate1 is controlled two-request
-semantic correctness and reports overlap independently. Gate1.5/Gate2 keeps positive physical
-overlap mandatory on at least five requests through the unchanged asynchronous path. Default
-validation remains overlap-required; only the controlled Gate1 runbook opts into the explicit
-`separate-gate` profile. The helper also preserves run and validator exit codes while always
-checking cleanup. A fresh Gate1-only rerun is pending; Gate1.5, Gate2/3, performance and SLO work
-remain blocked.
+semantic correctness and reports per-run temporal/hardware-qualified overlap independently.
+Gate1.5/Gate2 keeps at least one hardware-qualified positive overlap mandatory on at least five
+requests through the unchanged asynchronous path. Default validation remains overlap-required;
+only controlled Gate1 opts into `separate-gate`. An explicit legacy read-only authority mode
+accepts only the exact `3ee1c3e` source, recomputes semantic plus runner-only invariants, and
+supersedes only structurally proven historical errors. The helper continues to preserve run and
+validator exit codes while always checking cleanup. No new GPU run has been performed; Gate1.5,
+Gate2/3, performance and SLO work remain blocked.
 
 ## Phase 3.0: GPU readiness and real-trace runner
 
@@ -506,7 +512,8 @@ compute-waste ratios.
 - `D(B,K,C)`, `V(B,K,C)`, acceptance, confidence, and candidate roof are proxy inputs until GPU
   calibration.
 - R3 proxy lengths are sampled and are not HumanEval, Alpaca, or CNN/DailyMail payloads.
-- Phase 4B.1 has a decode-only asynchronous linear Dual runner, but its GPU gates are pending. It
+- Phase 4B.1 has a decode-only asynchronous linear Dual runner and complete controlled A800 raw
+  evidence; the current read-only validator closure still must be executed on that immutable tree. It
   has no SGLang, packed-tree verification, Dual-Eager, KVConnector, arrival scheduling, or serving
   performance evaluation. The persistent Draft HF adapter is correctness-only.
 - No current result may be cited as evidence of real GPU speedup or full AdaServe/SpecRhythm

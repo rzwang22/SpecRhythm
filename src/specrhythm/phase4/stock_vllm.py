@@ -151,6 +151,36 @@ def _visible_physical_ids() -> Tuple[int, ...]:
     return values
 
 
+def active_cuda_device_identity(torch: Any, device: Any = None) -> dict[str, Any]:
+    """Resolve one worker's identity from its actual active CUDA device.
+
+    vLLM may expose every worker to a different CUDA_VISIBLE_DEVICES view.  A
+    process rank is therefore not a CUDA device index.  This helper is shared
+    by the authoritative worker snapshot and the verification observer so both
+    use the same logical-to-physical mapping contract.
+    """
+
+    resolved = torch.cuda.current_device() if device is None else device
+    logical_gpu_id = int(
+        resolved.index if getattr(resolved, "index", None) is not None else resolved
+    )
+    visible = _visible_physical_ids()
+    if logical_gpu_id < 0 or logical_gpu_id >= len(visible):
+        raise RuntimeError("active CUDA device is outside CUDA_VISIBLE_DEVICES")
+    physical_gpu_id = visible[logical_gpu_id]
+    properties = torch.cuda.get_device_properties(resolved)
+    gpu_uuid = _nvidia_uuid(physical_gpu_id)
+    if not gpu_uuid:
+        raise RuntimeError("active CUDA device UUID is unavailable from nvidia-smi")
+    return {
+        "logical_cuda_index": logical_gpu_id,
+        "physical_gpu_id": physical_gpu_id,
+        "gpu_uuid": gpu_uuid,
+        "gpu_name": properties.name,
+        "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES"),
+    }
+
+
 def _worker_runtime_snapshot(worker: Any) -> dict[str, Any]:
     """Small callable serialized by vLLM collective_rpc to every TP worker."""
 
@@ -160,12 +190,11 @@ def _worker_runtime_snapshot(worker: Any) -> dict[str, Any]:
     model = worker.get_model()
     parameters = [parameter for parameter in model.parameters() if parameter.numel() > 0]
     devices = sorted({str(parameter.device) for parameter in parameters})
-    logical_gpu_id = int(worker.device.index)
-    visible = _visible_physical_ids()
-    physical_gpu_id = visible[logical_gpu_id]
+    identity = active_cuda_device_identity(torch, worker.device)
+    logical_gpu_id = identity["logical_cuda_index"]
+    physical_gpu_id = identity["physical_gpu_id"]
     allocated = int(torch.cuda.memory_allocated(worker.device))
     reserved = int(torch.cuda.memory_reserved(worker.device))
-    properties = torch.cuda.get_device_properties(worker.device)
     attention_backends = set()
     for groups in getattr(worker.model_runner, "attn_groups", ()):  # V1 and V2 runners
         for group in groups:
@@ -180,9 +209,9 @@ def _worker_runtime_snapshot(worker: Any) -> dict[str, Any]:
         "world_size": int(worker.vllm_config.parallel_config.world_size),
         "logical_cuda_index": logical_gpu_id,
         "physical_gpu_id": physical_gpu_id,
-        "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES"),
-        "gpu_uuid": _nvidia_uuid(physical_gpu_id),
-        "gpu_name": properties.name,
+        "cuda_visible_devices": identity["cuda_visible_devices"],
+        "gpu_uuid": identity["gpu_uuid"],
+        "gpu_name": identity["gpu_name"],
         "parameter_count": sum(parameter.numel() for parameter in parameters),
         "parameter_bytes": sum(
             parameter.numel() * parameter.element_size() for parameter in parameters
@@ -211,6 +240,9 @@ def validate_worker_ranks(rows: Sequence[Mapping[str, Any]], engine: EngineConfi
     physical = {row.get("physical_gpu_id") for row in rows}
     if physical != set(engine.physical_gpu_ids):
         errors.append("workers are not bound to the expected physical GPUs")
+    uuids = [str(row.get("gpu_uuid", "")) for row in rows]
+    if len(rows) > 1 and len(set(uuids)) != len(rows):
+        errors.append("worker ranks report aliased GPU UUIDs")
     for row in rows:
         if row.get("world_size") != engine.tensor_parallel_size:
             errors.append("worker reported an unexpected TP world size")

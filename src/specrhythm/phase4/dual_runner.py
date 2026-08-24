@@ -551,7 +551,12 @@ def run_resident_dual_batch(
     errors = [
         *validate_request_state_events(state_rows),
         *validate_proposal_lifecycle_events(lifecycle_rows),
-        *validate_scheduler_cycles(scheduler_rows),
+        *validate_scheduler_cycles(
+            scheduler_rows,
+            proposal_lifecycle_rows=lifecycle_rows,
+            state_rows=state_rows,
+            draft_rows=draft_rows,
+        ),
         *validate_round_accounting(proposal_rows),
         *_validate_request_identity_report(plugin_report, requests),
     ]

@@ -22,11 +22,15 @@ from specrhythm.phase4.decode_ready import (
     ResidentWarmStartProvider,
 )
 from specrhythm.phase4.dual_correctness import (
+    LEGACY_GATE1_COMMIT,
+    classify_embedded_dual_verdict,
     compare_consumer_triangle,
     diagnose_overlap_artifacts,
     diagnose_overlap_timing,
+    evaluate_overlap_witness,
     validate_controlled_gate,
     validate_draft_sync,
+    validate_dual_runner_evidence,
     validate_overlap_witness,
     validate_phase4b1_dual_correctness,
     validate_proposal_lifecycle_events,
@@ -38,6 +42,7 @@ from specrhythm.phase4.dual_correctness import (
 from specrhythm.phase4.dual_service import DualDraftMachine
 from specrhythm.phase4.manifest import sha256_file
 from specrhythm.phase4.process_lifecycle import LIFECYCLE_SCHEMA
+from specrhythm.phase4.resident_setup import build_setup_ready
 from specrhythm.phase4.serial import token_prefix_hash
 from specrhythm.phase4.transport import CheckpointJsonl
 
@@ -216,6 +221,72 @@ def test_cross_request_overlap_witness_requires_real_placement():
     assert validate_overlap_witness([witness]) == []
     witness["request_sets_disjoint"] = False
     assert validate_overlap_witness([witness])
+
+
+def test_legacy_verify_alias_is_superseded_only_by_authoritative_workers():
+    witness = _overlap()
+    for row in witness["target_rank_intervals"]:
+        row["logical_cuda_index"] = 0
+        row["physical_gpu_id"] = 1
+        row["gpu_uuid"] = "1"
+    witness["target_physical_gpu_ids"] = [1]
+    strict = evaluate_overlap_witness(
+        [witness], authoritative_worker_rows=_worker_rows()
+    )
+    assert strict["temporal_overlap_observed"] is True
+    assert strict["hardware_placement_qualified_overlap_observed"] is False
+    legacy = evaluate_overlap_witness(
+        [witness],
+        authoritative_worker_rows=_worker_rows(),
+        allow_legacy_device_supersession=True,
+    )
+    assert legacy["historical_event_instrumentation_invalid"] is True
+    assert legacy["hardware_placement_qualified_overlap_observed"] is True
+    assert legacy["qualified_witnesses"][0]["attribution_source"] == (
+        "authoritative-worker-ranks-supersede-legacy-event"
+    )
+
+
+def test_legacy_embedded_verdict_requires_exact_structural_classification():
+    snapshot = _snapshot(
+        "A",
+        SchedulerRequestState.WAITING_DRAFT,
+        proposal=False,
+        phase=ExecutionPhase.SETUP_PREFILL,
+    )
+    row = decision_event(
+        snapshot,
+        decide_admissibility(snapshot),
+        cycle_id=0,
+        scheduler_step=0,
+        scheduled=True,
+        target_input_positions=(0, 1),
+    )
+    scheduler = [_scheduler_cycle_for(row)]
+    known = "A: waiting request consumed Target budget"
+    overlap = "no positive cross-request GPU Draft/Target overlap witness exists"
+    authority = classify_embedded_dual_verdict(
+        {"valid": False, "errors": [known, overlap]},
+        scheduler_rows=scheduler,
+        scheduler_errors=[],
+        overlap_requirement="separate-gate",
+        overlap_evaluation={},
+        legacy_source_commit=LEGACY_GATE1_COMMIT,
+    )
+    assert authority["remaining_embedded_errors"] == []
+    assert [row["error"] for row in authority["superseded_legacy_errors"]] == [
+        known,
+        overlap,
+    ]
+    rejected = classify_embedded_dual_verdict(
+        {"valid": False, "errors": [known, "unrelated model failure"]},
+        scheduler_rows=scheduler,
+        scheduler_errors=[],
+        overlap_requirement="separate-gate",
+        overlap_evaluation={},
+        legacy_source_commit=LEGACY_GATE1_COMMIT,
+    )
+    assert rejected["remaining_embedded_errors"] == ["unrelated model failure"]
 
 
 def test_overlap_diagnostic_reports_exact_nearest_zero_duration_pair(tmp_path):
@@ -415,20 +486,120 @@ def test_scheduler_validator_rejects_drafting_timed_decode_positions():
 
 
 def test_scheduler_validator_accepts_exact_legal_target_tail():
-    snapshot = _snapshot(
-        "A", SchedulerRequestState.TARGET_TAIL_READY, proposal=False
+    cycle, lifecycle, states, drafts = _legal_tail_evidence()
+    assert (
+        validate_scheduler_cycles(
+            [cycle],
+            proposal_lifecycle_rows=lifecycle,
+            state_rows=states,
+            draft_rows=drafts,
+        )
+        == []
     )
-    decision = decide_admissibility(snapshot)
-    assert decision.operation is ScheduledOperation.TARGET_TAIL
-    row = decision_event(
-        snapshot,
-        decision,
-        cycle_id=0,
-        scheduler_step=0,
-        scheduled=True,
-        target_input_positions=(2,),
+
+
+def test_scheduler_validator_rejects_live_proposal_target_tail():
+    cycle, lifecycle, states, drafts = _legal_tail_evidence()
+    row = cycle["request_admissibility"][0]
+    row["proposal_consumed"] = False
+    row["live_proposal_present"] = True
+    assert any(
+        "live proposal" in item
+        for item in validate_scheduler_cycles(
+            [cycle],
+            proposal_lifecycle_rows=lifecycle,
+            state_rows=states,
+            draft_rows=drafts,
+        )
     )
-    assert validate_scheduler_cycles([_scheduler_cycle_for(row)]) == []
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    (
+        (lambda row: row.update(spec_token_ids=[99]), "speculative tokens"),
+        (
+            lambda row: row.update(target_input_token_positions=[35, 36]),
+            "exactly one position",
+        ),
+    ),
+)
+def test_scheduler_validator_rejects_malformed_target_tail(mutation, message):
+    cycle, lifecycle, states, drafts = _legal_tail_evidence()
+    mutation(cycle["request_admissibility"][0])
+    assert any(
+        message in item
+        for item in validate_scheduler_cycles(
+            [cycle],
+            proposal_lifecycle_rows=lifecycle,
+            state_rows=states,
+            draft_rows=drafts,
+        )
+    )
+
+
+def test_scheduler_validator_rejects_tail_without_draft_readiness():
+    cycle, lifecycle, states, _ = _legal_tail_evidence()
+    assert any(
+        "readiness is missing" in item
+        for item in validate_scheduler_cycles(
+            [cycle],
+            proposal_lifecycle_rows=lifecycle,
+            state_rows=states,
+            draft_rows=[],
+        )
+    )
+
+
+def test_legacy_3ee_target_tail_accepts_consumed_historical_metadata():
+    cycle, lifecycle, states, drafts = _legal_tail_evidence()
+    row = cycle["request_admissibility"][0]
+    request_id = "r3-86d740144712e45992f62adc"
+    cycle["cycle_id"] = 164
+    cycle["scheduled_request_ids"] = [request_id]
+    row.update(
+        {
+            "cycle_id": 164,
+            "request_id": request_id,
+            "specrhythm_state": "TARGET_TAIL_READY",
+            "execution_phase": "timed-decode",
+            "scheduled": True,
+            "scheduled_operation": "legal-target-tail",
+            "admissible": True,
+            "proposal_present": True,
+            "proposal_valid": False,
+            "spec_token_ids": [],
+            "target_input_token_positions": [35],
+            "num_computed_tokens": 35,
+            "num_output_tokens": 11,
+            "prefix_version": 2,
+            "round_id": 1,
+        }
+    )
+    for event in lifecycle:
+        event.update(
+            {"request_id": request_id, "prefix_version": 2, "round_id": 1}
+        )
+    for event in states:
+        event["request_id"] = request_id
+    drafts[0]["request_id"] = request_id
+    drafts[0]["result"].update({"request_id": request_id, "round_id": 1})
+    for key in (
+        "proposal_consumed",
+        "live_proposal_present",
+        "target_tail_ready",
+        "target_tail_ready_timestamp_ns",
+    ):
+        row.pop(key)
+    assert (
+        validate_scheduler_cycles(
+            [cycle],
+            proposal_lifecycle_rows=lifecycle,
+            state_rows=states,
+            draft_rows=drafts,
+        )
+        == []
+    )
 
 
 def test_scheduler_validator_rejects_arbitrary_timed_decode_advancement():
@@ -449,29 +620,54 @@ def test_scheduler_validator_rejects_arbitrary_timed_decode_advancement():
 
 
 @pytest.mark.parametrize(
-    ("overlap_requirement", "overlap_duration_ns", "expected_valid"),
     (
-        ("required", 5, True),
-        ("required", 0, False),
-        ("separate-gate", 0, True),
+        "overlap_requirement",
+        "overlap_durations_ns",
+        "legacy_source_commit",
+        "expected_valid",
+    ),
+    (
+        ("required", (5, 5), None, True),
+        ("required", (5, 0), None, True),
+        ("required", (0, 0), None, False),
+        ("separate-gate", (0, 0), None, True),
+        ("separate-gate", (0, 0), LEGACY_GATE1_COMMIT, True),
     ),
 )
 def test_full_triangle_validator_is_read_only_and_raw_order_is_diagnostic(
-    tmp_path, overlap_requirement, overlap_duration_ns, expected_valid
+    tmp_path,
+    overlap_requirement,
+    overlap_durations_ns,
+    legacy_source_commit,
+    expected_valid,
 ):
-    manifest = _manifest().to_dict()
-    manifest_paths = [tmp_path / f"m-{index}.json" for index in range(4)]
+    artifact_root = tmp_path / "preserved"
+    analysis_root = tmp_path / "analysis"
+    artifact_root.mkdir()
+    analysis_root.mkdir()
+    manifest_object = _manifest(git_commit=legacy_source_commit or "1" * 40)
+    manifest = manifest_object.to_dict()
+    manifest_paths = [artifact_root / f"m-{index}.json" for index in range(4)]
     for path in manifest_paths:
         _json(path, manifest)
-    target_path = tmp_path / "target.json"
-    serial_path = tmp_path / "serial.json"
+    target_path = artifact_root / "target.json"
+    serial_path = artifact_root / "serial.json"
     _json(target_path, _run_outputs())
     _json(serial_path, _run_outputs())
-    dual_paths = [tmp_path / "dual-1.json", tmp_path / "dual-2.json"]
-    for path in dual_paths:
-        _json(path, _run_outputs())
-    target_process = tmp_path / "target-process.json"
-    serial_process = tmp_path / "serial-process.json"
+    dual_paths = [artifact_root / "dual-1.json", artifact_root / "dual-2.json"]
+    for index, path in enumerate(dual_paths):
+        run = _run_outputs(
+            manifest=manifest_object,
+            manifest_path=manifest_paths[index + 2],
+        )
+        if legacy_source_commit is not None:
+            run["valid"] = False
+            run["errors"] = [
+                "no positive cross-request GPU Draft/Target overlap witness exists"
+            ]
+        _json(path, run)
+    target_process = artifact_root / "target-process.json"
+    serial_process = artifact_root / "serial-process.json"
     _json(target_process, _process_lifecycle())
     _json(serial_process, _process_lifecycle())
     artifacts = {name: [] for name in (
@@ -495,16 +691,19 @@ def test_full_triangle_validator_is_read_only_and_raw_order_is_diagnostic(
             ],
             "drafts": [_draft_row(request) for request in order],
             "diagnostics": [_diagnostic(request) for request in order],
-            "overlaps": [
-                {**_overlap(), "overlap_duration_ns": overlap_duration_ns}
+                "overlaps": [
+                {
+                    **_overlap(),
+                    "overlap_duration_ns": overlap_durations_ns[run_index],
+                }
             ],
         }
         for name, rows in values.items():
-            path = tmp_path / f"{name}-{run_index}.jsonl"
+            path = artifact_root / f"{name}-{run_index}.jsonl"
             for row in rows:
                 CheckpointJsonl(path).append(row)
             artifacts[name].append(path)
-        process = tmp_path / f"process-{run_index}.json"
+        process = artifact_root / f"process-{run_index}.json"
         _json(process, _process_lifecycle())
         artifacts["processes"].append(process)
     inputs = [
@@ -517,7 +716,7 @@ def test_full_triangle_validator_is_read_only_and_raw_order_is_diagnostic(
         *sum(artifacts.values(), []),
     ]
     before = {str(path): sha256_file(path) for path in inputs}
-    report = validate_phase4b1_dual_correctness(
+    validation_kwargs = dict(
         target_path=target_path,
         serial_path=serial_path,
         dual_paths=dual_paths,
@@ -535,19 +734,88 @@ def test_full_triangle_validator_is_read_only_and_raw_order_is_diagnostic(
         target_diagnostic_paths=artifacts["diagnostics"],
         overlap_event_paths=artifacts["overlaps"],
         process_lifecycle_paths=artifacts["processes"],
-        output_path=tmp_path / "validation.json",
-        markdown_path=tmp_path / "validation.md",
+        output_path=analysis_root / "validation.json",
+        markdown_path=analysis_root / "validation.md",
         overlap_requirement=overlap_requirement,
+        legacy_source_commit=legacy_source_commit,
     )
+    report = validate_phase4b1_dual_correctness(**validation_kwargs)
     assert report["valid"] is expected_valid
     assert report["outcome"] == ("A" if expected_valid else "FAIL")
     assert report["overlap_requirement"] == overlap_requirement
-    assert report["overlap_gate"]["valid"] is bool(overlap_duration_ns)
-    assert report["dual_runs"][0]["overlap"]["valid"] is bool(
-        overlap_duration_ns
-    )
+    assert report["overlap_gate"]["valid"] is any(overlap_durations_ns)
+    for index, duration in enumerate(overlap_durations_ns):
+        assert report["dual_runs"][index]["overlap"]["valid"] is bool(duration)
     assert report["repeat_comparisons"][0]["raw_event_order_equal"] is False
+    if legacy_source_commit is not None:
+        assert all(
+            not run["embedded_verdict_authority"]["remaining_embedded_errors"]
+            for run in report["dual_runs"]
+        )
+        assert all(
+            run["embedded_verdict_authority"]["embedded_run_valid"] is False
+            for run in report["dual_runs"]
+        )
+        with pytest.raises(ValueError, match="outside the preserved artifact root"):
+            validate_phase4b1_dual_correctness(
+                **{
+                    **validation_kwargs,
+                    "output_path": artifact_root / "forbidden-output.json",
+                    "markdown_path": None,
+                }
+            )
     assert before == {str(path): sha256_file(path) for path in inputs}
+    if (
+        overlap_requirement == "required"
+        and any(overlap_durations_ns)
+        and legacy_source_commit is None
+    ):
+        CheckpointJsonl(artifacts["states"][0]).append(
+            {
+                **_state_rows("A", "pA")[0],
+                "source_state": "TERMINAL",
+                "destination_state": "DRAFTING",
+                "timestamp_ns": 999,
+            }
+        )
+        bad = validate_phase4b1_dual_correctness(
+            **{
+                **validation_kwargs,
+                "output_path": analysis_root / "bad-validation.json",
+                "markdown_path": None,
+            }
+        )
+        assert bad["dual_runs"][0]["embedded_verdict_authority"][
+            "embedded_run_valid"
+        ] is True
+        assert bad["dual_runs"][0]["state_machine"]["valid"] is False
+        assert bad["valid"] is False
+
+
+def test_runner_invariants_reject_corrupt_identity_and_worker_topology(tmp_path):
+    manifest = _manifest()
+    manifest_path = tmp_path / "manifest.json"
+    _json(manifest_path, manifest.to_dict())
+    run = _run_outputs(manifest=manifest, manifest_path=manifest_path)
+    assert validate_dual_runner_evidence(run, manifest, manifest_path) == []
+
+    corrupt_identity = json.loads(json.dumps(run))
+    corrupt_identity["request_identity"]["bindings"][1]["request_id"] = "A"
+    assert any(
+        "identity bindings" in item
+        for item in validate_dual_runner_evidence(
+            corrupt_identity, manifest, manifest_path
+        )
+    )
+
+    corrupt_workers = json.loads(json.dumps(run))
+    corrupt_workers["worker_ranks"][1]["physical_gpu_id"] = 1
+    corrupt_workers["worker_ranks"][1]["gpu_uuid"] = "GPU-1"
+    errors = validate_dual_runner_evidence(
+        corrupt_workers, manifest, manifest_path
+    )
+    assert any("physical GPU set" in item for item in errors)
+    assert any("UUIDs" in item for item in errors)
 
 
 def _snapshot(
@@ -556,6 +824,8 @@ def _snapshot(
     *,
     proposal,
     phase=ExecutionPhase.TIMED_DECODE,
+    proposal_consumed=False,
+    target_tail_ready_ns=None,
 ):
     evidence = ProposalEvidence(
         request_id=request_id,
@@ -566,6 +836,7 @@ def _snapshot(
         round_id=0,
         proposal_token_ids=(10,),
         ready_timestamp_ns=2,
+        consumed=proposal_consumed,
     ) if proposal else None
     return AdmissibilitySnapshot(
         internal_request_id=f"opaque-{request_id}",
@@ -581,17 +852,67 @@ def _snapshot(
         spec_token_ids=(10,) if proposal else (),
         proposal=evidence,
         now_ns=3,
+        target_tail_ready_timestamp_ns=target_tail_ready_ns,
     )
 
 
 def _scheduler_cycle_for(row):
     return {
         "cycle_id": row["cycle_id"],
+        "poll_start_ns": 90,
+        "poll_end_ns": 100,
         "scheduled_request_ids": (
             [row["request_id"]] if row["scheduled"] else []
         ),
         "request_admissibility": [row],
     }
+
+
+def _legal_tail_evidence():
+    snapshot = _snapshot(
+        "A",
+        SchedulerRequestState.TARGET_TAIL_READY,
+        proposal=True,
+        proposal_consumed=True,
+        target_tail_ready_ns=70,
+    )
+    row = decision_event(
+        snapshot,
+        decide_admissibility(snapshot),
+        cycle_id=0,
+        scheduler_step=0,
+        scheduled=True,
+        target_input_positions=(35,),
+    )
+    row["spec_token_ids"] = []
+    lifecycle = _lifecycle_rows("A", "pA", 0, (10,))
+    lifecycle[-1]["timestamp_ns"] = 60
+    states = [
+        {
+            "request_id": "A",
+            "destination_state": state,
+            "timestamp_ns": 70 + index,
+        }
+        for index, state in enumerate(
+            ("TARGET_TAIL_READY", "VERIFYING", "COMMITTING", "TERMINAL")
+        )
+    ]
+    drafts = [
+        {
+            "request_id": "A",
+            "operation": "commit_and_propose",
+            "success": True,
+            "result": {
+                "request_id": "A",
+                "round_id": 0,
+                "target_tail": True,
+                "target_tail_ready_ns": 70,
+                "proposal": None,
+                "terminal": False,
+            },
+        }
+    ]
+    return _scheduler_cycle_for(row), lifecycle, states, drafts
 
 
 def _state_rows(request_id, proposal_id):
@@ -730,11 +1051,22 @@ def _overlap():
         "draft_physical_gpu_ids": [0],
         "target_physical_gpu_ids": [1, 2],
         "draft_cuda_events": True,
-        "target_rank_intervals": [{"physical_gpu_id": 1}, {"physical_gpu_id": 2}],
+        "target_rank_intervals": [
+            {
+                "global_rank": rank,
+                "tp_rank": rank,
+                "logical_cuda_index": rank,
+                "physical_gpu_id": physical,
+                "gpu_uuid": f"GPU-{physical}",
+                "cuda_events": True,
+                "cuda_synchronized": True,
+            }
+            for rank, physical in enumerate((1, 2))
+        ],
     }
 
 
-def _run_outputs():
+def _run_outputs(*, manifest=None, manifest_path=None):
     rows = [
         {
             "request_id": request_id,
@@ -747,16 +1079,68 @@ def _run_outputs():
         }
         for request_id in ("A", "B")
     ]
-    return {
+    value = {
         "valid": True,
+        "errors": [],
         "decode_only_outputs": rows,
         "runtime_semantics": {"target_blind_draft": True},
     }
+    if manifest is not None and manifest_path is not None:
+        value.update(
+            {
+                "request_count": 2,
+                "worker_ranks": _worker_rows(),
+                "request_identity": {
+                    "mapping_source": "unique frozen prompt_token_ids",
+                    "suffix_parsing": False,
+                    "bound_request_count": 2,
+                    "bindings": [
+                        {
+                            "internal_request_id": f"opaque-{request_id}",
+                            "request_id": request_id,
+                        }
+                        for request_id in ("A", "B")
+                    ],
+                },
+                "global_setup_ready": build_setup_ready(
+                    manifest,
+                    consumer="dual-batch",
+                    manifest_path=manifest_path,
+                    ready_published_ns=41,
+                ),
+                "draft_shutdown": {
+                    "shutdown": True,
+                    "request_count": 2,
+                    "failures": {},
+                    "inflight_request_ids": [],
+                    "work_queue_depth": 0,
+                },
+            }
+        )
+    return value
 
 
-def _manifest():
+def _worker_rows():
+    return [
+        {
+            "global_rank": rank,
+            "local_rank": rank,
+            "world_size": 2,
+            "logical_cuda_index": rank,
+            "physical_gpu_id": physical,
+            "gpu_uuid": f"GPU-{physical}",
+            "parameter_count": 10,
+            "parameter_bytes": 20,
+            "allocated_memory_bytes": 30,
+            "all_parameters_on_expected_device": True,
+        }
+        for rank, physical in enumerate((1, 2))
+    ]
+
+
+def _manifest(*, git_commit="1" * 40):
     provenance = DecodeReadyProvenance(
-        specrhythm_git_commit="1" * 40,
+        specrhythm_git_commit=git_commit,
         vllm_version="0.25.1",
         vllm_commit="752a3a504485790a2e8491cacbb35c137339ad34",
         vllm_patch_stack_sha256=("a" * 64,),
