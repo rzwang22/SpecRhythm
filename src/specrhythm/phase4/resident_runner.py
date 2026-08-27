@@ -6,7 +6,7 @@ import json
 import os
 import time
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping, Optional, Sequence
 
 from specrhythm.phase4.batch_invariant import (
     configure_before_worker_creation,
@@ -120,6 +120,8 @@ def run_resident_target(
     output_path: Path,
     git_commit: str,
     correctness_mode: str = "batch-invariant",
+    numerical_plan_path: Optional[Path] = None,
+    numerical_output_path: Optional[Path] = None,
 ) -> dict[str, Any]:
     """Run a real-KV decode-only Target pass; never derive performance metrics."""
 
@@ -136,10 +138,34 @@ def run_resident_target(
         plugin_report_path,
         first_forward_path,
         output_path,
+        numerical_output_path,
     ):
-        if path.exists():
+        if path is not None and path.exists():
             raise FileExistsError(f"refusing to overwrite resident artifact {path}")
     mode_evidence = configure_before_worker_creation(correctness_mode)
+    from specrhythm.phase4.numerical_diagnostics import (
+        configure_numerical_diagnostic,
+        validate_numerical_records,
+    )
+
+    numerical_plan = configure_numerical_diagnostic(
+        plan_path=numerical_plan_path,
+        output_path=numerical_output_path,
+        workload_path=workload_path,
+        execution_mode=(
+            "resident-target"
+            if numerical_plan_path is not None or numerical_output_path is not None
+            else None
+        ),
+    )
+    if numerical_plan is not None and (
+        request_count != 100
+        or correctness_mode != "batch-invariant"
+        or numerical_output_path is None
+    ):
+        raise ValueError(
+            "resident numerical diagnosis requires corrected-100 batch-invariant mode"
+        )
     reference = load_reference(reference_path)
     require_reference_for_mode(reference, correctness_mode)
     require_exact_resident_reference_reuse(reference, config, workload_path)
@@ -270,6 +296,18 @@ def run_resident_target(
         admission_rows, consumer="target-only"
     )
     diagnostics = CheckpointJsonl(target_diagnostics_path).read()
+    numerical_rows = (
+        CheckpointJsonl(numerical_output_path).read()
+        if numerical_output_path is not None
+        else []
+    )
+    numerical_errors = (
+        validate_numerical_records(
+            numerical_rows, numerical_plan, execution_mode="resident-target"
+        )
+        if numerical_plan is not None
+        else []
+    )
     plugin_report = _read_object(plugin_report_path)
     residency_errors = validate_engine_residency(
         config,
@@ -304,7 +342,13 @@ def run_resident_target(
     if not first_contracts:
         boundary_errors.append("no first Target decode exists after the barrier")
     stock_comparison = compare_outputs_to_reference(serialized, reference)
-    errors = first_errors + boundary_errors + residency_errors + admission_errors
+    errors = (
+        first_errors
+        + boundary_errors
+        + residency_errors
+        + admission_errors
+        + numerical_errors
+    )
     if not raw_decode["valid"]:
         errors.extend(raw_decode["errors"])
     if not stock_comparison["all_sequences_equal"]:
@@ -325,6 +369,22 @@ def run_resident_target(
         "decode_only_outputs": decode_rows,
         "raw_vs_decode": raw_decode,
         "stock_comparison": stock_comparison,
+        "numerical_diagnostics": (
+            {
+                "enabled": True,
+                "diagnostic_only": True,
+                "execution_mode": "resident-target",
+                "record_count": len(numerical_rows),
+                "valid": not numerical_errors,
+                "errors": numerical_errors,
+                "plan_sha256": numerical_plan["plan_sha256"],
+                "workload_sha256": numerical_plan["workload_sha256"],
+                "output_file": numerical_output_path.name,
+                "tolerant_correctness_policy": False,
+            }
+            if numerical_plan is not None and numerical_output_path is not None
+            else {"enabled": False}
+        ),
         "decode_ready_manifest_sha256": manifest.manifest_sha256,
         "first_target_forward_valid": not first_errors,
         "measurement_boundary_valid": not boundary_errors,
@@ -355,6 +415,11 @@ def run_resident_target(
             "setup_control": sha256_file(setup_control_path),
             "setup_ready": sha256_file(setup_ready_path),
             "admission_events": sha256_file(admission_events_path),
+            **(
+                {"numerical_diagnostics": sha256_file(numerical_output_path)}
+                if numerical_output_path is not None
+                else {}
+            ),
         },
     }
     atomic_write_json(output_path, result)

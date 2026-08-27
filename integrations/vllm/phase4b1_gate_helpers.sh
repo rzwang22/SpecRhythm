@@ -264,6 +264,18 @@ phase4b1_run_mode () {
       --first-forward "$phase4b1_dir/first-target-forward.json"
       --output "$phase4b1_dir/resident-target.json"
     )
+    if test -n "${PHASE4B1_NUMERICAL_PLAN:-}" || \
+        test -n "${PHASE4B1_NUMERICAL_OUTPUT:-}"; then
+      test -n "${PHASE4B1_NUMERICAL_PLAN:-}" && \
+          test -n "${PHASE4B1_NUMERICAL_OUTPUT:-}" || {
+        echo "both PHASE4B1_NUMERICAL_PLAN and PHASE4B1_NUMERICAL_OUTPUT are required" >&2
+        return 2
+      }
+      phase4b1_command+=(
+        --numerical-diagnostic-plan "$PHASE4B1_NUMERICAL_PLAN"
+        --numerical-diagnostic-output "$PHASE4B1_NUMERICAL_OUTPUT"
+      )
+    fi
   elif test "$phase4b1_mode" = serial; then
     phase4b1_command=(
       specrhythm phase4-resident-serial-run

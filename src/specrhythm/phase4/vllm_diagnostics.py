@@ -27,6 +27,13 @@ TARGET_ONLY_FIELDS = frozenset(
         "target_outcome",
         "future_target_tokens",
         "oracle_labels",
+        "kv_cache_before_forward",
+        "tp_rank_kv_cache_before_forward",
+        "tensor_stages",
+        "tp_rank_evidence",
+        "model_module_paths",
+        "lm_head",
+        "raw_pre_softmax_logits",
     }
 )
 
@@ -319,6 +326,17 @@ def capture_target_forward(
     from vllm.distributed.parallel_state import get_tp_group
 
     if int(get_tp_group().rank_in_group) != 0:
+        if os.environ.get("SR_PHASE4_NUMERICAL_DIAGNOSTIC_PLAN"):
+            from specrhythm.phase4.numerical_diagnostics import (
+                finalize_target_numerical_diagnostic,
+            )
+
+            finalize_target_numerical_diagnostic(
+                runner,
+                logits=logits,
+                target_forward_start_ns=target_forward_start_ns,
+                target_forward_end_ns=target_forward_end_ns,
+            )
         return
     workload_path = os.environ.get("SR_PHASE4_WORKLOAD")
     if not workload_path:
@@ -533,3 +551,13 @@ def capture_target_forward(
         }
         log.append(row)
         draft_cursor += len(proposal)
+    from specrhythm.phase4.numerical_diagnostics import (
+        finalize_target_numerical_diagnostic,
+    )
+
+    finalize_target_numerical_diagnostic(
+        runner,
+        logits=logits,
+        target_forward_start_ns=target_forward_start_ns,
+        target_forward_end_ns=target_forward_end_ns,
+    )

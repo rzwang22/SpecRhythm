@@ -34,7 +34,7 @@ claims.
 | [#1 workload-v0.1](https://github.com/rzwang22/SpecRhythm/pull/1) | merged | strict Mooncake replay, R3 proxy config, validator, manifest, fixture tests and docs | workload plumbing only; proxy payload and illustrative acceptance |
 | [#2 simulator-semantics-v0.2](https://github.com/rzwang22/SpecRhythm/pull/2) | frozen draft; Phase 2 complete, not merged | proposal lifecycle, deterministic tree oracle, tree-aware allocators, base-preserving residual controls, Phase-2 nested search pools and common-snapshot oracle replay, path-aware eager and accounting | pure-Python proxy and oracle upper bounds only; no deployable oracle, measured search cost, GPU integration, or performance claim |
 | [#3 gpu-integration-v0.1](https://github.com/rzwang22/SpecRhythm/pull/3) | draft; Phase 3B.1 and corrected-20 Phase 3C.2 complete; Phase 3C.3 corrected-100 awaiting server run | hardened multi-rank primitives, corrected R3-real traces, common-prefix replay, request-bootstrap statistics, 2x shell decomposition and diagnostic learned ranker | user-run 3×A800 correctness artifacts plus Mac CPU tests; no packed-tree/serving engine, Dual-Batch, SLO, calibrated latency or speedup claim |
-| [#4 vllm-serving-v0.1](https://github.com/rzwang22/SpecRhythm/pull/4) | draft; Gate1 controlled-2 and Gate2 corrected-5 Outcome A; Gate3 corrected-100 recovery pending server rerun | decode-ready Target/Serial plus real asynchronous resident Dual runner, lifecycle/scheduler/KV/accounting evidence, scale-safe chunked-prefill setup, exact triangle and explicit evidence-authority validator | correctness evidence only; no performance, packed tree, eager, KVConnector, SLO or goodput claim |
+| [#4 vllm-serving-v0.1](https://github.com/rzwang22/SpecRhythm/pull/4) | draft; Gate1/Gate2 Outcome A; Gate3 Target setup passes but exact output fails 4/100, numerical diagnosis awaiting one A800 pair | decode-ready Target/Serial plus real asynchronous resident Dual runner, lifecycle/scheduler/KV/accounting evidence, scale-safe chunked-prefill setup and diagnostic-only numerical localization | correctness evidence only; Gate3 remains failed; no tolerance, performance, packed tree, eager, KVConnector, SLO or goodput claim |
 
 ## Phase 4A.0–4A.1: vLLM freeze and Serial Disaggregated correctness
 
@@ -225,6 +225,22 @@ before removing the unchanged stale socket, and keeps the lifecycle guard on any
 socket identity change or leaked Target descendant. The earlier deterministic stock-100 reference
 is reusable byte-for-byte because its stock/model/tokenizer/sampling/runtime/workload contract is
 unchanged; reuse records both file hashes and commits and does not measure another stock pair.
+
+The user-run `32b09a6` recovery proved that scale-safe setup and cleanup work for corrected-100:
+all bootstrap observations, global decode readiness, the first Target forward, measurement
+boundary and TP2 placement passed. Exact output compatibility still failed for four requests at
+generated positions 3, 4, 12 and 2; the other 96 were exact. In every divergence the immutable
+stock artifact has a `0.125` top-two log-probability margin while resident execution collapses the
+same token pair to equal values. This is not accepted as a harmless tie because the stock
+preference is nonzero.
+
+The next and only authorized GPU action is one diagnostic-only corrected-100 pair: one
+patched-observational stock-style execution and one resident Target execution. The full workload
+is mandatory because a four-request replay changes chunking, cohort and LM-head shape. Selected
+hidden rows, pre-forward logical KV bytes, block mappings and raw competing logits will localize
+the first differing stage. The immutable stock correctness reference is not rerun or replaced;
+Serial, Dual, performance and tolerant correctness remain blocked. See
+[phase4b1-gate3-numerical-diagnostics.md](phase4b1-gate3-numerical-diagnostics.md).
 
 ## Phase 3.0: GPU readiness and real-trace runner
 

@@ -78,6 +78,23 @@ Packed-tree verification remains a separate source gate. It changes position/att
 and may require runner, attention-metadata, Triton, or CUDA work. No Phase 4A.1 artifact can be
 relabeled as packed-tree, Dual-Batch, Eager, SLO, or performance evidence.
 
+### Batch-invariance boundary found by Gate3
+
+The pinned beta documentation promises independence from batch size and request order. On SM80,
+the implementation replaces unquantized linear/matmul, bmm, softmax/log-softmax, mean and RMSNorm
+paths, fixes FlashAttention split count and disables its variable AOT schedule. Qwen3's
+unquantized projections and LM head explicitly select the persistent matmul, which accumulates in
+FP32 and casts its result back to the output dtype. Embedding, rotary, elementwise activation and
+gating, KV updates and physical paged layout are outside that enumerated override set.
+
+The upstream log-probability test contains an explicit TODO that its prompts do not exercise
+chunked prefill. No pinned test or source contract proves arbitrary mixed prefill/decode
+composition, early-bootstrap global freezing, physical paged-block allocation history, or every
+BF16 LM-head `M` shape for Qwen3-32B TP2. Thus `batch_invariant_effective=true` remains required
+worker evidence but is not a bitwise theorem across those dimensions. The exact audit and
+one-shot localization design are in
+[phase4b1-gate3-numerical-diagnostics.md](phase4b1-gate3-numerical-diagnostics.md).
+
 ## Phase 4B source audit decision
 
 At pinned commit `752a3a5`, `Scheduler.schedule()` consumes `request.spec_token_ids`, constructs
@@ -102,7 +119,9 @@ The worker observer remains independent patch `0001`. The explicit scheduler hoo
 `0002-scheduler-request-admissibility-hook.patch`, applied second. Phase 4B.0b adds
 `0003-target-forward-timing-observer.patch` after `0001`; it brackets the existing model forward
 with monotonic timestamps and passes them to the already observational diagnostic function.
-Restore order is `0003`, `0002`, `0001`. Exact original/intermediate/final SHA256 values are
+Gate3 numerical localization adds inert-by-default observer call `0004` immediately before that
+forward. Restore order is `0004`, `0003`, `0002`, `0001`. Exact
+original/intermediate/final SHA256 values are
 enforced for both source files by
 `integrations/vllm/manage_patch.py`. No patch changes C++/CUDA/Triton, sampler, logits,
 attention, model weights or TP partitioning. The hook is absent from the stock scheduler class and
@@ -111,9 +130,10 @@ behind `SR_PHASE4_DUAL_BATCH=1`; default and Target-only behavior are unchanged.
 
 ## Phase 4B.1 decode-only source boundary
 
-Phase 4B.1 does not add a fourth vLLM patch and does not alter the sampler, model forward, block
-manager, attention backend, C++/CUDA or Triton. It composes the three already-audited hooks with
-two out-of-tree classes:
+Phase 4B.1 does not alter the sampler, model forward, block manager, attention backend, C++/CUDA
+or Triton. It composes the three serving hooks with two out-of-tree classes. A fourth
+diagnostic-only runner call is inert unless the explicit Gate3 numerical plan and output path are
+configured; it reads selected rows and KV pages without changing execution:
 
 - `DualBatchScheduler` consumes only proposals already published by the persistent GPU-0 service,
   installs them in `request.spec_token_ids`, and delegates the actual batch to the pinned stock

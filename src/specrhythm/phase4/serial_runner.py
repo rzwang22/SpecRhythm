@@ -51,7 +51,7 @@ from specrhythm.phase4.vllm_diagnostics import validate_kv_monotonicity
 from specrhythm.phase4.vllm_installation import locate_installed_vllm_file
 
 PATCHED_VLLM_RUNNER_SHA256 = (
-    "aff188fd298bff4619d572729a50a6979f94e2f90e8cdc90adf91df79215f244"
+    "0e1972aa3d9b9f03e1de60ef95fb567e8ad6164f46cca3bee85ce27f5d04c56d"
 )
 PATCHED_VLLM_SCHEDULER_SHA256 = (
     "ffaefd61869589f086e6acdf9a0c4f55f80d5dad145ca3f6fff2379f7a4e2455"

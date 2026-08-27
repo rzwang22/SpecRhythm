@@ -22,13 +22,21 @@ ready requests. It does not overload vLLM's `next_decode_eligible_step` cadence 
 `gpu_model_runner.py`. It records host monotonic boundaries immediately around the existing model
 forward and passes them, plus existing input metadata, to the Target-only diagnostic hook. It is
 observational and does not synchronize, alter logits, or change execution semantics.
+4. `0004-gate3-numerical-observer.patch` changes the already-timing-patched runner. It invokes one
+diagnostic preparation function immediately before the existing Target forward. Unless an
+explicit four-request Gate3 plan and separate output path were configured before worker creation,
+the function returns without installing hooks or collecting data. The diagnostic reads selected
+hidden rows and pre-existing KV pages only; it does not modify model inputs, scheduler state,
+sampling, proposals, KV ownership or outputs. A patched-observational stock-style run remains
+ineligible for stock-reference freezing.
 
 The patch is required because the public custom proposer signature at this commit does not expose
 stable request identity or exact Target-forward boundaries. The out-of-tree proposer uses the
 hooks only for stable IPC correlation and strict-serial correctness timestamps.
 
 Phase 4B reuses the worker hooks for per-rank verification evidence, adds the minimal default-off
-scheduler hook in `0002`, and adds observational forward timestamps in `0003`. The Dual-Batch
+scheduler hook in `0002`, adds observational forward timestamps in `0003`, and keeps the
+diagnostic-only numerical observer in `0004` inert unless explicitly configured. The Dual-Batch
 policy and predicate remain outside vLLM source and are explicitly enabled only for the
 correctness run.
 
@@ -40,5 +48,6 @@ the check publishes a new immutable diagnostic containing the expected state, ac
 pinned source commit, active patch hashes and validity. The manager applies in order without fuzzy
 matching, records every patch plus original/patched source checksums, and restores in reverse
 order. A Phase-4A installation containing only the prior worker patch and the exact pre-Gate3
-patched state can still be restored through the archived reverse-only patch. New applications use
-only the active three-layer stack. Do not apply the stack to another vLLM commit.
+patched state, including the exact pre-`0004` runner, can still be restored through strict known
+hashes. New applications use only the active four-layer stack. Do not apply the stack to another
+vLLM commit.

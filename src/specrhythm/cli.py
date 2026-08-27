@@ -580,6 +580,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     phase4_smoke.add_argument("--target-diagnostics")
     phase4_smoke.add_argument("--request-count", type=int)
+    phase4_smoke.add_argument(
+        "--diagnostic-single-run",
+        action="store_true",
+        help=(
+            "run exactly once for diagnostic-only evidence; never eligible for "
+            "stock-reference freezing"
+        ),
+    )
+    phase4_smoke.add_argument("--numerical-diagnostic-plan")
+    phase4_smoke.add_argument("--numerical-diagnostic-output")
     phase4_smoke.add_argument("--output", required=True)
 
     phase4_validate = subparsers.add_parser(
@@ -901,6 +911,25 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("default", "batch-invariant"),
         default="batch-invariant",
     )
+    phase4_resident_target.add_argument("--numerical-diagnostic-plan")
+    phase4_resident_target.add_argument("--numerical-diagnostic-output")
+
+    phase4_numerical_compare = subparsers.add_parser(
+        "phase4b1-gate3-numerical-compare",
+        help="compare one stock-style and one resident Gate3 numerical capture",
+        description=(
+            "Diagnostic-only exact comparison. It never accepts tolerant or "
+            "tie-equivalent tokens and never replaces the stock reference."
+        ),
+    )
+    phase4_numerical_compare.add_argument("--plan", required=True)
+    phase4_numerical_compare.add_argument("--workload", required=True)
+    phase4_numerical_compare.add_argument("--stock-run", required=True)
+    phase4_numerical_compare.add_argument("--stock-numerical", required=True)
+    phase4_numerical_compare.add_argument("--resident-run", required=True)
+    phase4_numerical_compare.add_argument("--resident-numerical", required=True)
+    phase4_numerical_compare.add_argument("--output", required=True)
+    phase4_numerical_compare.add_argument("--markdown-output", required=True)
 
     phase4_resident_serial = subparsers.add_parser(
         "phase4-resident-serial-run",
@@ -1161,6 +1190,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     else None
                 ),
                 request_count=args.request_count,
+                diagnostic_single_run=args.diagnostic_single_run,
+                numerical_plan_path=(
+                    Path(args.numerical_diagnostic_plan).resolve()
+                    if args.numerical_diagnostic_plan
+                    else None
+                ),
+                numerical_output_path=(
+                    Path(args.numerical_diagnostic_output).resolve()
+                    if args.numerical_diagnostic_output
+                    else None
+                ),
             )
         except (
             FileExistsError,
@@ -1636,6 +1676,52 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             _write_json(report, args.output)
             return 1
         return 0 if report["valid"] else 1
+    if args.command == "phase4b1-gate3-numerical-compare":
+        from specrhythm.phase4.numerical_diagnostics import (
+            compare_numerical_diagnostics,
+            comparison_markdown,
+            load_numerical_plan,
+        )
+        from specrhythm.phase4.transport import CheckpointJsonl
+
+        try:
+            workload = Path(args.workload).resolve()
+            output_path = Path(args.output).resolve()
+            markdown_path = Path(args.markdown_output).resolve()
+            for path in (output_path, markdown_path):
+                if path.exists():
+                    raise FileExistsError(
+                        f"refusing to overwrite numerical comparison {path}"
+                    )
+            report = compare_numerical_diagnostics(
+                plan=load_numerical_plan(Path(args.plan).resolve(), workload),
+                stock_rows=CheckpointJsonl(
+                    Path(args.stock_numerical).resolve()
+                ).read(),
+                resident_rows=CheckpointJsonl(
+                    Path(args.resident_numerical).resolve()
+                ).read(),
+                stock_outputs=json.loads(
+                    Path(args.stock_run).resolve().read_text(encoding="utf-8")
+                )["runs"][0],
+                resident_outputs=json.loads(
+                    Path(args.resident_run).resolve().read_text(encoding="utf-8")
+                )["outputs"],
+            )
+            _write_json(report, output_path)
+            markdown_path.parent.mkdir(parents=True, exist_ok=True)
+            markdown_path.write_text(comparison_markdown(report), encoding="utf-8")
+        except (
+            FileExistsError,
+            FileNotFoundError,
+            KeyError,
+            RuntimeError,
+            TypeError,
+            ValueError,
+            json.JSONDecodeError,
+        ) as error:
+            raise SystemExit(f"Gate3 numerical comparison failed: {error}") from error
+        return 0 if report["valid"] else 1
     if args.command == "phase4-resident-target-run":
         from specrhythm.phase4.config import load_phase4_config
         from specrhythm.phase4.resident_runner import run_resident_target
@@ -1663,6 +1749,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 output_path=Path(args.output).resolve(),
                 git_commit=_current_git_commit() or "unknown",
                 correctness_mode=args.correctness_mode,
+                numerical_plan_path=(
+                    Path(args.numerical_diagnostic_plan).resolve()
+                    if args.numerical_diagnostic_plan
+                    else None
+                ),
+                numerical_output_path=(
+                    Path(args.numerical_diagnostic_output).resolve()
+                    if args.numerical_diagnostic_output
+                    else None
+                ),
             )
         except (
             FileExistsError,

@@ -28,6 +28,7 @@ from specrhythm.phase4.manifest import (
     validate_environment,
     validate_topology,
 )
+from specrhythm.phase4.transport import CheckpointJsonl
 
 
 @dataclass(frozen=True)
@@ -468,8 +469,16 @@ def run_stock_smoke(
     correctness_mode: str = "default",
     diagnostics_path: Optional[Path] = None,
     request_count: Optional[int] = None,
+    diagnostic_single_run: bool = False,
+    numerical_plan_path: Optional[Path] = None,
+    numerical_output_path: Optional[Path] = None,
 ) -> dict[str, Any]:
     """Bring up one independent stock vLLM engine and repeat a frozen workload."""
+
+    from specrhythm.phase4.numerical_diagnostics import (
+        configure_numerical_diagnostic,
+        validate_numerical_records,
+    )
 
     mode_evidence = configure_before_worker_creation(correctness_mode)
     if role not in {"draft", "target"}:
@@ -503,6 +512,26 @@ def run_stock_smoke(
             + ",".join(str(item) for item in engine.physical_gpu_ids)
         )
     effective_count = request_count or config.smoke_request_count
+    numerical_plan = configure_numerical_diagnostic(
+        plan_path=numerical_plan_path,
+        output_path=numerical_output_path,
+        workload_path=workload_path,
+        execution_mode=("stock-style" if diagnostic_single_run else None),
+    )
+    if diagnostic_single_run and (
+        role != "target"
+        or effective_count != 100
+        or correctness_mode != "batch-invariant"
+        or diagnostics_path is None
+        or numerical_plan is None
+        or numerical_output_path is None
+    ):
+        raise ValueError(
+            "single-run numerical diagnosis requires Target corrected-100, "
+            "batch-invariant mode, and both diagnostic outputs"
+        )
+    if not diagnostic_single_run and numerical_plan is not None:
+        raise ValueError("numerical instrumentation is allowed only for a single diagnostic run")
     requests = load_smoke_requests(
         workload_path,
         effective_count,
@@ -563,20 +592,40 @@ def run_stock_smoke(
     ]
     runs = []
     run_wall_ms = []
-    for _ in range(2):
+    for _ in range(1 if diagnostic_single_run else 2):
         run_started = time.monotonic_ns()
         outputs = llm.generate(prompts, parameters, use_tqdm=False)
         torch.cuda.synchronize()
         run_finished = time.monotonic_ns()
         run_wall_ms.append((run_finished - run_started) / 1_000_000)
         runs.append(_serialize_outputs(outputs, requests))
-    deterministic = all(
-        first["generated_token_ids"] == second["generated_token_ids"]
-        and first["text"] == second["text"]
-        and first["finish_reason"] == second["finish_reason"]
-        and first["stop_reason"] == second["stop_reason"]
-        for first, second in zip(runs[0], runs[1])
+    deterministic = (
+        all(
+            first["generated_token_ids"] == second["generated_token_ids"]
+            and first["text"] == second["text"]
+            and first["finish_reason"] == second["finish_reason"]
+            and first["stop_reason"] == second["stop_reason"]
+            for first, second in zip(runs[0], runs[1])
+        )
+        if len(runs) == 2
+        else None
     )
+    numerical_rows = (
+        CheckpointJsonl(numerical_output_path).read()
+        if numerical_output_path is not None
+        else []
+    )
+    numerical_errors = (
+        validate_numerical_records(
+            numerical_rows, numerical_plan, execution_mode="stock-style"
+        )
+        if numerical_plan is not None
+        else []
+    )
+    if numerical_errors:
+        raise RuntimeError(
+            "invalid stock-style numerical diagnostics: " + "; ".join(numerical_errors)
+        )
     attention_backends = sorted(
         {str(backend) for row in worker_ranks for backend in row.get("attention_backends", ())}
     )
@@ -621,6 +670,24 @@ def run_stock_smoke(
         "sampling": config.sampling.to_dict(),
         "runs": runs,
         "repeated_run_deterministic": deterministic,
+        "repeated_run_performed": len(runs) == 2,
+        "diagnostic_only": diagnostic_single_run,
+        "reference_freeze_eligible": False if diagnostic_single_run else None,
+        "stock_reference_replaced": False,
+        "numerical_diagnostics": (
+            {
+                "enabled": True,
+                "execution_mode": "stock-style",
+                "record_count": len(numerical_rows),
+                "valid": not numerical_errors,
+                "errors": numerical_errors,
+                "plan_sha256": numerical_plan["plan_sha256"],
+                "workload_sha256": numerical_plan["workload_sha256"],
+                "output_file": numerical_output_path.name,
+            }
+            if numerical_plan is not None and numerical_output_path is not None
+            else {"enabled": False}
+        ),
         "frozen_hf_target_comparison": (
             compare_frozen_target(runs[0], frozen_target_dir)
             if role == "target"
