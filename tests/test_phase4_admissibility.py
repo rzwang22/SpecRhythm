@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -227,6 +229,92 @@ def test_owned_process_group_propagates_normal_and_nonzero_status(tmp_path):
     assert failed["cleanup_valid"] is True
 
 
+def _start_stale_socket_draft(path: Path) -> subprocess.Popen:
+    script = (
+        "import signal,socket,sys,time; "
+        "server=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM); "
+        "server.bind(sys.argv[1]); server.listen(1); "
+        "signal.signal(signal.SIGTERM, lambda *_: sys.exit(0)); "
+        "time.sleep(60)"
+    )
+    process = subprocess.Popen([sys.executable, "-c", script, str(path)])
+    deadline = time.monotonic() + 3
+    while not path.exists() and process.poll() is None and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert path.exists()
+    return process
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX Unix-socket contract")
+def test_target_exception_removes_stale_owned_socket_after_draft_exit(tmp_path):
+    socket_path = Path(f"/tmp/sr-p4-{os.getpid()}-{time.monotonic_ns()}-draft.sock")
+    guard = tmp_path / "run.active"
+    draft = _start_stale_socket_draft(socket_path)
+    try:
+        status, report = run_owned_target(
+            [sys.executable, "-c", "raise SystemExit(7)"],
+            target_log=tmp_path / "target.log",
+            artifact_path=tmp_path / "lifecycle.json",
+            guard_path=guard,
+            draft_pid=draft.pid,
+            draft_socket=socket_path,
+            graceful_seconds=0.5,
+            poll_seconds=0.01,
+        )
+        assert status == 7
+        assert report["cleanup_valid"] is True
+        assert report["draft_shutdown_result"]["stale_owned_socket_removed"] is True
+        assert report["draft_shutdown_result"]["socket_exists_after_cleanup"] is False
+        assert not socket_path.exists()
+        assert not guard.exists()
+    finally:
+        draft.wait(timeout=2)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX Unix-socket contract")
+def test_live_draft_is_not_unlinked_and_cleanup_fails(tmp_path):
+    socket_path = Path(f"/tmp/sr-p4-{os.getpid()}-{time.monotonic_ns()}-live.sock")
+    guard = tmp_path / "run.active"
+    draft = _start_stale_socket_draft(socket_path)
+    try:
+        status, report = run_owned_target(
+            [sys.executable, "-c", "raise SystemExit(0)"],
+            target_log=tmp_path / "target.log",
+            artifact_path=tmp_path / "lifecycle.json",
+            guard_path=guard,
+            draft_pid=draft.pid,
+            draft_socket=socket_path,
+            graceful_seconds=0.05,
+            poll_seconds=0.01,
+        )
+        assert status == 125
+        assert report["cleanup_valid"] is False
+        assert report["draft_shutdown_result"]["alive_after_cleanup"] is True
+        assert report["draft_shutdown_result"]["stale_owned_socket_removed"] is False
+        assert socket_path.exists()
+        assert guard.exists()
+    finally:
+        draft.terminate()
+        draft.wait(timeout=2)
+        socket_path.unlink(missing_ok=True)
+
+
+def test_dead_draft_without_socket_has_normal_cleanup(tmp_path):
+    draft = subprocess.Popen([sys.executable, "-c", "raise SystemExit(0)"])
+    draft.wait(timeout=2)
+    status, report = run_owned_target(
+        [sys.executable, "-c", "raise SystemExit(0)"],
+        target_log=tmp_path / "target.log",
+        artifact_path=tmp_path / "lifecycle.json",
+        draft_pid=draft.pid,
+        draft_socket=tmp_path / "absent.sock",
+        poll_seconds=0.01,
+    )
+    assert status == 0
+    assert report["cleanup_valid"] is True
+    assert report["draft_shutdown_result"]["stale_owned_socket_removed"] is False
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX process-group contract")
 def test_wrapper_exit_with_live_grandchild_fails_and_cleans_owned_group(tmp_path):
     script = "import os,time; pid=os.fork(); os._exit(0) if pid else time.sleep(60)"
@@ -241,6 +329,8 @@ def test_wrapper_exit_with_live_grandchild_fails_and_cleans_owned_group(tmp_path
     assert status == 125
     assert report["child_reap_result"]["wrapper_exited_with_descendants_alive"] is True
     assert report["remaining_owned_pids"] == []
+    assert report["cleanup_valid"] is False
+    assert (tmp_path / "tree.json.active").exists()
     assert any(row["signal"] == "SIGTERM" for row in report["term_kill_actions"])
 
 
@@ -280,3 +370,17 @@ def test_incomplete_cleanup_guard_blocks_next_run(tmp_path):
             guard_path=guard,
         )
     assert guard.exists()
+
+
+def test_gate_helper_never_blindly_unlinks_a_preexisting_draft_socket():
+    helper = (
+        Path(__file__).parents[1]
+        / "integrations"
+        / "vllm"
+        / "phase4b1_gate_helpers.sh"
+    ).read_text(encoding="utf-8")
+    start = helper.split("phase4b1_start_draft () {", 1)[1].split(
+        "phase4b1_run_mode () {", 1
+    )[0]
+    assert 'unlink "$phase4b1_socket"' not in start
+    assert "refusing to unlink an unverified pre-existing Draft socket" in start

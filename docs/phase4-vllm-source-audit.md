@@ -51,12 +51,17 @@ materializes candidate positions in the vLLM-managed KV cache, the Target runner
 one speculative batch, `RejectionSampler` applies greedy acceptance, and scheduler bookkeeping
 subtracts rejected positions from the logical computed length. This is the reused Target path.
 
-The custom proposer API is insufficient in two narrow ways: the call omits vLLM request IDs, and
-there is no observer hook around the Target verification forward. Phase 4A.1 therefore maintains
+The custom proposer API is insufficient in three narrow ways: the call omits vLLM request IDs,
+does not distinguish logical token-row extent from post-forward Target materialization, and has no
+observer hook around the Target verification forward. Phase 4A.1 therefore maintains
 one pinned Python patch, `integrations/vllm/patches/0001-custom-proposer-request-and-verify-hooks.patch`.
-It changes only `vllm/v1/worker/gpu_model_runner.py`, passes existing request IDs, and invokes
-optional before/after hooks. It exposes no Target logits, does not alter sampling or KV state, and
-is inactive for Target-only generation. The exact base and patched file SHA256 values are enforced
+It changes only `vllm/v1/worker/gpu_model_runner.py`, passes existing request IDs and the existing
+post-forward materialized count, and invokes optional before/after hooks. At this pinned source,
+the proposer runs after `_bookkeeping_sync`: `sampled_token_ids[row]` is the authoritative signal
+that this forward sampled a token; `num_tokens_no_spec/token_ids_cpu` is the updated logical row;
+and materialized Target positions are the pre-forward computed count plus this scheduler step's
+scheduled positions. It exposes no Target logits, does not alter sampling or KV state, and is
+inactive for Target-only generation. The exact base and patched file SHA256 values are enforced
 by `integrations/vllm/manage_patch.py`; apply/check/restore were exercised on the exact source
 commit during Mac development.
 

@@ -1,6 +1,6 @@
 # SpecRhythm project status
 
-Last updated: 2026-08-17
+Last updated: 2026-08-27
 
 Maintenance rule: every code-changing PR updates this file with its scope, status, evidence,
 known limitations, and next gate before that PR is considered complete.
@@ -34,7 +34,7 @@ claims.
 | [#1 workload-v0.1](https://github.com/rzwang22/SpecRhythm/pull/1) | merged | strict Mooncake replay, R3 proxy config, validator, manifest, fixture tests and docs | workload plumbing only; proxy payload and illustrative acceptance |
 | [#2 simulator-semantics-v0.2](https://github.com/rzwang22/SpecRhythm/pull/2) | frozen draft; Phase 2 complete, not merged | proposal lifecycle, deterministic tree oracle, tree-aware allocators, base-preserving residual controls, Phase-2 nested search pools and common-snapshot oracle replay, path-aware eager and accounting | pure-Python proxy and oracle upper bounds only; no deployable oracle, measured search cost, GPU integration, or performance claim |
 | [#3 gpu-integration-v0.1](https://github.com/rzwang22/SpecRhythm/pull/3) | draft; Phase 3B.1 and corrected-20 Phase 3C.2 complete; Phase 3C.3 corrected-100 awaiting server run | hardened multi-rank primitives, corrected R3-real traces, common-prefix replay, request-bootstrap statistics, 2x shell decomposition and diagnostic learned ranker | user-run 3×A800 correctness artifacts plus Mac CPU tests; no packed-tree/serving engine, Dual-Batch, SLO, calibrated latency or speedup claim |
-| [#4 vllm-serving-v0.1](https://github.com/rzwang22/SpecRhythm/pull/4) | draft; Phase 4A.1.1 Outcome A and Phase 4B.0 frozen; Phase 4B.1 controlled real-A800 evidence complete, legacy read-only closure implemented | decode-ready Target/Serial plus real asynchronous resident Dual runner, lifecycle/scheduler/KV/accounting evidence, exact triangle and explicit evidence-authority validator | controlled correctness evidence only; no performance, packed tree, eager, KVConnector, SLO or goodput claim |
+| [#4 vllm-serving-v0.1](https://github.com/rzwang22/SpecRhythm/pull/4) | draft; Gate1 controlled-2 and Gate2 corrected-5 Outcome A; Gate3 corrected-100 recovery pending server rerun | decode-ready Target/Serial plus real asynchronous resident Dual runner, lifecycle/scheduler/KV/accounting evidence, scale-safe chunked-prefill setup, exact triangle and explicit evidence-authority validator | correctness evidence only; no performance, packed tree, eager, KVConnector, SLO or goodput claim |
 
 ## Phase 4A.0–4A.1: vLLM freeze and Serial Disaggregated correctness
 
@@ -199,8 +199,32 @@ requests through the unchanged asynchronous path. Default validation remains ove
 only controlled Gate1 opts into `separate-gate`. An explicit legacy read-only authority mode
 accepts only the exact `3ee1c3e` source, recomputes semantic plus runner-only invariants, and
 supersedes only structurally proven historical errors. The helper continues to preserve run and
-validator exit codes while always checking cleanup. No new GPU run has been performed; Gate1.5,
-Gate2/3, performance and SLO work remain blocked.
+validator exit codes while always checking cleanup. Subsequent user-run A800 evidence established
+Outcome A for controlled Gate1 and default-asynchronous corrected-5 Gate2, including exact
+Target/Serial/Dual output equality, correct GPU1/GPU2 TP identity and hardware-qualified overlap
+in both Gate2 Dual runs. Gate3 recovery is the only authorized next GPU action; performance,
+Dual-Eager, Phase4B.2 and SLO work remain blocked.
+
+The first corrected-100 Gate3 attempt at commit `eba0df4` completed preparation, froze its one
+allowed deterministic stock pair and applied the patch stack, then failed in resident Target
+setup before global readiness. With 100 requests, pinned vLLM enabled chunked prefill under the
+16,384-token budget and delivered one proposer callback containing requests at different setup
+stages. Target, Serial and Dual had all assumed every row contained exactly one bootstrap token;
+that assumption happened to hold for 2/5 requests. Serial and Dual were not run and Gate3 was not
+evaluated. The failed directory remains immutable infrastructure-failure provenance, not stock,
+Target-token, Serial, Dual or overlap failure evidence.
+
+All three resident consumers now use one dependency-free row classifier. The authoritative
+sampled-token row distinguishes bootstrap from no-bootstrap, while a minimal pinned worker hook
+supplies the actual post-forward materialized position count. Partial prefill never binds opaque
+identity or initializes Draft; full prompt without a sample remains pending; exactly one sampled
+bootstrap records/initializes once; more than one output before global readiness fails closed.
+Each wave is logged so an early-bootstrap request can be shown frozen while later requests keep
+prefilling. Exception cleanup now snapshots an owned Unix-socket inode, proves the Draft PID dead
+before removing the unchanged stale socket, and keeps the lifecycle guard on any live process,
+socket identity change or leaked Target descendant. The earlier deterministic stock-100 reference
+is reusable byte-for-byte because its stock/model/tokenizer/sampling/runtime/workload contract is
+unchanged; reuse records both file hashes and commits and does not measure another stock pair.
 
 ## Phase 3.0: GPU readiness and real-trace runner
 

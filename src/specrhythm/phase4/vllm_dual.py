@@ -26,10 +26,14 @@ from specrhythm.phase4.manifest import atomic_write_json
 from specrhythm.phase4.request_identity import FrozenPromptIdentityMap
 from specrhythm.phase4.resident_setup import (
     IncrementalResidentSetup,
+    ResidentSetupRow,
+    ResidentSetupStage,
     build_setup_ready,
+    classify_resident_setup_wave,
     load_setup_control,
     observation_static_fields,
     observation_to_dict,
+    setup_row_evidence,
 )
 from specrhythm.phase4.serial import greedy_acceptance, token_prefix_hash
 from specrhythm.phase4.stock_vllm import (
@@ -140,14 +144,23 @@ class DualBatchRemoteProposer:
         *,
         request_ids: Optional[Sequence[str]] = None,
         slot_mappings: Any = None,
+        target_materialized_token_counts: Optional[Sequence[int]] = None,
     ) -> list[list[int]]:
-        del sampled_token_ids, slot_mappings
+        del slot_mappings
         if request_ids is None:
             raise RuntimeError("Phase-4 worker hook did not provide request IDs")
         if self.resident_decode_ready and not self.setup_complete:
+            if target_materialized_token_counts is None:
+                raise RuntimeError(
+                    "resident Dual requires materialized-token worker evidence"
+                )
             setup = (
                 self._rank_zero_observe_setup(
-                    request_ids, num_tokens_no_spec, token_ids_cpu
+                    request_ids,
+                    sampled_token_ids,
+                    num_tokens_no_spec,
+                    token_ids_cpu,
+                    target_materialized_token_counts,
                 )
                 if self.tp_rank == 0
                 else None
@@ -171,26 +184,45 @@ class DualBatchRemoteProposer:
         return [[] for _ in request_ids]
 
     def _rank_zero_observe_setup(
-        self, request_ids: Sequence[str], num_tokens_no_spec: Any, token_ids_cpu: Any
+        self,
+        request_ids: Sequence[str],
+        sampled_token_ids: Sequence[Sequence[int]],
+        num_tokens_no_spec: Any,
+        token_ids_cpu: Any,
+        target_materialized_token_counts: Sequence[int],
     ) -> dict[str, Any]:
         tracker = self._setup_tracker()
-        for index, internal_id_value in enumerate(request_ids):
-            internal_id = str(internal_id_value)
-            count = int(num_tokens_no_spec[index])
-            tokens = tuple(int(item) for item in token_ids_cpu[index, :count].tolist())
-            stable_id = self.identity.bind(internal_id, tokens)
-            definition = self.definitions[stable_id]
-            generated = tokens[len(definition.prompt_token_ids) :]
-            if len(generated) != 1:
-                raise RuntimeError("resident Dual setup must sample one bootstrap token")
-            logical = definition.prompt_token_ids + (generated[0],)
+        rows = classify_resident_setup_wave(
+            request_ids=request_ids,
+            sampled_token_ids=sampled_token_ids,
+            num_tokens_no_spec=num_tokens_no_spec,
+            token_ids_cpu=token_ids_cpu,
+            target_materialized_token_counts=target_materialized_token_counts,
+            frozen_prompts={
+                request_id: definition.prompt_token_ids
+                for request_id, definition in self.definitions.items()
+            },
+        )
+        for row in rows:
+            self._log_setup_row(row)
+            if row.stage is not ResidentSetupStage.BOOTSTRAP_READY:
+                continue
+            assert row.stable_request_id is not None
+            assert row.bootstrap_token_id is not None
+            internal_id = row.internal_request_id
+            definition = self.definitions[row.stable_request_id]
+            stable_id = self.identity.bind(internal_id, definition.prompt_token_ids)
+            if stable_id != row.stable_request_id:
+                raise RuntimeError("resident Dual classifier/identity binding differs")
+            generated = (row.bootstrap_token_id,)
+            logical = definition.prompt_token_ids + generated
             existing = tracker.get(stable_id)
             if existing is not None:
                 candidate = ResidentSetupObservation(
                     request_id=stable_id,
                     internal_target_request_id=internal_id,
                     prompt_token_ids=definition.prompt_token_ids,
-                    bootstrap_token_id=generated[0],
+                    bootstrap_token_id=row.bootstrap_token_id,
                     target_materialized_kv_token_count=len(definition.prompt_token_ids),
                     target_num_computed_tokens=len(definition.prompt_token_ids),
                     draft_materialized_kv_token_count=len(logical),
@@ -248,7 +280,7 @@ class DualBatchRemoteProposer:
                 request_id=stable_id,
                 internal_target_request_id=internal_id,
                 prompt_token_ids=definition.prompt_token_ids,
-                bootstrap_token_id=generated[0],
+                bootstrap_token_id=row.bootstrap_token_id,
                 target_materialized_kv_token_count=len(definition.prompt_token_ids),
                 target_num_computed_tokens=len(definition.prompt_token_ids),
                 draft_materialized_kv_token_count=len(logical),
@@ -378,6 +410,17 @@ class DualBatchRemoteProposer:
                 expected, int(control["setup_start_ns"])
             )
         return self.setup_tracker
+
+    def _log_setup_row(self, row: ResidentSetupRow) -> None:
+        self.timing_log.append(
+            {
+                "schema_version": "specrhythm.phase4b-resident-setup-row.v1",
+                "event": "setup-row-classified",
+                "timestamp_ns": time.monotonic_ns(),
+                **setup_row_evidence(row),
+                "bootstrap_observation_recorded": False,
+            }
+        )
 
     def on_target_verify_start(
         self,

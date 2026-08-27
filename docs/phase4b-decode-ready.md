@@ -29,6 +29,15 @@ request, untimed setup therefore performs these operations incrementally:
    first creates all round-zero proposals after measurement start and includes them in its atomic
    setup-ready artifact for exact scheduler installation.
 
+Each proposer callback may mix `partial-prefill`, `full-prompt-no-bootstrap` and
+`bootstrap-ready` rows. At pinned vLLM v0.25.1, the proposer receives post-bookkeeping
+`sampled_token_ids` (the authoritative sample/no-sample evidence) and the logical CPU token row.
+The Python-only hook also supplies the post-forward Target-materialized count from existing worker
+state. Partial rows are not identity-bound and never initialize Draft; a bootstrap-ready row must
+contain exactly one sampled token after a uniquely matched full frozen prompt. More than one
+generated token before global readiness remains fatal. Classification events preserve evidence
+that early bootstrap requests stay frozen while later requests continue chunked prefill.
+
 The scheduler and TP proposer workers do not share Python globals. The scheduler reads only the
 atomic setup-ready artifact, validates its manifest SHA256 and stable/internal identity mapping,
 and uses the existing explicit request predicate. A request with one output token cannot advance

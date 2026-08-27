@@ -72,8 +72,171 @@ old root. It is diagnostic-only and never converts scheduler concurrency into ph
 `phase4b1_restore_stock` now emits an immutable `check --expect-state stock` manifest, while
 `phase4b1_apply_patch_stack` emits a distinct immutable `check --expect-state patched` manifest.
 Each state accepts only its exact pinned runner/scheduler SHA pair; a partial or opposite state
-fails closed. Do not start a new GPU recovery run for the present task. First perform only the
-legacy read-only revalidation below and keep its output outside the `3ee1c3e` tree.
+fails closed. The legacy read-only section remains the immutable `3ee1c3e` closure procedure; it
+is not part of the active Gate3 recovery and must keep its output outside the old tree.
+
+## Active Gate3 corrected-100 recovery after chunked-prefill setup failure
+
+The first corrected-100 attempt under `eba0df4` is immutable at:
+
+```text
+/root/autodl-tmp/SpecRhythm-data/results/phase4/eba0df493a7fd350ef3c8776e06d30e6196b6749/phase4b1-gate2-corrected5-20260827T040244Z/Gate-3-corrected-100
+```
+
+Its preparation, 60/20/20 workload, single allowed deterministic stock pair and patch application
+passed. Resident Target then failed before global setup because the proposer treated every
+callback row as bootstrap-ready although chunked prefill had split the 100-request cohort. Serial
+and Dual were not run and Gate3 was not evaluated. Never alter or reuse that directory.
+
+At pinned vLLM `752a3a5`, the CPU custom proposer is called after `_bookkeeping_sync`.
+`sampled_token_ids[row]` therefore proves whether that forward sampled a bootstrap;
+`num_tokens_no_spec/token_ids_cpu` is the post-bookkeeping logical row, not a Target-KV
+materialization count. The minimal active patch additionally passes
+`num_computed_tokens_cpu + scheduler_output.num_scheduled_tokens` for each request. The shared
+classifier uses those facts for `partial-prefill`, `full-prompt-no-bootstrap` and
+`bootstrap-ready`; a second output before global readiness remains fatal.
+
+Run the following only after the new commit and CI are reviewed. It reuses the exact stock-100
+reference byte-for-byte and does not run another stock pair. The consumer still validates the full
+stock/model/tokenizer/sampling/runtime/workload contract before model creation.
+
+```bash
+set -euo pipefail
+cd /root/autodl-tmp/src/SpecRhythm
+git fetch origin codex/vllm-serving-v0.1
+git switch --detach origin/codex/vllm-serving-v0.1
+export SR_PHASE4B_COMMIT="$(git rev-parse HEAD)"
+test -z "$(git status --short)"
+
+conda activate /root/autodl-tmp/envs/specrhythm-phase4-vllm-0.25.1
+python -m pip install -e '.[dev]' --no-deps
+
+export SR_DRAFT_MODEL="/root/autodl-tmp/models/Qwen3-0.6B"
+export SR_TARGET_MODEL="/root/autodl-tmp/models/Qwen3-32B"
+export SR_VLLM_SOURCE="/root/autodl-tmp/src/vllm-v0.25.1"
+export SR_PHASE4B_CONFIG="$PWD/configs/phase4b_dual_batch_1d2v.yaml"
+export SR_VLLM_ROOT="$(python - <<'PY'
+from importlib import metadata
+print(metadata.distribution("vllm").locate_file(""))
+PY
+)"
+
+export SR_FAILED_PHASE4B_ROOT="/root/autodl-tmp/SpecRhythm-data/results/phase4/eba0df493a7fd350ef3c8776e06d30e6196b6749/phase4b1-gate2-corrected5-20260827T040244Z"
+export SR_FAILED_GATE3="$SR_FAILED_PHASE4B_ROOT/Gate-3-corrected-100"
+export SR_SOURCE_REFERENCE="$SR_FAILED_GATE3/reference/stock-target-reference.json"
+export SR_GATE3_WORKLOAD="$SR_FAILED_PHASE4B_ROOT/workloads/corrected-100.jsonl"
+export SR_PHASE4B_ENVIRONMENT="$SR_FAILED_PHASE4B_ROOT/environment.json"
+export SR_PHASE4B_TOPOLOGY="$SR_FAILED_PHASE4B_ROOT/topology.json"
+
+test -f "$SR_SOURCE_REFERENCE"
+test -f "$SR_GATE3_WORKLOAD"
+test "$(wc -l < "$SR_GATE3_WORKLOAD")" -eq 100
+test -f "$SR_FAILED_PHASE4B_ROOT/Gate-1-controlled-2/validation.json"
+test -f "$SR_FAILED_PHASE4B_ROOT/Gate-2-corrected-5/validation.json"
+
+python - \
+  "$SR_FAILED_PHASE4B_ROOT/Gate-1-controlled-2/validation.json" \
+  "$SR_FAILED_PHASE4B_ROOT/Gate-2-corrected-5/validation.json" <<'PY'
+import json
+import sys
+for path in sys.argv[1:]:
+    value = json.load(open(path, encoding="utf-8"))
+    assert value["valid"] is True
+    assert value["outcome"] == "A"
+    assert value["errors"] == []
+PY
+
+export SR_PHASE4B_ROOT="/root/autodl-tmp/SpecRhythm-data/results/phase4/$SR_PHASE4B_COMMIT/phase4b1-gate3-recovery-$(date -u +%Y%m%dT%H%M%SZ)"
+export SR_GATE3="$SR_PHASE4B_ROOT/Gate-3-corrected-100"
+export SR_GATE3_REFERENCE="$SR_GATE3/reference/stock-target-reference.json"
+test ! -e "$SR_PHASE4B_ROOT"
+mkdir -p "$SR_PHASE4B_ROOT"
+
+find "$SR_FAILED_GATE3" -type f -print0 | sort -z | xargs -0 sha256sum \
+  > "$SR_PHASE4B_ROOT/failed-gate3-input-sha256.txt"
+nvidia-smi -L | tee "$SR_PHASE4B_ROOT/nvidia-smi-L.txt"
+nvidia-smi topo -m | tee "$SR_PHASE4B_ROOT/nvidia-smi-topo.txt"
+
+source integrations/vllm/phase4b_run_helpers.sh
+source integrations/vllm/phase4b1_gate_helpers.sh
+
+phase4b1_restore_stock "$SR_GATE3/stock-stage"
+phase4b1_reuse_stock_reference \
+  "$SR_SOURCE_REFERENCE" "$SR_GATE3/reference" "$SR_GATE3_WORKLOAD"
+
+python - \
+  "$SR_PHASE4B_CONFIG" "$SR_GATE3_REFERENCE" "$SR_GATE3_WORKLOAD" <<'PY'
+import pathlib
+import sys
+from specrhythm.phase4.config import load_phase4_config
+from specrhythm.phase4.reference import (
+    load_reference,
+    require_exact_resident_reference_reuse,
+)
+config = load_phase4_config(sys.argv[1])
+reference = load_reference(pathlib.Path(sys.argv[2]))
+require_exact_resident_reference_reuse(reference, config, pathlib.Path(sys.argv[3]))
+PY
+
+phase4b1_apply_patch_stack "$SR_GATE3/stock-stage"
+```
+
+Run each consumer in order and stop immediately on the first nonzero result:
+
+```bash
+phase4b1_run_mode target \
+  "$SR_GATE3/target" "$SR_GATE3_WORKLOAD" 100 "$SR_GATE3_REFERENCE"
+
+python - "$SR_GATE3/target/resident-target.json" \
+  "$SR_GATE3/target/process-lifecycle.json" \
+  "$SR_GATE3/target/timing-events.jsonl" <<'PY'
+import json
+import sys
+run = json.load(open(sys.argv[1], encoding="utf-8"))
+lifecycle = json.load(open(sys.argv[2], encoding="utf-8"))
+rows = [json.loads(line) for line in open(sys.argv[3], encoding="utf-8") if line.strip()]
+setup = [row for row in rows if row.get("event") == "setup-row-classified"]
+partial = [row for row in setup if row.get("setup_stage") == "partial-prefill"]
+ready = [row for row in setup if row.get("setup_stage") == "bootstrap-ready"]
+assert run["valid"] is True and run["errors"] == []
+assert lifecycle["cleanup_valid"] is True
+assert len({row["request_id"] for row in ready}) == 100
+assert partial
+assert any(
+    early["timestamp_ns"] < later["timestamp_ns"]
+    and early["internal_target_request_id"] != later["internal_target_request_id"]
+    for early in ready for later in partial
+)
+PY
+
+phase4b1_run_mode serial \
+  "$SR_GATE3/serial" "$SR_GATE3_WORKLOAD" 100 "$SR_GATE3_REFERENCE"
+python - "$SR_GATE3/serial/resident-serial.json" \
+  "$SR_GATE3/serial/process-lifecycle.json" <<'PY'
+import json
+import sys
+run = json.load(open(sys.argv[1], encoding="utf-8"))
+lifecycle = json.load(open(sys.argv[2], encoding="utf-8"))
+assert run["valid"] is True and run["errors"] == []
+assert lifecycle["cleanup_valid"] is True
+PY
+
+PHASE4B1_OVERLAP_REQUIREMENT=required \
+phase4b1_run_mode dual \
+  "$SR_GATE3/dual-1" "$SR_GATE3_WORKLOAD" 100 "$SR_GATE3_REFERENCE" none
+
+PHASE4B1_OVERLAP_REQUIREMENT=required \
+phase4b1_validate_gate "$SR_GATE3" "$SR_GATE3/dual-1"
+phase4b1_require_outcome_a "$SR_GATE3/validation.json"
+
+find "$SR_PHASE4B_ROOT" -type f ! -name 'all-artifacts-sha256.txt' -print0 \
+  | sort -z | xargs -0 sha256sum > "$SR_PHASE4B_ROOT/all-artifacts-sha256.txt"
+cat "$SR_GATE3/reference/stock-reference-reuse.json"
+cat "$SR_GATE3/validation.json"
+echo "$SR_PHASE4B_ROOT"
+```
+
+Stop after this recovery. Do not start performance, Dual-Eager, Gate4 or Phase4B.2.
 
 ## 0. Close the preserved Gate 1 by read-only revalidation
 

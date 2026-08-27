@@ -15,6 +15,7 @@ from specrhythm.phase4.reference import (
     _exclusive_freeze,
     build_stock_reference,
     build_target_regression,
+    reuse_immutable_stock_reference,
     validate_stock_reference,
 )
 from specrhythm.phase4.serial import (
@@ -354,6 +355,46 @@ def test_stock_reference_is_immutable_and_hf_is_advisory(phase4_config, tmp_path
     _exclusive_freeze(path, reference)
     with pytest.raises(FileExistsError):
         _exclusive_freeze(path, reference)
+
+
+def test_deterministic_stock_reference_reuse_is_byte_exact_and_provenanced(
+    phase4_config, tmp_path
+):
+    rows = [json.loads(line) for line in WORKLOAD.read_text().splitlines()]
+    smoke = smoke_report()
+    for run in smoke["runs"]:
+        for output, row in zip(run, rows):
+            output["request_id"] = row["request_id"]
+    reference = build_stock_reference(
+        smoke, phase4_config, workload_path=WORKLOAD, git_commit="e" * 40
+    )
+    source = tmp_path / "old" / "stock-target-reference.json"
+    _exclusive_freeze(source, reference)
+    destination = tmp_path / "recovery" / "stock-target-reference.json"
+    provenance = tmp_path / "recovery" / "stock-reference-reuse.json"
+    report = reuse_immutable_stock_reference(
+        source,
+        destination,
+        provenance,
+        workload_path=WORKLOAD,
+        recovery_git_commit="f" * 40,
+    )
+    assert source.read_bytes() == destination.read_bytes()
+    assert report["stock_pair_remeasured"] is False
+    assert report["source_reference_sha256"] == report[
+        "destination_reference_sha256"
+    ]
+    assert json.loads(provenance.read_text())["artifact_sha256"] == report[
+        "artifact_sha256"
+    ]
+    with pytest.raises(FileExistsError):
+        reuse_immutable_stock_reference(
+            source,
+            destination,
+            provenance,
+            workload_path=WORKLOAD,
+            recovery_git_commit="f" * 40,
+        )
 
 
 def test_stock_reference_rejects_nondeterministic_repeated_run(

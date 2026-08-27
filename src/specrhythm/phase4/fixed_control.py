@@ -62,8 +62,14 @@ class LocalStaticProposer:
         *,
         request_ids: Optional[Sequence[str]] = None,
         slot_mappings: Any = None,
+        target_materialized_token_counts: Optional[Sequence[int]] = None,
     ) -> list[list[int]]:
-        del sampled_token_ids, request_ids, slot_mappings
+        del (
+            sampled_token_ids,
+            request_ids,
+            slot_mappings,
+            target_materialized_token_counts,
+        )
         result = None
         if int(self.tp_group.rank_in_group) == 0:
             result = fixed_proposal_rows(
@@ -97,8 +103,14 @@ class RemoteFixedProposer(LocalStaticProposer):
         *,
         request_ids: Optional[Sequence[str]] = None,
         slot_mappings: Any = None,
+        target_materialized_token_counts: Optional[Sequence[int]] = None,
     ) -> list[list[int]]:
-        del sampled_token_ids, request_ids, slot_mappings
+        del (
+            sampled_token_ids,
+            request_ids,
+            slot_mappings,
+            target_materialized_token_counts,
+        )
         result = None
         if int(self.tp_group.rank_in_group) == 0:
             local_rows = fixed_proposal_rows(

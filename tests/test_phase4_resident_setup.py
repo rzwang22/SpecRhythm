@@ -13,15 +13,46 @@ from specrhythm.phase4.decode_ready import (
     ResidentWarmStartProvider,
 )
 from specrhythm.phase4.manifest import atomic_write_json
+from specrhythm.phase4.request_identity import FrozenPromptIdentityMap
 from specrhythm.phase4.resident_setup import (
     IncrementalResidentSetup,
+    ResidentSetupStage,
     build_setup_ready,
+    classify_resident_setup_wave,
     load_setup_ready,
     observation_to_dict,
     resident_admission_decision,
     validate_resident_admission_events,
 )
 from specrhythm.phase4.serial import PROTOCOL_VERSION, Proposal
+
+
+class _RowSlice:
+    def __init__(self, values):
+        self.values = values
+
+    def tolist(self):
+        return list(self.values)
+
+
+class _TokenRows:
+    def __init__(self, rows):
+        self.rows = [list(row) for row in rows]
+
+    def __getitem__(self, item):
+        row, selected = item
+        return _RowSlice(self.rows[row][selected])
+
+
+def _classify(request_ids, sampled, logical_rows, materialized, prompts):
+    return classify_resident_setup_wave(
+        request_ids=request_ids,
+        sampled_token_ids=sampled,
+        num_tokens_no_spec=[len(row) for row in logical_rows],
+        token_ids_cpu=_TokenRows(logical_rows),
+        target_materialized_token_counts=materialized,
+        frozen_prompts=prompts,
+    )
 
 
 def _observation(request_id: str, offset: int) -> ResidentSetupObservation:
@@ -127,6 +158,153 @@ def test_incremental_l5_mixed_subsets_have_one_completion_transition():
     assert tracker.completion_transition_count == 1
     assert tracker.record(tracker.observations[-1]) is False
     assert tracker.completion_transition_count == 1
+
+
+def test_chunked_prefill_mixed_wave_waits_for_exact_bootstrap_evidence():
+    prompts = {"A": (1, 2, 3, 4), "B": (5, 6), "C": (7, 8)}
+    rows = _classify(
+        ("opaque-A", "opaque-B", "opaque-C"),
+        ((), (), (9,)),
+        ((1, 2), (5, 6), (7, 8, 9)),
+        (2, 2, 2),
+        prompts,
+    )
+    assert [row.stage for row in rows] == [
+        ResidentSetupStage.PARTIAL_PREFILL,
+        ResidentSetupStage.FULL_PROMPT_NO_BOOTSTRAP,
+        ResidentSetupStage.BOOTSTRAP_READY,
+    ]
+    assert rows[0].stable_request_id is None
+    assert rows[1].stable_request_id == "B"
+    assert rows[2].stable_request_id == "C"
+    assert rows[2].bootstrap_token_id == 9
+
+
+def test_chunked_prefill_subsequent_waves_record_once_in_frozen_order():
+    prompts = {"A": (1, 2, 3, 4), "B": (5, 6), "C": (7, 8)}
+    tracker = IncrementalResidentSetup(tuple(prompts), setup_start_ns=5)
+    initializations = {request_id: 0 for request_id in prompts}
+
+    def consume(classified, timestamp):
+        for row in classified:
+            if row.stage is not ResidentSetupStage.BOOTSTRAP_READY:
+                continue
+            assert row.stable_request_id is not None
+            request_id = row.stable_request_id
+            existing = tracker.get(request_id)
+            if existing is None:
+                initializations[request_id] += 1
+                prompt = prompts[request_id]
+                tracker.record(
+                    ResidentSetupObservation(
+                        request_id=request_id,
+                        internal_target_request_id=row.internal_request_id,
+                        prompt_token_ids=prompt,
+                        bootstrap_token_id=int(row.bootstrap_token_id),
+                        target_materialized_kv_token_count=len(prompt),
+                        target_num_computed_tokens=len(prompt),
+                        draft_materialized_kv_token_count=len(prompt) + 1,
+                        bootstrap_ready_ns=timestamp,
+                        draft_initialization_complete_ns=timestamp + 1,
+                    )
+                )
+            else:
+                assert existing.bootstrap_token_id == row.bootstrap_token_id
+
+    consume(
+        _classify(
+            ("opaque-A", "opaque-B", "opaque-C"),
+            ((), (), (9,)),
+            ((1, 2), (5, 6), (7, 8, 9)),
+            (2, 2, 2),
+            prompts,
+        ),
+        10,
+    )
+    assert tracker.observed_request_ids == ("C",)
+    assert tracker.complete is False
+    consume(
+        _classify(
+            ("opaque-A", "opaque-B"),
+            ((10,), (11,)),
+            ((1, 2, 3, 4, 10), (5, 6, 11)),
+            (4, 2),
+            prompts,
+        ),
+        20,
+    )
+    assert tracker.observed_request_ids == ("A", "B", "C")
+    assert tracker.complete is True
+    assert tracker.completion_transition_count == 1
+    assert initializations == {"A": 1, "B": 1, "C": 1}
+
+    # An identical repeated hook does not authorize a second Draft initialize.
+    consume(
+        _classify(
+            ("opaque-C",), ((9,),), ((7, 8, 9),), (2,), prompts
+        ),
+        30,
+    )
+    assert initializations["C"] == 1
+
+
+def test_partial_and_ambiguous_prompt_rows_never_become_bootstrap_ready():
+    prompts = {"A": (1, 2, 3), "B": (1, 2, 4)}
+    row = _classify(("opaque",), ((),), ((1, 2),), (2,), prompts)[0]
+    assert row.stage is ResidentSetupStage.PARTIAL_PREFILL
+    assert row.stable_request_id is None
+    assert row.candidate_request_ids == ("A", "B")
+    identity = FrozenPromptIdentityMap(prompts)
+    assert identity.internal_to_stable == {}
+
+    buffered = _classify(
+        ("opaque-full-buffer",), ((),), ((8, 9, 10, 11),), (2,), {"C": (8, 9, 10, 11)}
+    )[0]
+    assert buffered.stage is ResidentSetupStage.PARTIAL_PREFILL
+    assert buffered.stable_request_id is None
+    assert buffered.candidate_request_ids == ("C",)
+
+
+def test_setup_classifier_rejects_unknown_changed_or_illegally_advanced_rows():
+    prompts = {"A": (1, 2)}
+    with pytest.raises(RuntimeError, match="matches no frozen"):
+        _classify(("opaque",), ((),), ((8,),), (1,), prompts)
+    with pytest.raises(RuntimeError, match="beyond one bootstrap"):
+        _classify(("opaque",), ((),), ((1, 2, 3, 4),), (2,), prompts)
+    with pytest.raises(RuntimeError, match="does not identify one frozen prompt"):
+        _classify(("opaque",), ((4,),), ((1, 2, 3),), (2,), prompts)
+    with pytest.raises(RuntimeError, match="invalid token"):
+        _classify(("opaque",), ((),), ((1, -2),), (1,), prompts)
+
+
+def test_duplicate_bootstrap_change_and_early_completion_fail_closed():
+    tracker = IncrementalResidentSetup(("A", "B"), setup_start_ns=5)
+    first = _observation("A", 1)
+    tracker.record(first)
+    assert tracker.complete is False
+    with pytest.raises(RuntimeError, match="observation changed"):
+        tracker.record(replace(first, bootstrap_token_id=999))
+    assert tracker.completion_transition_count == 0
+
+
+def test_scale_wave_exceeds_vllm_prefill_budget_without_false_bootstrap():
+    prompts = {
+        f"R{index:03d}": (index + 1,) + tuple(range(1000, 1164))
+        for index in range(100)
+    }
+    assert sum(len(prompt) for prompt in prompts.values()) > 16384
+    request_ids = tuple(f"opaque-{index:03d}" for index in range(100))
+    logical_rows = tuple(tuple(prompt[:32]) for prompt in prompts.values())
+    rows = _classify(
+        request_ids,
+        tuple(() for _ in request_ids),
+        logical_rows,
+        tuple(32 for _ in request_ids),
+        prompts,
+    )
+    assert len(rows) == 100
+    assert all(row.stage is ResidentSetupStage.PARTIAL_PREFILL for row in rows)
+    assert all(row.bootstrap_token_id is None for row in rows)
 
 
 def test_duplicate_or_stale_bootstrap_fails_closed():
@@ -307,6 +485,7 @@ def test_both_gpu_consumers_use_incremental_setup_and_resident_scheduler():
     root = Path(__file__).parents[1]
     target = (root / "src/specrhythm/phase4/resident_vllm.py").read_text()
     serial = (root / "src/specrhythm/phase4/vllm_remote.py").read_text()
+    dual = (root / "src/specrhythm/phase4/vllm_dual.py").read_text()
     target_runner = (root / "src/specrhythm/phase4/resident_runner.py").read_text()
     serial_runner = (root / "src/specrhythm/phase4/serial_runner.py").read_text()
     forbidden = "requires every frozen request in one initial prefill batch"
@@ -314,13 +493,30 @@ def test_both_gpu_consumers_use_incremental_setup_and_resident_scheduler():
     assert "requires all requests in one initial prefill batch" not in serial
     assert "IncrementalResidentSetup" in target
     assert "IncrementalResidentSetup" in serial
+    assert "IncrementalResidentSetup" in dual
+    assert target.count("classify_resident_setup_wave(") == 1
+    assert serial.count("classify_resident_setup_wave(") == 1
+    assert dual.count("classify_resident_setup_wave(") == 1
+    for source in (target, serial, dual):
+        assert "target_materialized_token_counts" in source
+        assert "ResidentSetupStage.BOOTSTRAP_READY" in source
     assert "ResidentSetupObservation.from_dict" in target
     assert "ResidentSetupObservation.from_dict" in serial
+    assert "ResidentSetupObservation.from_dict" in dual
     assert "ResidentSetupObservation(**row)" not in target
     assert "ResidentSetupObservation(**row)" not in serial
+    assert "ResidentSetupObservation(**row)" not in dual
     scheduler = "specrhythm.phase4.resident_scheduler.ResidentSetupScheduler"
     assert scheduler in target_runner
     assert scheduler in serial_runner
+
+    patch = (
+        root
+        / "integrations/vllm/patches/0001-custom-proposer-request-and-verify-hooks.patch"
+    ).read_text()
+    assert "target_materialized_token_counts=[" in patch
+    assert "num_computed_tokens_cpu[index]" in patch
+    assert "scheduler_output.num_scheduled_tokens[request_id]" in patch
 
     from specrhythm.phase4.resident_vllm import ResidentTargetProposer
     from specrhythm.phase4.vllm_remote import RemoteDraftProposer

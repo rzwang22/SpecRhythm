@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import signal
+import stat
 import subprocess
 import tempfile
 import time
@@ -131,6 +132,7 @@ def run_owned_target(
     cleanup_valid = (
         launch_error is None
         and coordinator_reaped
+        and not leaked_after_coordinator_exit
         and not remaining
         and draft_shutdown["valid"]
     )
@@ -242,6 +244,7 @@ def _cleanup_draft(
 ) -> dict[str, Any]:
     if draft_pid is None:
         return {"required": False, "valid": True, "pid": None}
+    socket_before = _unix_socket_identity(draft_socket)
     was_alive = _pid_alive(draft_pid)
     signaled = False
     if force and was_alive:
@@ -254,7 +257,26 @@ def _cleanup_draft(
     while _pid_alive(draft_pid) and time.monotonic() < deadline:
         time.sleep(poll_seconds)
     alive = _pid_alive(draft_pid)
-    socket_exists = draft_socket.exists() if draft_socket is not None else False
+    socket_after_exit = _unix_socket_identity(draft_socket)
+    removed_stale_socket = False
+    socket_cleanup_error = None
+    if not alive and socket_after_exit is not None:
+        if socket_before is None:
+            socket_cleanup_error = (
+                "Draft socket appeared after ownership was first observed"
+            )
+        elif socket_before != socket_after_exit:
+            socket_cleanup_error = "Draft socket identity changed during cleanup"
+        elif socket_after_exit["is_socket"] is not True:
+            socket_cleanup_error = "owned Draft path is not a Unix socket"
+        else:
+            try:
+                assert draft_socket is not None
+                draft_socket.unlink()
+                removed_stale_socket = True
+            except OSError as error:
+                socket_cleanup_error = str(error)
+    socket_final = _unix_socket_identity(draft_socket)
     return {
         "required": True,
         "pid": draft_pid,
@@ -262,9 +284,28 @@ def _cleanup_draft(
         "term_sent": signaled,
         "alive_after_cleanup": alive,
         "socket_path": str(draft_socket) if draft_socket is not None else None,
-        "socket_exists_after_cleanup": socket_exists,
+        "socket_identity_before_cleanup": socket_before,
+        "socket_identity_after_process_exit": socket_after_exit,
+        "stale_owned_socket_removed": removed_stale_socket,
+        "socket_cleanup_error": socket_cleanup_error,
+        "socket_exists_after_cleanup": socket_final is not None,
         "reaped_by_calling_shell": not alive,
-        "valid": not alive and not socket_exists,
+        "valid": not alive and socket_final is None and socket_cleanup_error is None,
+    }
+
+
+def _unix_socket_identity(path: Optional[Path]) -> Optional[dict[str, Any]]:
+    if path is None:
+        return None
+    try:
+        value = path.lstat()
+    except FileNotFoundError:
+        return None
+    return {
+        "device": int(value.st_dev),
+        "inode": int(value.st_ino),
+        "mode": int(value.st_mode),
+        "is_socket": stat.S_ISSOCK(value.st_mode),
     }
 
 

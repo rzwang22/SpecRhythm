@@ -3,13 +3,16 @@
 Base: vLLM `v0.25.1`, commit
 `752a3a504485790a2e8491cacbb35c137339ad34`.
 
-Patch order is fixed and both patches are Python-only:
+Patch order is fixed and all patches are Python-only:
 
 1. `0001-custom-proposer-request-and-verify-hooks.patch` changes
 `vllm/v1/worker/gpu_model_runner.py`. It passes vLLM request IDs to the already supported
-`custom_class` proposer and invokes optional before/after Target verification hooks. The hooks are
-inactive when speculative decoding is disabled and do not alter Target sampling, rejection, KV,
-scheduler, attention, C++ or CUDA semantics.
+`custom_class` proposer, supplies the post-forward Target-materialized token count, and invokes
+optional before/after Target verification hooks. The materialized count is derived from the
+worker's existing `num_computed_tokens_cpu + scheduler_output.num_scheduled_tokens`; it is needed
+to distinguish partial chunked prefill from a sampled bootstrap because the logical CPU token row
+may already contain the full prompt. The hooks are inactive when speculative decoding is disabled
+and do not alter Target sampling, rejection, KV, scheduler, attention, C++ or CUDA semantics.
 2. `0002-scheduler-request-admissibility-hook.patch` changes
 `vllm/v1/core/sched/scheduler.py`. It adds one default-off request predicate before the stock
 running-request allocation path. When absent, stock behavior is unchanged. The Phase-4B scheduler
@@ -36,5 +39,6 @@ pairs; neither accepts partial or opposite-state installations. When `--manifest
 the check publishes a new immutable diagnostic containing the expected state, actual hashes,
 pinned source commit, active patch hashes and validity. The manager applies in order without fuzzy
 matching, records every patch plus original/patched source checksums, and restores in reverse
-order. A Phase-4A installation containing only the prior worker patch can still be restored. Do
-not apply the stack to another vLLM commit.
+order. A Phase-4A installation containing only the prior worker patch and the exact pre-Gate3
+patched state can still be restored through the archived reverse-only patch. New applications use
+only the active three-layer stack. Do not apply the stack to another vLLM commit.

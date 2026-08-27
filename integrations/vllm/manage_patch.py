@@ -16,9 +16,20 @@ from typing import Any, Mapping, Optional, Sequence
 BASE_COMMIT = "752a3a504485790a2e8491cacbb35c137339ad34"
 TARGET_FILE = Path("vllm/v1/worker/gpu_model_runner.py")
 BASE_SHA256 = "6c92ded8468f44d6df863a617ce588f132fa6df7031feecc0cc421702a41610e"
-WORKER_HOOKS_SHA256 = "a99c410cd791f20071bb17b8a619e5b309427b50ed864b8753d066c1dc4b150c"
-PATCHED_SHA256 = "5cd618de8826e15ef00ca1735101a29af06029b7ce9d54cede00bf2b401cc257"
+WORKER_HOOKS_SHA256 = "fb918ca2188081ab00a57ae671dcb0fce98b783599341d81e8c470831c2e98db"
+PATCHED_SHA256 = "aff188fd298bff4619d572729a50a6979f94e2f90e8cdc90adf91df79215f244"
 PATCH = Path(__file__).parent / "patches" / "0001-custom-proposer-request-and-verify-hooks.patch"
+PRE_GATE3_WORKER_HOOKS_SHA256 = (
+    "a99c410cd791f20071bb17b8a619e5b309427b50ed864b8753d066c1dc4b150c"
+)
+PRE_GATE3_PATCHED_SHA256 = (
+    "5cd618de8826e15ef00ca1735101a29af06029b7ce9d54cede00bf2b401cc257"
+)
+PRE_GATE3_PATCH = (
+    Path(__file__).parent
+    / "patches"
+    / "0001-custom-proposer-request-and-verify-hooks-pre-gate3.patch"
+)
 SCHEDULER_FILE = Path("vllm/v1/core/sched/scheduler.py")
 SCHEDULER_BASE_SHA256 = (
     "e25d4c9a95abdbe8e516714ed02574d929ca0d5e8c11c4cc73b84d3a3b905443"
@@ -129,6 +140,14 @@ def expected_state_hashes(expected_state: str) -> Mapping[str, str]:
 
 
 def patch_stack(active_runner_patch: Path = PATCH) -> list[Mapping[str, Any]]:
+    worker_hooks_sha256 = WORKER_HOOKS_SHA256
+    final_runner_sha256 = PATCHED_SHA256
+    if active_runner_patch == PRE_GATE3_PATCH:
+        worker_hooks_sha256 = PRE_GATE3_WORKER_HOOKS_SHA256
+        final_runner_sha256 = PRE_GATE3_PATCHED_SHA256
+    elif active_runner_patch == LEGACY_PATCH:
+        worker_hooks_sha256 = LEGACY_PATCHED_SHA256
+        final_runner_sha256 = LEGACY_PATCHED_SHA256
     return [
         {
             "order": 1,
@@ -136,7 +155,7 @@ def patch_stack(active_runner_patch: Path = PATCH) -> list[Mapping[str, Any]]:
             "patch_sha256": sha256(active_runner_patch),
             "target_file": str(TARGET_FILE),
             "original_source_sha256": BASE_SHA256,
-            "patched_source_sha256": WORKER_HOOKS_SHA256,
+            "patched_source_sha256": worker_hooks_sha256,
         },
         {
             "order": 2,
@@ -151,8 +170,8 @@ def patch_stack(active_runner_patch: Path = PATCH) -> list[Mapping[str, Any]]:
             "patch_file": TIMING_PATCH.name,
             "patch_sha256": sha256(TIMING_PATCH),
             "target_file": str(TARGET_FILE),
-            "original_source_sha256": WORKER_HOOKS_SHA256,
-            "patched_source_sha256": PATCHED_SHA256,
+            "original_source_sha256": worker_hooks_sha256,
+            "patched_source_sha256": final_runner_sha256,
         },
     ]
 
@@ -271,6 +290,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 BASE_SHA256,
                 WORKER_HOOKS_SHA256,
                 PATCHED_SHA256,
+                PRE_GATE3_WORKER_HOOKS_SHA256,
+                PRE_GATE3_PATCHED_SHA256,
                 LEGACY_PATCHED_SHA256,
             },
             str(SCHEDULER_FILE): {SCHEDULER_BASE_SHA256, SCHEDULER_PATCHED_SHA256},
@@ -281,9 +302,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 f"refusing {args.operation}: {relative} SHA256 is {before[relative]}, "
                 f"expected one of {sorted(allowed)}"
             )
-    active_runner_patch = (
-        LEGACY_PATCH if before[str(TARGET_FILE)] == LEGACY_PATCHED_SHA256 else PATCH
-    )
+    runner_before = before[str(TARGET_FILE)]
+    active_runner_patch = PATCH
+    if runner_before == LEGACY_PATCHED_SHA256:
+        active_runner_patch = LEGACY_PATCH
+    elif runner_before in {
+        PRE_GATE3_WORKER_HOOKS_SHA256,
+        PRE_GATE3_PATCHED_SHA256,
+    }:
+        active_runner_patch = PRE_GATE3_PATCH
     operations = [
         (TARGET_FILE, active_runner_patch),
         (SCHEDULER_FILE, SCHEDULER_PATCH),
@@ -291,13 +318,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ]
     if args.operation == "restore":
         operations = []
-        if before[str(TARGET_FILE)] == PATCHED_SHA256:
+        if runner_before in {PATCHED_SHA256, PRE_GATE3_PATCHED_SHA256}:
             operations.append((TARGET_FILE, TIMING_PATCH))
         if before[str(SCHEDULER_FILE)] == SCHEDULER_PATCHED_SHA256:
             operations.append((SCHEDULER_FILE, SCHEDULER_PATCH))
-        if before[str(TARGET_FILE)] in {PATCHED_SHA256, WORKER_HOOKS_SHA256}:
+        if runner_before in {PATCHED_SHA256, WORKER_HOOKS_SHA256}:
             operations.append((TARGET_FILE, PATCH))
-        elif before[str(TARGET_FILE)] == LEGACY_PATCHED_SHA256:
+        elif runner_before in {
+            PRE_GATE3_PATCHED_SHA256,
+            PRE_GATE3_WORKER_HOOKS_SHA256,
+        }:
+            operations.append((TARGET_FILE, PRE_GATE3_PATCH))
+        elif runner_before == LEGACY_PATCHED_SHA256:
             operations.append((TARGET_FILE, LEGACY_PATCH))
     for _relative, patch in operations:
         check = run_patch(

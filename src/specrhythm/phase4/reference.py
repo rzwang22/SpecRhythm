@@ -512,6 +512,71 @@ def reference_file_evidence(path: Path) -> dict[str, Any]:
     }
 
 
+def reuse_immutable_stock_reference(
+    source_path: Path,
+    destination_path: Path,
+    provenance_path: Path,
+    *,
+    workload_path: Path,
+    recovery_git_commit: str,
+) -> dict[str, Any]:
+    """Copy one proven stock pair without measuring or silently re-rolling it."""
+
+    source = source_path.resolve()
+    destination = destination_path.resolve()
+    provenance = provenance_path.resolve()
+    reference = load_reference(source)
+    workload = reference.get("workload")
+    workload_sha256 = sha256_file(workload_path)
+    if not isinstance(workload, Mapping) or workload.get("sha256") != workload_sha256:
+        raise ValueError("stock reference reuse workload checksum differs")
+    if destination.exists() or provenance.exists():
+        raise FileExistsError("stock reference reuse destination already exists")
+    source_sha256 = sha256_file(source)
+    _exclusive_copy(source, destination)
+    destination_sha256 = sha256_file(destination)
+    if destination_sha256 != source_sha256:
+        raise RuntimeError("reused stock reference bytes differ from their source")
+    payload = {
+        "schema_version": "specrhythm.phase4-stock-reference-reuse.v1",
+        "reuse_only": True,
+        "stock_pair_remeasured": False,
+        "source_reference_path": str(source),
+        "source_reference_file": source.name,
+        "source_reference_sha256": source_sha256,
+        "destination_reference_file": destination.name,
+        "destination_reference_sha256": destination_sha256,
+        "reference_artifact_sha256": reference.get("artifact_sha256"),
+        "reference_specrhythm_commit": reference.get("specrhythm_commit"),
+        "recovery_specrhythm_commit": str(recovery_git_commit),
+        "workload_file": workload_path.name,
+        "workload_sha256": workload_sha256,
+        "semantic_contract": (
+            "same frozen workload/model/tokenizer/sampling/stock-vLLM/runtime; "
+            "consumer integration commit may differ"
+        ),
+    }
+    payload["artifact_sha256"] = payload_sha256(payload)
+    _exclusive_freeze(provenance, payload)
+    return payload
+
+
+def _exclusive_copy(source: Path, destination: Path) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    descriptor = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o444)
+    try:
+        with source.open("rb") as input_handle, os.fdopen(
+            descriptor, "wb"
+        ) as output_handle:
+            for chunk in iter(lambda: input_handle.read(1024 * 1024), b""):
+                output_handle.write(chunk)
+            output_handle.flush()
+            os.fsync(output_handle.fileno())
+    except Exception:
+        destination.unlink(missing_ok=True)
+        raise
+
+
 def _load_jsonl(path: Path) -> list[dict[str, Any]]:
     rows = []
     with path.open("r", encoding="utf-8") as handle:

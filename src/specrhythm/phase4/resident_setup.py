@@ -9,8 +9,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import dataclass
+from enum import Enum
+from numbers import Integral
 from pathlib import Path
-from typing import Any, Mapping, Optional, Sequence
+from typing import Any, Mapping, Optional, Sequence, Tuple
 
 from specrhythm.phase4.decode_ready import (
     DecodeReadyManifest,
@@ -24,6 +27,264 @@ SETUP_CONTROL_SCHEMA = "specrhythm.phase4b-resident-setup-control.v1"
 SETUP_READY_SCHEMA = "specrhythm.phase4b-resident-setup-ready.v1"
 ADMISSION_EVENT_SCHEMA = "specrhythm.phase4b-resident-admission-event.v1"
 RESIDENT_CONSUMERS = {"target-only", "serial", "dual-batch"}
+
+
+class ResidentSetupStage(str, Enum):
+    """Scale-safe state of one row observed by the custom proposer hook."""
+
+    PARTIAL_PREFILL = "partial-prefill"
+    FULL_PROMPT_NO_BOOTSTRAP = "full-prompt-no-bootstrap"
+    BOOTSTRAP_READY = "bootstrap-ready"
+
+
+@dataclass(frozen=True)
+class ResidentSetupRow:
+    """Dependency-free classification of one pinned-vLLM setup callback row."""
+
+    internal_request_id: str
+    stage: ResidentSetupStage
+    stable_request_id: Optional[str]
+    candidate_request_ids: Tuple[str, ...]
+    logical_token_ids: Tuple[int, ...]
+    sampled_token_ids: Tuple[int, ...]
+    target_materialized_token_count: int
+    bootstrap_token_id: Optional[int]
+
+
+def classify_resident_setup_wave(
+    *,
+    request_ids: Sequence[str],
+    sampled_token_ids: Sequence[Sequence[int]],
+    num_tokens_no_spec: Any,
+    token_ids_cpu: Any,
+    target_materialized_token_counts: Sequence[int],
+    frozen_prompts: Mapping[str, Sequence[int]],
+) -> tuple[ResidentSetupRow, ...]:
+    """Classify a mixed chunked-prefill wave without binding partial identity.
+
+    At pinned vLLM v0.25.1 the custom proposer runs after synchronous
+    bookkeeping. ``sampled_token_ids`` therefore proves whether this forward
+    sampled a token, while ``num_tokens_no_spec`` describes the logical CPU
+    token row. The patched worker supplies the post-forward materialized count
+    separately because logical tokens and Target-KV positions differ during
+    chunked prefill and immediately after bootstrap sampling.
+    """
+
+    size = len(request_ids)
+    if not size:
+        raise RuntimeError("resident setup callback cannot be empty")
+    if len(sampled_token_ids) != size:
+        raise RuntimeError("resident setup sampled-token rows do not match request rows")
+    if len(target_materialized_token_counts) != size:
+        raise RuntimeError("resident setup materialized counts do not match request rows")
+    prompts = _canonical_frozen_prompts(frozen_prompts)
+    rows = []
+    for index, internal_id_value in enumerate(request_ids):
+        internal_id = str(internal_id_value)
+        if not internal_id:
+            raise RuntimeError("resident setup internal request ID is empty")
+        logical_count = _setup_nonnegative_int(
+            num_tokens_no_spec[index], "logical token count"
+        )
+        materialized = _setup_nonnegative_int(
+            target_materialized_token_counts[index], "materialized token count"
+        )
+        logical = _setup_token_tuple(
+            token_ids_cpu[index, :logical_count].tolist(), "logical token row"
+        )
+        sampled = _setup_token_tuple(
+            sampled_token_ids[index], "sampled token row", allow_empty=True
+        )
+        if len(logical) != logical_count:
+            raise RuntimeError("resident setup logical token row is truncated")
+        if materialized > logical_count:
+            raise RuntimeError(
+                "resident setup materialized count exceeds its logical token row"
+            )
+        if len(sampled) > 1:
+            raise RuntimeError(
+                "resident setup advanced by more than one sampled token before global readiness"
+            )
+        rows.append(
+            _classify_resident_setup_row(
+                internal_request_id=internal_id,
+                logical_token_ids=logical,
+                sampled_token_ids=sampled,
+                target_materialized_token_count=materialized,
+                frozen_prompts=prompts,
+            )
+        )
+    return tuple(rows)
+
+
+def setup_row_evidence(row: ResidentSetupRow) -> dict[str, Any]:
+    """Return JSON-compatible evidence without exposing full prompt payloads."""
+
+    return {
+        "internal_target_request_id": row.internal_request_id,
+        "setup_stage": row.stage.value,
+        "request_id": row.stable_request_id,
+        "candidate_request_ids": list(row.candidate_request_ids),
+        "logical_token_count": len(row.logical_token_ids),
+        "sampled_token_count": len(row.sampled_token_ids),
+        "target_materialized_token_count": row.target_materialized_token_count,
+        "bootstrap_token_id": row.bootstrap_token_id,
+    }
+
+
+def _classify_resident_setup_row(
+    *,
+    internal_request_id: str,
+    logical_token_ids: Tuple[int, ...],
+    sampled_token_ids: Tuple[int, ...],
+    target_materialized_token_count: int,
+    frozen_prompts: Mapping[str, Tuple[int, ...]],
+) -> ResidentSetupRow:
+    exact = [
+        request_id
+        for request_id, prompt in frozen_prompts.items()
+        if logical_token_ids == prompt
+    ]
+    partial = [
+        request_id
+        for request_id, prompt in frozen_prompts.items()
+        if len(logical_token_ids) < len(prompt)
+        and prompt[: len(logical_token_ids)] == logical_token_ids
+    ]
+    extended = [
+        request_id
+        for request_id, prompt in frozen_prompts.items()
+        if len(logical_token_ids) > len(prompt)
+        and logical_token_ids[: len(prompt)] == prompt
+    ]
+
+    if sampled_token_ids:
+        bootstrap_matches = [
+            request_id
+            for request_id in extended
+            if logical_token_ids[len(frozen_prompts[request_id]) :]
+            == sampled_token_ids
+        ]
+        if len(bootstrap_matches) != 1:
+            if any(
+                len(logical_token_ids) - len(frozen_prompts[request_id]) > 1
+                for request_id in extended
+            ):
+                raise RuntimeError(
+                    "resident setup advanced beyond one bootstrap token before global readiness"
+                )
+            raise RuntimeError(
+                "resident setup sampled token does not identify one frozen prompt"
+            )
+        stable_id = bootstrap_matches[0]
+        prompt = frozen_prompts[stable_id]
+        if target_materialized_token_count != len(prompt):
+            raise RuntimeError(
+                "resident bootstrap sampled before the complete prompt or after "
+                "illegal advancement"
+            )
+        return ResidentSetupRow(
+            internal_request_id=internal_request_id,
+            stage=ResidentSetupStage.BOOTSTRAP_READY,
+            stable_request_id=stable_id,
+            candidate_request_ids=(stable_id,),
+            logical_token_ids=logical_token_ids,
+            sampled_token_ids=sampled_token_ids,
+            target_materialized_token_count=target_materialized_token_count,
+            bootstrap_token_id=sampled_token_ids[0],
+        )
+
+    if extended:
+        if any(
+            len(logical_token_ids) - len(frozen_prompts[request_id]) > 1
+            for request_id in extended
+        ):
+            raise RuntimeError(
+                "resident setup advanced beyond one bootstrap token before global readiness"
+            )
+        raise RuntimeError(
+            "resident setup logical row contains a bootstrap without sampled-token evidence"
+        )
+
+    candidates = tuple(dict.fromkeys(exact + partial))
+    if not candidates:
+        raise RuntimeError("resident setup token row matches no frozen workload prompt")
+
+    if len(exact) == 1 and not partial:
+        stable_id = exact[0]
+        prompt_length = len(frozen_prompts[stable_id])
+        if target_materialized_token_count > prompt_length:
+            raise RuntimeError(
+                "resident setup advanced beyond the frozen prompt before bootstrap evidence"
+            )
+        if target_materialized_token_count == prompt_length:
+            return ResidentSetupRow(
+                internal_request_id=internal_request_id,
+                stage=ResidentSetupStage.FULL_PROMPT_NO_BOOTSTRAP,
+                stable_request_id=stable_id,
+                candidate_request_ids=(stable_id,),
+                logical_token_ids=logical_token_ids,
+                sampled_token_ids=(),
+                target_materialized_token_count=target_materialized_token_count,
+                bootstrap_token_id=None,
+            )
+
+    # A full logical prompt may already be buffered while only a prefix has
+    # reached Target KV. Identity is deliberately not bound until readiness.
+    return ResidentSetupRow(
+        internal_request_id=internal_request_id,
+        stage=ResidentSetupStage.PARTIAL_PREFILL,
+        stable_request_id=None,
+        candidate_request_ids=candidates,
+        logical_token_ids=logical_token_ids,
+        sampled_token_ids=(),
+        target_materialized_token_count=target_materialized_token_count,
+        bootstrap_token_id=None,
+    )
+
+
+def _canonical_frozen_prompts(
+    frozen_prompts: Mapping[str, Sequence[int]],
+) -> dict[str, Tuple[int, ...]]:
+    result = {}
+    for request_id_value, token_values in frozen_prompts.items():
+        request_id = str(request_id_value)
+        tokens = _setup_token_tuple(token_values, "frozen prompt")
+        if not request_id or not tokens:
+            raise ValueError("resident setup frozen request IDs/prompts must be non-empty")
+        if request_id in result:
+            raise ValueError("resident setup frozen request IDs must be unique")
+        result[request_id] = tokens
+    if not result or len(set(result.values())) != len(result):
+        raise ValueError("resident setup frozen prompts must be non-empty and unique")
+    return result
+
+
+def _setup_nonnegative_int(value: Any, label: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, Integral):
+        raise RuntimeError(f"resident setup {label} is not an integer")
+    result = int(value)
+    if result < 0:
+        raise RuntimeError(f"resident setup {label} is not a non-negative integer")
+    return result
+
+
+def _setup_token_tuple(
+    values: Sequence[int], label: str, *, allow_empty: bool = False
+) -> Tuple[int, ...]:
+    if isinstance(values, (str, bytes)):
+        raise RuntimeError(f"resident setup {label} is not a token sequence")
+    result = []
+    for value in values:
+        if isinstance(value, bool) or not isinstance(value, Integral):
+            raise RuntimeError(f"resident setup {label} contains a non-integer token")
+        token = int(value)
+        if token < 0:
+            raise RuntimeError(f"resident setup {label} contains an invalid token")
+        result.append(token)
+    if not result and not allow_empty:
+        raise RuntimeError(f"resident setup {label} is empty")
+    return tuple(result)
 
 
 class IncrementalResidentSetup:

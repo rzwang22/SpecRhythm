@@ -82,6 +82,44 @@ PY
   test -f "$phase4b1_reference_dir/stock-target-reference.json"
 }
 
+phase4b1_reuse_stock_reference () {
+  phase4b1_source_reference="$1"
+  phase4b1_reference_dir="$2"
+  phase4b1_workload="$3"
+  test -n "${SR_PHASE4B_COMMIT:-}" || {
+    echo "SR_PHASE4B_COMMIT is required for stock-reference reuse" >&2
+    return 2
+  }
+  test -f "$phase4b1_source_reference" || {
+    echo "source stock reference is missing: $phase4b1_source_reference" >&2
+    return 2
+  }
+  test ! -e "$phase4b1_reference_dir" || {
+    echo "refusing to reuse immutable recovery reference directory" >&2
+    return 2
+  }
+  mkdir -p "$phase4b1_reference_dir"
+  python - \
+      "$phase4b1_source_reference" \
+      "$phase4b1_reference_dir/stock-target-reference.json" \
+      "$phase4b1_reference_dir/stock-reference-reuse.json" \
+      "$phase4b1_workload" \
+      "$SR_PHASE4B_COMMIT" <<'PY'
+import pathlib
+import sys
+
+from specrhythm.phase4.reference import reuse_immutable_stock_reference
+
+reuse_immutable_stock_reference(
+    pathlib.Path(sys.argv[1]),
+    pathlib.Path(sys.argv[2]),
+    pathlib.Path(sys.argv[3]),
+    workload_path=pathlib.Path(sys.argv[4]),
+    recovery_git_commit=sys.argv[5],
+)
+PY
+}
+
 phase4b1_apply_patch_stack () {
   phase4b1_require_patch_environment || return
   phase4b1_stage_dir="$1"
@@ -130,7 +168,10 @@ phase4b1_start_draft () {
   phase4b1_kind="$1"
   phase4b1_dir="$2"
   phase4b1_socket="$3"
-  unlink "$phase4b1_socket" 2>/dev/null || true
+  if test -e "$phase4b1_socket" || test -L "$phase4b1_socket"; then
+    echo "refusing to unlink an unverified pre-existing Draft socket: $phase4b1_socket" >&2
+    return 2
+  fi
   if test "$phase4b1_kind" = dual; then
     CUDA_VISIBLE_DEVICES=0 VLLM_USE_V2_MODEL_RUNNER=0 VLLM_BATCH_INVARIANT=1 \
       specrhythm phase4-dual-draft-service \
