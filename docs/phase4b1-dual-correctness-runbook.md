@@ -113,7 +113,8 @@ but never write into, the preserved `32b09a6` and `c142fa7` directories:
 cd /root/autodl-tmp/src/SpecRhythm || exit 1
 git fetch origin codex/vllm-serving-v0.1 || exit 1
 git switch --detach origin/codex/vllm-serving-v0.1 || exit 1
-export SR_PHASE4B_COMMIT="$(git rev-parse HEAD)"
+SR_PHASE4B_COMMIT="$(git rev-parse HEAD)" || exit 1
+export SR_PHASE4B_COMMIT
 test -z "$(git status --porcelain)" || exit 1
 
 conda activate /root/autodl-tmp/envs/specrhythm-phase4-vllm-0.25.1 || exit 1
@@ -124,11 +125,12 @@ export SR_TARGET_MODEL="/root/autodl-tmp/models/Qwen3-32B"
 export SR_VLLM_SOURCE="/root/autodl-tmp/src/vllm-v0.25.1"
 export SR_PHASE4B_CONFIG="$PWD/configs/phase4b_dual_batch_1d2v.yaml"
 export SR_NUMERICAL_PLAN="$PWD/configs/phase4b1_gate3_numerical_diagnostic.json"
-export SR_VLLM_ROOT="$(python - <<'PY'
+SR_VLLM_ROOT="$(python - <<'PY'
 from importlib import metadata
 print(metadata.distribution("vllm").locate_file(""))
 PY
-)"
+)" || exit 1
+export SR_VLLM_ROOT
 
 export SR_INPUT_ROOT="/root/autodl-tmp/SpecRhythm-data/results/phase4/eba0df493a7fd350ef3c8776e06d30e6196b6749/phase4b1-gate2-corrected5-20260827T040244Z"
 export SR_GATE3_WORKLOAD="$SR_INPUT_ROOT/workloads/corrected-100.jsonl"
