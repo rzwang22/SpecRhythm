@@ -202,15 +202,27 @@ def validate_numerical_records(
         kv = row.get("kv_cache_before_forward")
         if not isinstance(kv, Mapping) or not kv.get("aggregate_raw_sha256"):
             errors.append(f"numerical KV checksum is missing: {key}")
+        mapping = row.get("kv_position_mapping")
+        if not _valid_kv_ownership(
+            mapping,
+            num_computed_tokens=row.get("num_computed_tokens"),
+            expected_group_count=1,
+        ):
+            errors.append(f"numerical generic KV ownership is invalid: {key}")
         rank_kv = row.get("tp_rank_kv_cache_before_forward")
         if not _valid_tp_rank_rows(rank_kv, expected_world_size=2):
             errors.append(f"numerical per-rank KV evidence is invalid: {key}")
         elif any(
             not isinstance(rank_row.get("kv_cache_before_forward"), Mapping)
             or not rank_row["kv_cache_before_forward"].get("aggregate_raw_sha256")
+            or not _valid_kv_ownership(
+                rank_row.get("kv_ownership"),
+                num_computed_tokens=row.get("num_computed_tokens"),
+                expected_group_count=1,
+            )
             for rank_row in rank_kv
         ):
-            errors.append(f"numerical per-rank KV checksum is missing: {key}")
+            errors.append(f"numerical per-rank KV evidence is incomplete: {key}")
         rank_evidence = row.get("tp_rank_evidence")
         if not _valid_tp_rank_rows(rank_evidence, expected_world_size=2):
             errors.append(f"numerical per-rank tensor evidence is invalid: {key}")
@@ -437,7 +449,7 @@ def prepare_target_numerical_diagnostic(
     logits_indices: Any,
     positions: Any,
     num_scheduled_tokens: Sequence[int],
-    common_attention_metadata: Any,
+    slot_mappings_by_group: Any,
 ) -> None:
     """GPU-only pre-forward hook installed by the pinned observational patch."""
 
@@ -458,13 +470,6 @@ def prepare_target_numerical_diagnostic(
     sample_cursor = 0
     positions_cpu = positions.detach().cpu().tolist()
     logits_indices_cpu = logits_indices.detach().cpu().tolist()
-    block_table = common_attention_metadata.block_table_tensor.detach().cpu()
-    slot_mapping = common_attention_metadata.slot_mapping.detach().cpu().tolist()
-    block_size = int(getattr(runner, "block_size", 0))
-    if block_size <= 0:
-        block_size = int(getattr(runner.input_batch.block_table, "block_size", 0))
-    if block_size <= 0:
-        raise RuntimeError("numerical diagnostics cannot resolve the KV block size")
 
     for index, internal_id in enumerate(runner.input_batch.req_ids):
         query_length = int(num_scheduled_tokens[index])
@@ -495,10 +500,6 @@ def prepare_target_numerical_diagnostic(
                     raise RuntimeError(
                         "Gate3 numerical Target KV does not end before the pending token"
                     )
-                used_blocks = math.ceil(computed / block_size) if computed else 0
-                physical_blocks = [
-                    int(item) for item in block_table[index, :used_blocks].tolist()
-                ]
                 active = {
                     "request_id": plan_row["request_id"],
                     "internal_request_id": str(internal_id),
@@ -511,46 +512,53 @@ def prepare_target_numerical_diagnostic(
                     "sample_index": sample_index,
                     "target_input_token_position": int(positions_cpu[flat_cursor]),
                     "target_input_token_id": int(prefix[-1]),
-                    "block_size": block_size,
-                    "physical_block_ids": physical_blocks,
-                    "slot_mapping": [
-                        int(item)
-                        for item in slot_mapping[flat_cursor : flat_cursor + query_length]
-                    ],
+                    "request_index": index,
+                    "flat_query_start": flat_cursor,
                     "tensor_stages": {},
                     "tp_rank": tp_rank,
                     "tp_world_size": tp_world_size,
                 }
-                active["kv_cache_before_forward"] = _kv_cache_summary(
-                    runner, active
-                )
                 state["active"][key] = active
         flat_cursor += query_length
         sample_cursor += len(proposal) + 1
-    if state["active"]:
-        local_rows = [
-            {
-                "key": list(key),
-                "tp_rank": tp_rank,
-                "kv_cache_before_forward": active["kv_cache_before_forward"],
-                "physical_block_ids": active["physical_block_ids"],
-            }
-            for key, active in sorted(state["active"].items())
+    if not state["active"]:
+        return
+    for active in state["active"].values():
+        ownership = _generic_kv_ownership(
+            runner,
+            request_index=active["request_index"],
+            num_computed_tokens=active["num_computed_tokens"],
+            flat_query_start=active["flat_query_start"],
+            query_length=active["query_length"],
+            slot_mappings_by_group=slot_mappings_by_group,
+        )
+        active["kv_ownership"] = ownership
+        active["kv_cache_before_forward"] = _kv_cache_summary(
+            runner, active
+        )
+    local_rows = [
+        {
+            "key": list(key),
+            "tp_rank": tp_rank,
+            "kv_cache_before_forward": active["kv_cache_before_forward"],
+            "kv_ownership": active["kv_ownership"],
+        }
+        for key, active in sorted(state["active"].items())
+    ]
+    gathered = _gather_tp_objects(local_rows, tp_group)
+    expected_keys = {tuple(row["key"]) for row in local_rows}
+    for rank_rows in gathered:
+        if {tuple(row["key"]) for row in rank_rows} != expected_keys:
+            raise RuntimeError(
+                "Gate3 numerical checkpoints differ across TP ranks"
+            )
+    for key, active in state["active"].items():
+        rank_rows = [
+            next(row for row in rows if tuple(row["key"]) == key)
+            for rows in gathered
         ]
-        gathered = _gather_tp_objects(local_rows, tp_group)
-        expected_keys = {tuple(row["key"]) for row in local_rows}
-        for rank_rows in gathered:
-            if {tuple(row["key"]) for row in rank_rows} != expected_keys:
-                raise RuntimeError(
-                    "Gate3 numerical checkpoints differ across TP ranks"
-                )
-        for key, active in state["active"].items():
-            rank_rows = [
-                next(row for row in rows if tuple(row["key"]) == key)
-                for rows in gathered
-            ]
-            active["tp_rank_kv_cache_before_forward"] = rank_rows
-            active["kv_cache_before_forward"] = _combine_rank_kv(rank_rows)
+        active["tp_rank_kv_cache_before_forward"] = rank_rows
+        active["kv_cache_before_forward"] = _combine_rank_kv(rank_rows)
 
 
 def finalize_target_numerical_diagnostic(
@@ -653,12 +661,7 @@ def finalize_target_numerical_diagnostic(
             "tp_rank_kv_cache_before_forward": active[
                 "tp_rank_kv_cache_before_forward"
             ],
-            "kv_position_mapping": {
-                "block_size": active["block_size"],
-                "logical_positions": list(range(active["num_computed_tokens"])),
-                "physical_block_ids": active["physical_block_ids"],
-                "current_query_slot_mapping": active["slot_mapping"],
-            },
+            "kv_position_mapping": active["kv_ownership"],
             "tensor_stages": active["tensor_stages"],
             "tp_rank_evidence": tp_rank_evidence,
             "model_module_paths": state["model_paths"],
@@ -813,19 +816,145 @@ def _tensor_summary(tensor: Any, row_index: int) -> dict[str, Any]:
     }
 
 
+def _generic_kv_ownership(
+    runner: Any,
+    *,
+    request_index: int,
+    num_computed_tokens: int,
+    flat_query_start: int,
+    query_length: int,
+    slot_mappings_by_group: Any,
+) -> dict[str, Any]:
+    """Read generic per-group ownership without speculative metadata."""
+
+    multi_table = getattr(getattr(runner, "input_batch", None), "block_table", None)
+    block_tables = getattr(multi_table, "block_tables", None)
+    kv_config = getattr(runner, "kv_cache_config", None)
+    kv_groups = getattr(kv_config, "kv_cache_groups", None)
+    if not isinstance(block_tables, (list, tuple)) or not block_tables:
+        raise RuntimeError("Gate3 numerical generic MultiGroupBlockTable is missing")
+    if not isinstance(kv_groups, (list, tuple)) or len(kv_groups) != len(block_tables):
+        raise RuntimeError("Gate3 numerical KV group configuration differs from block tables")
+    if not isinstance(slot_mappings_by_group, Mapping) or set(
+        slot_mappings_by_group
+    ) != set(range(len(block_tables))):
+        raise RuntimeError("Gate3 numerical generic slot mappings are incomplete")
+    groups = []
+    for group_id, (block_table, kv_group) in enumerate(
+        zip(block_tables, kv_groups)
+    ):
+        block_size = int(getattr(block_table, "block_size", 0))
+        if block_size <= 0:
+            raise RuntimeError("Gate3 numerical generic block size is invalid")
+        row_counts = getattr(block_table, "num_blocks_per_row", None)
+        if row_counts is None or request_index >= len(row_counts):
+            raise RuntimeError("Gate3 numerical block-table row count is unavailable")
+        committed_blocks = int(row_counts[request_index])
+        used_blocks = (
+            math.ceil(num_computed_tokens / block_size)
+            if num_computed_tokens
+            else 0
+        )
+        if committed_blocks < used_blocks:
+            raise RuntimeError("Gate3 numerical generic block-table row is truncated")
+        get_numpy = getattr(block_table, "get_numpy_array", None)
+        if not callable(get_numpy):
+            raise RuntimeError("Gate3 numerical generic block-table CPU authority is missing")
+        table = get_numpy()
+        try:
+            physical_blocks = [
+                int(item)
+                for item in table[request_index, :used_blocks].tolist()
+            ]
+        except (AttributeError, IndexError, TypeError) as error:
+            raise RuntimeError(
+                "Gate3 numerical generic block-table layout is unsupported"
+            ) from error
+        mapping = slot_mappings_by_group[group_id]
+        slots = _to_int_list(mapping, name="generic slot mapping")
+        query_end = flat_query_start + query_length
+        if query_end > len(slots):
+            raise RuntimeError("Gate3 numerical current query slot mapping is truncated")
+        current_slots = slots[flat_query_start:query_end]
+        if len(current_slots) != query_length or any(slot < 0 for slot in current_slots):
+            raise RuntimeError("Gate3 numerical current query slot mapping is invalid")
+        layer_names = getattr(kv_group, "layer_names", None)
+        if not isinstance(layer_names, (list, tuple)) or not layer_names or any(
+            not isinstance(name, str) or not name for name in layer_names
+        ):
+            raise RuntimeError("Gate3 numerical KV group layer ownership is invalid")
+        groups.append(
+            {
+                "kv_cache_group_id": group_id,
+                "block_size": block_size,
+                "num_blocks_per_row": committed_blocks,
+                "logical_used_block_count": used_blocks,
+                "physical_block_ids": physical_blocks,
+                "current_query_slot_mapping": current_slots,
+                "layer_names": list(layer_names),
+            }
+        )
+    return {
+        "authority": (
+            "InputBatch.MultiGroupBlockTable + "
+            "GPUModelRunner._get_slot_mappings.slot_mappings_by_group"
+        ),
+        "kv_cache_group_count": len(groups),
+        "logical_positions": list(range(num_computed_tokens)),
+        "groups": groups,
+    }
+
+
+def _to_int_list(value: Any, *, name: str) -> list[int]:
+    current = value
+    for operation in ("detach", "cpu"):
+        method = getattr(current, operation, None)
+        if callable(method):
+            current = method()
+    method = getattr(current, "tolist", None)
+    if callable(method):
+        current = method()
+    if not isinstance(current, list) or any(
+        not isinstance(item, int) or isinstance(item, bool) for item in current
+    ):
+        raise RuntimeError(f"Gate3 numerical {name} is not an integer vector")
+    return [int(item) for item in current]
+
+
 def _kv_cache_summary(runner: Any, active: Mapping[str, Any]) -> dict[str, Any]:
     import torch
 
     model = _unwrap_model(runner.model)
     computed = int(active["num_computed_tokens"])
-    block_size = int(active["block_size"])
-    blocks = list(active["physical_block_ids"])
+    ownership = active.get("kv_ownership")
+    if not isinstance(ownership, Mapping):
+        raise RuntimeError("Gate3 numerical generic KV ownership is missing")
+    groups = ownership.get("groups")
+    if not isinstance(groups, list) or not groups:
+        raise RuntimeError("Gate3 numerical generic KV groups are missing")
+    group_by_layer = {}
+    for group in groups:
+        if not isinstance(group, Mapping):
+            raise RuntimeError("Gate3 numerical generic KV group is malformed")
+        for layer_name in group.get("layer_names", ()):
+            if layer_name in group_by_layer:
+                raise RuntimeError("Gate3 numerical KV layer belongs to multiple groups")
+            group_by_layer[layer_name] = group
     layers = []
     aggregate = hashlib.sha256()
+    observed_layers = set()
     for name, module in model.named_modules():
         cache = getattr(module, "kv_cache", None)
         if cache is None or not hasattr(cache, "shape") or int(cache.numel()) == 0:
             continue
+        layer_name = str(getattr(module, "layer_name", name))
+        group = group_by_layer.get(layer_name)
+        if group is None:
+            raise RuntimeError(
+                f"Gate3 numerical KV layer has no generic group ownership: {layer_name}"
+            )
+        block_size = int(group["block_size"])
+        blocks = list(group["physical_block_ids"])
         if len(cache.shape) < 3 or int(cache.shape[1]) != 2:
             raise RuntimeError("Gate3 numerical diagnostic supports FlashAttention KV layout only")
         if int(cache.shape[2]) != block_size:
@@ -853,11 +982,13 @@ def _kv_cache_summary(runner: Any, active: Mapping[str, Any]) -> dict[str, Any]:
         if remaining != 0:
             raise RuntimeError("Gate3 numerical KV block table is truncated")
         digest = raw_hash.hexdigest()
-        aggregate.update(name.encode("utf-8"))
+        aggregate.update(layer_name.encode("utf-8"))
         aggregate.update(digest.encode("ascii"))
+        observed_layers.add(layer_name)
         layers.append(
             {
-                "layer": name,
+                "layer": layer_name,
+                "kv_cache_group_id": int(group["kv_cache_group_id"]),
                 "dtype": str(cache.dtype),
                 "cache_shape": list(cache.shape),
                 "logical_token_count": computed,
@@ -869,9 +1000,12 @@ def _kv_cache_summary(runner: Any, active: Mapping[str, Any]) -> dict[str, Any]:
         )
     if not layers:
         raise RuntimeError("Gate3 numerical diagnostic found no Target KV-cache layers")
+    if observed_layers != set(group_by_layer):
+        raise RuntimeError("Gate3 numerical KV-cache layers differ from group ownership")
     return {
         "layout": "flash-attention-paged-kv[num_blocks,2,block_size,...]",
         "logical_token_count": computed,
+        "kv_cache_group_count": len(groups),
         "layer_count": len(layers),
         "aggregate_raw_sha256": aggregate.hexdigest(),
         "layers": layers,
@@ -895,6 +1029,7 @@ def _combine_rank_kv(rank_rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     aggregate = hashlib.sha256()
     layer_counts = []
     logical_counts = []
+    group_counts = []
     for row in rank_rows:
         summary = row.get("kv_cache_before_forward")
         if not isinstance(summary, Mapping) or not summary.get("aggregate_raw_sha256"):
@@ -903,12 +1038,18 @@ def _combine_rank_kv(rank_rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         aggregate.update(str(summary["aggregate_raw_sha256"]).encode("ascii"))
         layer_counts.append(int(summary.get("layer_count", -1)))
         logical_counts.append(int(summary.get("logical_token_count", -1)))
-    if len(set(layer_counts)) != 1 or len(set(logical_counts)) != 1:
+        group_counts.append(int(summary.get("kv_cache_group_count", -1)))
+    if (
+        len(set(layer_counts)) != 1
+        or len(set(logical_counts)) != 1
+        or len(set(group_counts)) != 1
+    ):
         raise RuntimeError("Gate3 numerical KV shapes differ across TP ranks")
     return {
         "layout": "tensor-parallel-rank-sharded-flash-attention-paged-kv",
         "tp_world_size": len(rank_rows),
         "logical_token_count": logical_counts[0],
+        "kv_cache_group_count": group_counts[0],
         "layer_count_per_rank": layer_counts[0],
         "aggregate_raw_sha256": aggregate.hexdigest(),
         "rank_aggregate_raw_sha256": [
@@ -978,14 +1119,75 @@ def _valid_tp_rank_rows(value: Any, *, expected_world_size: int) -> bool:
     )
 
 
+def _valid_kv_ownership(
+    value: Any,
+    *,
+    num_computed_tokens: Any,
+    expected_group_count: int,
+) -> bool:
+    if not _nonnegative_int(num_computed_tokens) or not isinstance(value, Mapping):
+        return False
+    if value.get("authority") != (
+        "InputBatch.MultiGroupBlockTable + "
+        "GPUModelRunner._get_slot_mappings.slot_mappings_by_group"
+    ):
+        return False
+    groups = value.get("groups")
+    if (
+        value.get("kv_cache_group_count") != expected_group_count
+        or not isinstance(groups, list)
+        or len(groups) != expected_group_count
+        or value.get("logical_positions") != list(range(num_computed_tokens))
+    ):
+        return False
+    for group_id, group in enumerate(groups):
+        if not isinstance(group, Mapping):
+            return False
+        block_size = group.get("block_size")
+        used = group.get("logical_used_block_count")
+        committed = group.get("num_blocks_per_row")
+        physical = group.get("physical_block_ids")
+        slots = group.get("current_query_slot_mapping")
+        layers = group.get("layer_names")
+        if (
+            group.get("kv_cache_group_id") != group_id
+            or not _positive_int(block_size)
+            or used != (math.ceil(num_computed_tokens / block_size) if num_computed_tokens else 0)
+            or not _nonnegative_int(committed)
+            or committed < used
+            or not isinstance(physical, list)
+            or len(physical) != used
+            or any(not _nonnegative_int(item) for item in physical)
+            or not isinstance(slots, list)
+            or len(slots) != 1
+            or any(not _nonnegative_int(item) for item in slots)
+            or not isinstance(layers, list)
+            or not layers
+            or any(not isinstance(name, str) or not name for name in layers)
+        ):
+            return False
+    return True
+
+
 def _logical_ownership(row: Mapping[str, Any]) -> dict[str, Any]:
     mapping = row.get("kv_position_mapping", {})
     return {
+        "authority": mapping.get("authority"),
+        "kv_cache_group_count": mapping.get("kv_cache_group_count"),
         "logical_positions": mapping.get("logical_positions"),
-        "block_size": mapping.get("block_size"),
-        "block_offsets": [
-            int(position) % int(mapping.get("block_size", 1))
-            for position in mapping.get("logical_positions", ())
+        "groups": [
+            {
+                "kv_cache_group_id": group.get("kv_cache_group_id"),
+                "block_size": group.get("block_size"),
+                "logical_used_block_count": group.get("logical_used_block_count"),
+                "layer_names": group.get("layer_names"),
+                "logical_block_offsets": [
+                    int(position) % int(group.get("block_size", 1))
+                    for position in mapping.get("logical_positions", ())
+                ],
+            }
+            for group in mapping.get("groups", ())
+            if isinstance(group, Mapping)
         ],
         "current_query_position": row.get("target_input_token_position"),
     }

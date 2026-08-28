@@ -26,7 +26,9 @@ observational and does not synchronize, alter logits, or change execution semant
 diagnostic preparation function immediately before the existing Target forward. Unless an
 explicit four-request Gate3 plan and separate output path were configured before worker creation,
 the function returns without installing hooks or collecting data. The diagnostic reads selected
-hidden rows and pre-existing KV pages only; it does not modify model inputs, scheduler state,
+hidden rows and pre-existing KV pages only; it passes the generic per-KV-group slot mappings
+already computed by the runner and never depends on speculative-only common attention metadata.
+It does not modify model inputs, scheduler state,
 sampling, proposals, KV ownership or outputs. A patched-observational stock-style run remains
 ineligible for stock-reference freezing.
 
@@ -49,5 +51,6 @@ pinned source commit, active patch hashes and validity. The manager applies in o
 matching, records every patch plus original/patched source checksums, and restores in reverse
 order. A Phase-4A installation containing only the prior worker patch and the exact pre-Gate3
 patched state, including the exact pre-`0004` runner, can still be restored through strict known
-hashes. New applications use only the active four-layer stack. Do not apply the stack to another
-vLLM commit.
+hashes. The manager also recognizes the exact retired `c142fa7` four-layer observer solely as a
+strict restore input; `check --expect-state patched` rejects it, and new applications use only the
+active generic-ownership four-layer stack. Do not apply the stack to another vLLM commit.

@@ -14,6 +14,19 @@ resident values. Because pairwise log-softmax differences equal pairwise raw-log
 this is pre-log-softmax drift rather than evidence of a different log-softmax tie policy. The old
 directory remains immutable; this phase never edits or reclassifies it as a pass.
 
+The first one-shot instrumentation run at commit `c142fa7` is also immutable, at:
+
+```text
+/root/autodl-tmp/SpecRhythm-data/results/phase4/c142fa7adbbdf0d81cc02d9244a3be75d4b9d7e7/phase4b1-gate3-numerical-20260828T033035Z
+```
+
+Its preparation and four-layer patch application passed, but both stock TP ranks crashed before
+producing a valid numerical checkpoint. Resident Target and the comparator were never run. This
+is `diagnostic-infrastructure-failed` provenance, not a Gate3 numerical result, and it does not
+consume the one authorized successful stock/resident comparison. The later EngineCore request
+`KeyError` and shared-memory warning followed the worker failure and are classified as shutdown
+aftermath unless independent evidence proves otherwise.
+
 ## Exact pinned-vLLM batch-invariance audit
 
 The authority is vLLM `v0.25.1`, commit
@@ -67,6 +80,26 @@ local evidence through the TP CPU group; rank zero alone writes the combined rec
 - logical positions, block size, physical block IDs and current slot mapping;
 - raw-byte per-layer and aggregate checksums of every rank's pre-forward logical KV shard;
 - request cohort, sampled-row and LM-head `M` dimensions.
+
+### Generic KV ownership authority
+
+The pinned runner builds `slot_mappings_by_group` with `_get_slot_mappings()` before every model
+forward. Independently of speculative decoding, `runner.input_batch.block_table` is a
+`MultiGroupBlockTable`; each member `BlockTable` supplies the authoritative physical block row,
+`block_size`, row capacity and slot mapping. The observer combines those two generic sources with
+the pinned `kv_cache_config.kv_cache_groups` layer ownership. It does not read
+`spec_decode_common_attn_metadata`: that object is legally `None` when the stock-style run has
+`speculative_config=None`.
+
+The observer first identifies an active planned `(request_id, output_position)` using only safe
+request, token and schedule state. An irrelevant forward returns before resolving block tables or
+hashing KV tensors. For a planned checkpoint, it records every KV group explicitly, requires the
+block-table, slot-mapping and KV-cache group counts and IDs to agree, and fails closed on a
+truncated row, missing slot, invalid block size or unmapped layer. The exact Qwen3-32B Gate3 run
+must formally report one KV group on every TP rank; a different group count is retained in the
+schema but is unsupported by this exact comparison and fails validation rather than silently
+selecting group zero. Logical ownership comparison canonicalizes group-aware logical offsets and
+layer membership while keeping physical block IDs as recorded diagnostics.
 
 Forward hooks retain only one selected hidden row, never a full tensor dump. They summarize:
 

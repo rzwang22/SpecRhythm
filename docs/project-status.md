@@ -34,7 +34,7 @@ claims.
 | [#1 workload-v0.1](https://github.com/rzwang22/SpecRhythm/pull/1) | merged | strict Mooncake replay, R3 proxy config, validator, manifest, fixture tests and docs | workload plumbing only; proxy payload and illustrative acceptance |
 | [#2 simulator-semantics-v0.2](https://github.com/rzwang22/SpecRhythm/pull/2) | frozen draft; Phase 2 complete, not merged | proposal lifecycle, deterministic tree oracle, tree-aware allocators, base-preserving residual controls, Phase-2 nested search pools and common-snapshot oracle replay, path-aware eager and accounting | pure-Python proxy and oracle upper bounds only; no deployable oracle, measured search cost, GPU integration, or performance claim |
 | [#3 gpu-integration-v0.1](https://github.com/rzwang22/SpecRhythm/pull/3) | draft; Phase 3B.1 and corrected-20 Phase 3C.2 complete; Phase 3C.3 corrected-100 awaiting server run | hardened multi-rank primitives, corrected R3-real traces, common-prefix replay, request-bootstrap statistics, 2x shell decomposition and diagnostic learned ranker | user-run 3×A800 correctness artifacts plus Mac CPU tests; no packed-tree/serving engine, Dual-Batch, SLO, calibrated latency or speedup claim |
-| [#4 vllm-serving-v0.1](https://github.com/rzwang22/SpecRhythm/pull/4) | draft; Gate1/Gate2 Outcome A; Gate3 Target setup passes but exact output fails 4/100, numerical diagnosis awaiting one A800 pair | decode-ready Target/Serial plus real asynchronous resident Dual runner, lifecycle/scheduler/KV/accounting evidence, scale-safe chunked-prefill setup and diagnostic-only numerical localization | correctness evidence only; Gate3 remains failed; no tolerance, performance, packed tree, eager, KVConnector, SLO or goodput claim |
+| [#4 vllm-serving-v0.1](https://github.com/rzwang22/SpecRhythm/pull/4) | draft; Gate1/Gate2 Outcome A; Gate3 Target setup passes but exact output fails 4/100; first numerical observer run failed before evidence and the generic-KV fix awaits one fresh A800 pair | decode-ready Target/Serial plus real asynchronous resident Dual runner, lifecycle/scheduler/KV/accounting evidence, scale-safe chunked-prefill setup and diagnostic-only numerical localization | correctness evidence only; Gate3 remains failed; no tolerance, performance, packed tree, eager, KVConnector, SLO or goodput claim |
 
 ## Phase 4A.0–4A.1: vLLM freeze and Serial Disaggregated correctness
 
@@ -234,7 +234,15 @@ stock artifact has a `0.125` top-two log-probability margin while resident execu
 same token pair to equal values. This is not accepted as a harmless tie because the stock
 preference is nonzero.
 
-The next and only authorized GPU action is one diagnostic-only corrected-100 pair: one
+The first attempted pair at `c142fa7` failed in both stock TP workers before any numerical
+checkpoint because the observer incorrectly treated speculative-only common attention metadata
+as the generic block-table authority. Resident and comparator were not run. Its exact directory
+is immutable `diagnostic-infrastructure-failed` provenance and does not consume the scientific
+one-shot comparison. The observer now filters planned checkpoints first and uses the pinned
+`MultiGroupBlockTable` plus generic per-group slot mappings, validating group and layer ownership
+on every TP rank.
+
+The next and only authorized GPU action is one fresh diagnostic-only corrected-100 pair: one
 patched-observational stock-style execution and one resident Target execution. The full workload
 is mandatory because a four-request replay changes chunking, cohort and LM-head shape. Selected
 hidden rows, pre-forward logical KV bytes, block mappings and raw competing logits will localize

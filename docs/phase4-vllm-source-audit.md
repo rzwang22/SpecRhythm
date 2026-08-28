@@ -120,7 +120,13 @@ The worker observer remains independent patch `0001`. The explicit scheduler hoo
 `0003-target-forward-timing-observer.patch` after `0001`; it brackets the existing model forward
 with monotonic timestamps and passes them to the already observational diagnostic function.
 Gate3 numerical localization adds inert-by-default observer call `0004` immediately before that
-forward. Restore order is `0004`, `0003`, `0002`, `0001`. Exact
+forward. The pinned ordinary-stock path may leave `spec_decode_common_attn_metadata=None`; the
+observer therefore takes its block rows from `input_batch.block_table`, its current query slots
+from the already-computed `_get_slot_mappings()` result, and group-to-layer ownership from
+`kv_cache_config.kv_cache_groups`. `MultiGroupBlockTable.block_tables` and each `BlockTable`'s
+`block_size`, `num_blocks_per_row` and `get_numpy_array()` are the pinned generic API authority.
+Every group is enumerated and the exact Qwen3-32B run must prove its expected one-group layout.
+Restore order is `0004`, `0003`, `0002`, `0001`. Exact
 original/intermediate/final SHA256 values are
 enforced for both source files by
 `integrations/vllm/manage_patch.py`. No patch changes C++/CUDA/Triton, sampler, logits,

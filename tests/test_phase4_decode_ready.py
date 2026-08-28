@@ -233,4 +233,4 @@ def test_patch_stack_contains_independent_scheduler_and_timing_patches():
     assert "0002-scheduler-request-admissibility-hook.patch" in manager
     assert "0003-target-forward-timing-observer.patch" in manager
     assert "0004-gate3-numerical-observer.patch" in manager
-    assert "0e1972aa3d9b9f03e1de60ef95fb567e8ad6164f46cca3bee85ce27f5d04c56d" in manager
+    assert "a8b56ee511ad04d4f6e56e802417e6b8fb8b723a9fef05de36148f4218e9e945" in manager

@@ -49,6 +49,11 @@ def test_patched_check_accepts_only_exact_patched_state():
     assert report["pinned_source_commit"] == manager.BASE_COMMIT
     assert len(report["active_patch_hashes"]) == 4
     assert _report(stock, "patched")["valid"] is False
+    old_observer = _actual(
+        manager.PRE_GENERIC_NUMERICAL_PATCHED_SHA256,
+        manager.SCHEDULER_PATCHED_SHA256,
+    )
+    assert _report(old_observer, "patched")["valid"] is False
 
 
 @pytest.mark.parametrize(
@@ -279,6 +284,57 @@ def test_restore_accepts_exact_pre_numerical_observer_state(tmp_path, monkeypatc
     assert manager.main(["restore", "--vllm-root", str(root), "--source", str(source)]) == 0
     assert (manager.NUMERICAL_PATCH, True) not in applied
     assert (manager.TIMING_PATCH, True) in applied
+    assert state == {
+        str(manager.TARGET_FILE): manager.BASE_SHA256,
+        str(manager.SCHEDULER_FILE): manager.SCHEDULER_BASE_SHA256,
+    }
+
+
+def test_restore_accepts_exact_c142_pre_generic_observer_state(
+    tmp_path, monkeypatch
+):
+    root = tmp_path / "site-packages"
+    target = root / manager.TARGET_FILE
+    scheduler = root / manager.SCHEDULER_FILE
+    target.parent.mkdir(parents=True)
+    scheduler.parent.mkdir(parents=True)
+    target.write_text("runner\n", encoding="utf-8")
+    scheduler.write_text("scheduler\n", encoding="utf-8")
+    source = tmp_path / "source"
+    source.mkdir()
+    state = {
+        str(manager.TARGET_FILE): manager.PRE_GENERIC_NUMERICAL_PATCHED_SHA256,
+        str(manager.SCHEDULER_FILE): manager.SCHEDULER_PATCHED_SHA256,
+    }
+    applied = []
+
+    def fake_sha256(path):
+        if path == target:
+            return state[str(manager.TARGET_FILE)]
+        if path == scheduler:
+            return state[str(manager.SCHEDULER_FILE)]
+        return path.name.ljust(64, "0")[:64]
+
+    def fake_patch(_root, *, patch, reverse, dry_run):
+        if not dry_run:
+            applied.append((patch, reverse))
+            if patch == manager.PRE_GENERIC_NUMERICAL_PATCH and reverse:
+                state[str(manager.TARGET_FILE)] = manager.TIMING_PATCHED_SHA256
+            elif patch == manager.TIMING_PATCH and reverse:
+                state[str(manager.TARGET_FILE)] = manager.WORKER_HOOKS_SHA256
+            elif patch == manager.SCHEDULER_PATCH and reverse:
+                state[str(manager.SCHEDULER_FILE)] = manager.SCHEDULER_BASE_SHA256
+            elif patch == manager.PATCH and reverse:
+                state[str(manager.TARGET_FILE)] = manager.BASE_SHA256
+        return subprocess.CompletedProcess([], 0, "", "")
+
+    monkeypatch.setattr(manager, "sha256", fake_sha256)
+    monkeypatch.setattr(manager, "run_patch", fake_patch)
+    monkeypatch.setattr(manager, "source_commit", lambda _source: manager.BASE_COMMIT)
+
+    assert manager.main(["restore", "--vllm-root", str(root), "--source", str(source)]) == 0
+    assert (manager.PRE_GENERIC_NUMERICAL_PATCH, True) in applied
+    assert (manager.NUMERICAL_PATCH, True) not in applied
     assert state == {
         str(manager.TARGET_FILE): manager.BASE_SHA256,
         str(manager.SCHEDULER_FILE): manager.SCHEDULER_BASE_SHA256,

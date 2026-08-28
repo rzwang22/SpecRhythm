@@ -20,7 +20,10 @@ WORKER_HOOKS_SHA256 = "fb918ca2188081ab00a57ae671dcb0fce98b783599341d81e8c470831
 TIMING_PATCHED_SHA256 = (
     "aff188fd298bff4619d572729a50a6979f94e2f90e8cdc90adf91df79215f244"
 )
-PATCHED_SHA256 = "0e1972aa3d9b9f03e1de60ef95fb567e8ad6164f46cca3bee85ce27f5d04c56d"
+PRE_GENERIC_NUMERICAL_PATCHED_SHA256 = (
+    "0e1972aa3d9b9f03e1de60ef95fb567e8ad6164f46cca3bee85ce27f5d04c56d"
+)
+PATCHED_SHA256 = "a8b56ee511ad04d4f6e56e802417e6b8fb8b723a9fef05de36148f4218e9e945"
 PATCH = Path(__file__).parent / "patches" / "0001-custom-proposer-request-and-verify-hooks.patch"
 PRE_GATE3_WORKER_HOOKS_SHA256 = (
     "a99c410cd791f20071bb17b8a619e5b309427b50ed864b8753d066c1dc4b150c"
@@ -50,6 +53,11 @@ TIMING_PATCH = (
 )
 NUMERICAL_PATCH = (
     Path(__file__).parent / "patches" / "0004-gate3-numerical-observer.patch"
+)
+PRE_GENERIC_NUMERICAL_PATCH = (
+    Path(__file__).parent
+    / "patches"
+    / "0004-gate3-numerical-observer-pre-generic.patch"
 )
 LEGACY_PATCHED_SHA256 = (
     "ba307cbfdfa9079c04e1bf9bb6387eb923cbabb1eea811e720a94897ea6483fa"
@@ -145,7 +153,10 @@ def expected_state_hashes(expected_state: str) -> Mapping[str, str]:
         raise ValueError(f"unknown vLLM patch state: {expected_state}") from error
 
 
-def patch_stack(active_runner_patch: Path = PATCH) -> list[Mapping[str, Any]]:
+def patch_stack(
+    active_runner_patch: Path = PATCH,
+    active_numerical_patch: Path = NUMERICAL_PATCH,
+) -> list[Mapping[str, Any]]:
     worker_hooks_sha256 = WORKER_HOOKS_SHA256
     timing_runner_sha256 = TIMING_PATCHED_SHA256
     if active_runner_patch == PRE_GATE3_PATCH:
@@ -184,11 +195,15 @@ def patch_stack(active_runner_patch: Path = PATCH) -> list[Mapping[str, Any]]:
         stack.append(
             {
                 "order": 4,
-                "patch_file": NUMERICAL_PATCH.name,
-                "patch_sha256": sha256(NUMERICAL_PATCH),
+                "patch_file": active_numerical_patch.name,
+                "patch_sha256": sha256(active_numerical_patch),
                 "target_file": str(TARGET_FILE),
                 "original_source_sha256": TIMING_PATCHED_SHA256,
-                "patched_source_sha256": PATCHED_SHA256,
+                "patched_source_sha256": (
+                    PRE_GENERIC_NUMERICAL_PATCHED_SHA256
+                    if active_numerical_patch == PRE_GENERIC_NUMERICAL_PATCH
+                    else PATCHED_SHA256
+                ),
                 "diagnostic_only": True,
             }
         )
@@ -309,6 +324,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 BASE_SHA256,
                 WORKER_HOOKS_SHA256,
                 TIMING_PATCHED_SHA256,
+                PRE_GENERIC_NUMERICAL_PATCHED_SHA256,
                 PATCHED_SHA256,
                 PRE_GATE3_WORKER_HOOKS_SHA256,
                 PRE_GATE3_PATCHED_SHA256,
@@ -324,6 +340,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             )
     runner_before = before[str(TARGET_FILE)]
     active_runner_patch = PATCH
+    active_numerical_patch = NUMERICAL_PATCH
     if runner_before == LEGACY_PATCHED_SHA256:
         active_runner_patch = LEGACY_PATCH
     elif runner_before in {
@@ -331,6 +348,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         PRE_GATE3_PATCHED_SHA256,
     }:
         active_runner_patch = PRE_GATE3_PATCH
+    if runner_before == PRE_GENERIC_NUMERICAL_PATCHED_SHA256:
+        active_numerical_patch = PRE_GENERIC_NUMERICAL_PATCH
     operations = [
         (TARGET_FILE, active_runner_patch),
         (SCHEDULER_FILE, SCHEDULER_PATCH),
@@ -339,10 +358,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ]
     if args.operation == "restore":
         operations = []
-        if runner_before == PATCHED_SHA256:
-            operations.append((TARGET_FILE, NUMERICAL_PATCH))
         if runner_before in {
             PATCHED_SHA256,
+            PRE_GENERIC_NUMERICAL_PATCHED_SHA256,
+        }:
+            operations.append((TARGET_FILE, active_numerical_patch))
+        if runner_before in {
+            PATCHED_SHA256,
+            PRE_GENERIC_NUMERICAL_PATCHED_SHA256,
             TIMING_PATCHED_SHA256,
             PRE_GATE3_PATCHED_SHA256,
         }:
@@ -351,6 +374,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             operations.append((SCHEDULER_FILE, SCHEDULER_PATCH))
         if runner_before in {
             PATCHED_SHA256,
+            PRE_GENERIC_NUMERICAL_PATCHED_SHA256,
             TIMING_PATCHED_SHA256,
             WORKER_HOOKS_SHA256,
         }:
@@ -389,7 +413,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 f"post-operation {relative} SHA256 is {after[relative]}, "
                 f"expected {expected_sha}"
             )
-    stack = patch_stack(active_runner_patch)
+    stack = patch_stack(active_runner_patch, active_numerical_patch)
     report = {
         "schema_version": "specrhythm.vllm-base-and-patch-manifest.v1",
         "timestamp": datetime.now(timezone.utc).isoformat(),
