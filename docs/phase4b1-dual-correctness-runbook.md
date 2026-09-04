@@ -75,7 +75,262 @@ Each state accepts only its exact pinned runner/scheduler SHA pair; a partial or
 fails closed. The legacy read-only section remains the immutable `3ee1c3e` closure procedure; it
 is not part of the active Gate3 recovery and must keep its output outside the old tree.
 
-## Active Gate3 one-shot per-logical-token K/V localization
+## Active Gate3 matched-bootstrap async-OFF control
+
+The immutable endpoint root is:
+
+```text
+/root/autodl-tmp/SpecRhythm-data/results/phase4/8773a611a555c9c6efcbce146bb722124d0ee513/phase4b1-gate3-per-token-kv-20260904T092503Z
+```
+
+It already contains the stock async-ON and resident async-OFF endpoints. Do not rerun or modify
+either endpoint. This procedure performs exactly one new GPU model run: ordinary stock-style
+Target-only with async scheduling explicitly OFF. It uses only physical GPUs 1 and 2; GPU 0,
+Draft, Serial, Dual, and Dual-Eager are not used.
+
+Prepare the exact new commit and immutable inputs:
+
+```bash
+cd /root/autodl-tmp/src/SpecRhythm || exit 1
+git fetch origin codex/vllm-serving-v0.1 || exit 1
+git switch --detach origin/codex/vllm-serving-v0.1 || exit 1
+export SR_PHASE4B_COMMIT="$(git rev-parse HEAD)"
+test -z "$(git status --porcelain)" || exit 1
+
+conda activate /root/autodl-tmp/envs/specrhythm-phase4-vllm-0.25.1 || exit 1
+python -m pip install -e '.[dev]' --no-deps --no-build-isolation || exit 1
+
+export VLLM_USE_V2_MODEL_RUNNER=0
+export VLLM_BATCH_INVARIANT=1
+export VLLM_ALLOW_INSECURE_SERIALIZATION=1
+export SR_DRAFT_MODEL="/root/autodl-tmp/models/Qwen3-0.6B"
+export SR_TARGET_MODEL="/root/autodl-tmp/models/Qwen3-32B"
+export SR_VLLM_SOURCE="/root/autodl-tmp/src/vllm-v0.25.1"
+export SR_PHASE4B_CONFIG="$PWD/configs/phase4b_dual_batch_1d2v.yaml"
+export SR_PER_TOKEN_PLAN="$PWD/configs/phase4b1_gate3_per_token_kv_diagnostic.json"
+export SR_INPUT_ROOT="/root/autodl-tmp/SpecRhythm-data/results/phase4/eba0df493a7fd350ef3c8776e06d30e6196b6749/phase4b1-gate2-corrected5-20260827T040244Z"
+export SR_GATE3_WORKLOAD="$SR_INPUT_ROOT/workloads/corrected-100.jsonl"
+export SR_GATE3_REFERENCE="$SR_INPUT_ROOT/Gate-3-corrected-100/reference/stock-target-reference.json"
+export SR_PHASE4B_ENVIRONMENT="$SR_INPUT_ROOT/environment.json"
+export SR_PHASE4B_TOPOLOGY="$SR_INPUT_ROOT/topology.json"
+export SR_ENDPOINT_ROOT="/root/autodl-tmp/SpecRhythm-data/results/phase4/8773a611a555c9c6efcbce146bb722124d0ee513/phase4b1-gate3-per-token-kv-20260904T092503Z"
+export SR_STOCK_ENDPOINT="$SR_ENDPOINT_ROOT/stock-style/stock-style.json"
+export SR_STOCK_KV="$SR_ENDPOINT_ROOT/stock-style/per-token-kv.jsonl"
+export SR_RESIDENT_ENDPOINT="$SR_ENDPOINT_ROOT/resident-target/resident-target.json"
+export SR_RESIDENT_KV="$SR_ENDPOINT_ROOT/resident-target/per-token-kv.jsonl"
+export SR_ENDPOINT_COMPARISON="$SR_ENDPOINT_ROOT/per-token-kv-comparison.json"
+
+SR_VLLM_ROOT="$(python - <<'PY'
+from importlib import metadata
+print(metadata.distribution("vllm").locate_file(""))
+PY
+)" || exit 1
+export SR_VLLM_ROOT
+
+test "$(git -C "$SR_VLLM_SOURCE" rev-parse HEAD)" = "752a3a504485790a2e8491cacbb35c137339ad34" || exit 1
+test -z "$(git -C "$SR_VLLM_SOURCE" status --porcelain --untracked-files=no)" || exit 1
+test -f "$SR_GATE3_WORKLOAD" || exit 1
+test "$(wc -l < "$SR_GATE3_WORKLOAD")" -eq 100 || exit 1
+test -f "$SR_GATE3_REFERENCE" || exit 1
+test -f "$SR_STOCK_ENDPOINT" || exit 1
+test -f "$SR_STOCK_KV" || exit 1
+test -f "$SR_RESIDENT_ENDPOINT" || exit 1
+test -f "$SR_RESIDENT_KV" || exit 1
+test -f "$SR_ENDPOINT_COMPARISON" || exit 1
+
+export SR_MATCHED_ROOT="/root/autodl-tmp/SpecRhythm-data/results/phase4/$SR_PHASE4B_COMMIT/phase4b1-gate3-matched-bootstrap-$(date -u +%Y%m%dT%H%M%SZ)"
+test ! -e "$SR_MATCHED_ROOT" || exit 1
+mkdir -p "$SR_MATCHED_ROOT/matched-control" "$SR_MATCHED_ROOT/patch-stage" || exit 1
+cp "$SR_PHASE4B_ENVIRONMENT" "$SR_MATCHED_ROOT/environment.json" || exit 1
+cp "$SR_PHASE4B_TOPOLOGY" "$SR_MATCHED_ROOT/topology.json" || exit 1
+```
+
+Prove there is no stale serving process, bind the immutable endpoint root, and validate the
+unchanged observational patch. Do not restore/reapply the stack for this control:
+
+```bash
+if pgrep -af 'phase4-(draft-service|dual-draft-service|serial-run|dual-batch-run)|ResidentTargetProposer|ResidentSetupScheduler' > "$SR_MATCHED_ROOT/stale-process-check.txt"; then
+  cat "$SR_MATCHED_ROOT/stale-process-check.txt"
+  exit 1
+fi
+nvidia-smi --query-compute-apps=gpu_uuid,pid,process_name --format=csv,noheader > "$SR_MATCHED_ROOT/gpu-processes-before.txt" || exit 1
+test ! -s "$SR_MATCHED_ROOT/gpu-processes-before.txt" || {
+  cat "$SR_MATCHED_ROOT/gpu-processes-before.txt"
+  exit 1
+}
+
+find "$SR_ENDPOINT_ROOT" -type f -print0 | sort -z | xargs -0 sha256sum > "$SR_MATCHED_ROOT/preserved-8773-before.sha256" || exit 1
+nvidia-smi -L | tee "$SR_MATCHED_ROOT/nvidia-smi-L.txt" || exit 1
+nvidia-smi topo -m | tee "$SR_MATCHED_ROOT/nvidia-smi-topo.txt" || exit 1
+
+python integrations/vllm/manage_patch.py check \
+  --expect-state patched \
+  --vllm-root "$SR_VLLM_ROOT" \
+  --source "$SR_VLLM_SOURCE" \
+  --manifest "$SR_MATCHED_ROOT/patch-stage/vllm-patched-check.json" || exit 1
+
+python - "$SR_MATCHED_ROOT/patch-stage/vllm-patched-check.json" <<'PY'
+import json
+import sys
+value = json.load(open(sys.argv[1], encoding="utf-8"))
+assert value["valid"] is True
+assert value["expected_state"] == "patched"
+assert value["pinned_source_commit"] == "752a3a504485790a2e8491cacbb35c137339ad34"
+assert value["verified_source_commit"] == "752a3a504485790a2e8491cacbb35c137339ad34"
+assert value["actual_runner_sha256"] == "a8b56ee511ad04d4f6e56e802417e6b8fb8b723a9fef05de36148f4218e9e945"
+assert value["actual_scheduler_sha256"] == "ffaefd61869589f086e6acdf9a0c4f55f80d5dad145ca3f6fff2379f7a4e2455"
+PY
+```
+
+Run exactly one new Target control. `--matched-bootstrap-async-off` passes the pinned public
+`LLM(async_scheduling=False)` option; `speculative_config` remains null and no scheduler class is
+supplied:
+
+```bash
+CUDA_VISIBLE_DEVICES=1,2 \
+VLLM_USE_V2_MODEL_RUNNER=0 \
+VLLM_BATCH_INVARIANT=1 \
+VLLM_ALLOW_INSECURE_SERIALIZATION=1 \
+specrhythm phase4-stock-smoke \
+  --config "$SR_PHASE4B_CONFIG" \
+  --role target \
+  --workload "$SR_GATE3_WORKLOAD" \
+  --environment "$SR_PHASE4B_ENVIRONMENT" \
+  --topology "$SR_PHASE4B_TOPOLOGY" \
+  --runtime-manifest "$SR_MATCHED_ROOT/matched-control/runtime-manifest.json" \
+  --correctness-mode batch-invariant \
+  --request-count 100 \
+  --diagnostic-single-run \
+  --matched-bootstrap-async-off \
+  --target-diagnostics "$SR_MATCHED_ROOT/matched-control/target-diagnostics.jsonl" \
+  --numerical-diagnostic-plan "$SR_PER_TOKEN_PLAN" \
+  --numerical-diagnostic-output "$SR_MATCHED_ROOT/matched-control/per-token-kv.jsonl" \
+  --output "$SR_MATCHED_ROOT/matched-control/matched-control.json" \
+  > "$SR_MATCHED_ROOT/matched-control/matched-control.log" 2>&1
+SR_MATCHED_RUN_STATUS="$?"
+test "$SR_MATCHED_RUN_STATUS" -eq 0 || {
+  tail -n 200 "$SR_MATCHED_ROOT/matched-control/matched-control.log"
+  exit "$SR_MATCHED_RUN_STATUS"
+}
+```
+
+Fail closed on the initialized runtime before comparing K/V:
+
+```bash
+python - "$SR_MATCHED_ROOT/matched-control/matched-control.json" <<'PY'
+import json
+import sys
+value = json.load(open(sys.argv[1], encoding="utf-8"))
+assert value["role"] == "target"
+assert value["request_count"] == 100
+assert value["diagnostic_only"] is True
+assert value["repeated_run_performed"] is False
+assert value["built_in_speculative_decoding"] is False
+assert value["vllm_dbo_enabled"] is False
+assert len(value["runs"]) == 1 and len(value["runs"][0]) == 100
+control = value["matched_bootstrap_control"]
+assert control["valid"] is True and control["errors"] == []
+assert control["async_scheduling_argument"] is False
+assert control["async_scheduling_requested"] is False
+assert control["async_scheduling_effective"] is False
+assert control["speculative_config"] is None
+assert control["speculative_config_is_none"] is True
+assert control["scheduler_cls_argument"] is None
+assert control["scheduler_cls_configured"] is None
+assert control["scheduler_class"] == "vllm.v1.core.sched.scheduler.Scheduler"
+assert control["normal_stock_scheduler"] is True
+assert control["custom_class_proposer_absent"] is True
+assert control["resident_setup_scheduler_absent"] is True
+assert control["global_resident_setup_freeze"] is False
+assert control["draft_model_started"] is False
+assert control["tensor_parallel_size"] == 2
+ranks = value["worker_ranks"]
+assert {row["global_rank"] for row in ranks} == {0, 1}
+assert {row["physical_gpu_id"] for row in ranks} == {1, 2}
+assert all(row["async_scheduling_effective"] is False for row in ranks)
+assert all(row["scheduler_class"] == "vllm.v1.core.sched.scheduler.Scheduler" for row in ranks)
+assert all(row["speculative_config_is_none"] is True for row in ranks)
+assert all(row["custom_class_proposer_absent"] is True for row in ranks)
+assert all(row["resident_setup_scheduler_absent"] is True for row in ranks)
+numerical = value["numerical_diagnostics"]
+assert numerical["execution_mode"] == "matched-stock-async-off"
+assert numerical["record_count"] == 4
+assert numerical["valid"] is True and numerical["errors"] == []
+PY
+```
+
+Compare the one new run against the two immutable endpoints. A valid A/B/C/D classification
+returns zero; `FAIL-CLOSED` returns nonzero:
+
+```bash
+specrhythm phase4b1-gate3-matched-bootstrap-compare \
+  --plan "$SR_PER_TOKEN_PLAN" \
+  --workload "$SR_GATE3_WORKLOAD" \
+  --reference "$SR_GATE3_REFERENCE" \
+  --stock-run "$SR_STOCK_ENDPOINT" \
+  --stock-numerical "$SR_STOCK_KV" \
+  --control-run "$SR_MATCHED_ROOT/matched-control/matched-control.json" \
+  --control-numerical "$SR_MATCHED_ROOT/matched-control/per-token-kv.jsonl" \
+  --resident-run "$SR_RESIDENT_ENDPOINT" \
+  --resident-numerical "$SR_RESIDENT_KV" \
+  --endpoint-comparison "$SR_ENDPOINT_COMPARISON" \
+  --output "$SR_MATCHED_ROOT/matched-bootstrap-comparison.json" \
+  --markdown-output "$SR_MATCHED_ROOT/matched-bootstrap-comparison.md" || exit 1
+
+python - "$SR_MATCHED_ROOT/matched-bootstrap-comparison.json" <<'PY'
+import json
+import sys
+value = json.load(open(sys.argv[1], encoding="utf-8"))
+assert value["valid"] is True and value["errors"] == []
+assert value["classification"] in {
+    "ASYNC_OFF_MATCHES_RESIDENT",
+    "ASYNC_OFF_MATCHES_STOCK",
+    "ASYNC_OFF_THIRD_STATE",
+    "MIXED_BY_REQUEST",
+}
+assert value["request_count"] == 4
+assert all(row["three_way_semantically_paired"] for row in value["comparisons"])
+assert all(value["request_order_equal_to_immutable_reference"].values())
+assert value["gate3_closed"] is False
+assert value["phase4b2_blocked"] is True
+assert value["tolerant_correctness_policy"] is False
+assert value["tie_equivalent_tokens_accepted"] is False
+assert value["performance_result"] is False
+print(json.dumps({
+    "classification": value["classification"],
+    "control_output_divergence_count": value["control_output_divergence_count"],
+}, indent=2))
+PY
+cat "$SR_MATCHED_ROOT/matched-bootstrap-comparison.md" || exit 1
+```
+
+Finally prove the old endpoint tree did not change, record all new artifacts, and freeze the new
+root:
+
+```bash
+find "$SR_ENDPOINT_ROOT" -type f -print0 | sort -z | xargs -0 sha256sum > "$SR_MATCHED_ROOT/preserved-8773-after.sha256" || exit 1
+cmp "$SR_MATCHED_ROOT/preserved-8773-before.sha256" "$SR_MATCHED_ROOT/preserved-8773-after.sha256" || exit 1
+nvidia-smi --query-compute-apps=gpu_uuid,pid,process_name --format=csv,noheader > "$SR_MATCHED_ROOT/gpu-processes-after.txt" || exit 1
+test ! -s "$SR_MATCHED_ROOT/gpu-processes-after.txt" || {
+  cat "$SR_MATCHED_ROOT/gpu-processes-after.txt"
+  exit 1
+}
+find "$SR_MATCHED_ROOT" -type f ! -name all-artifacts-sha256.txt -print0 | sort -z | xargs -0 sha256sum > "$SR_MATCHED_ROOT/all-artifacts-sha256.txt" || exit 1
+find "$SR_MATCHED_ROOT" -type f -exec chmod a-w {} + || exit 1
+echo "$SR_MATCHED_ROOT"
+```
+
+Expected output is one valid human-classification report with four semantically paired
+checkpoints, explicit control-output divergences, exact K/V comparisons, and both Gate3 and
+Phase4B.2 still blocked. Stop immediately if engine initialization does not prove ordinary
+sync Target execution, if any rank or checkpoint is missing, if prompt/control K/V differs, if a
+planned prefix diverges early, if comparison returns `FAIL-CLOSED`, or if either endpoint
+checksum list changes. Do not define the next experiment until this root is reviewed.
+
+## Completed Gate3 per-logical-token K/V localization
+
+Historical procedure only: the immutable `8773a611` endpoint root was produced by this section.
+Do not execute it again. The active one-run matched control is the section above.
 
 The successful e73 coarse diagnostic is immutable at:
 

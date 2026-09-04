@@ -33,6 +33,10 @@ from specrhythm.phase4.serial_runner import (
     PATCHED_VLLM_RUNNER_SHA256,
     validate_installed_patched_runner,
 )
+from specrhythm.phase4.stock_vllm import (
+    matched_bootstrap_control_evidence,
+    validate_matched_bootstrap_control,
+)
 from specrhythm.phase4.transport import UnixDraftClient
 from specrhythm.phase4.vllm_diagnostics import (
     compare_divergence_diagnostics,
@@ -155,6 +159,77 @@ def test_batch_invariant_env_is_set_before_vllm_import():
         configure_before_worker_creation(
             "batch-invariant", environ={}, loaded_modules=["vllm.envs"]
         )
+
+
+def test_matched_bootstrap_uses_normal_stock_scheduler_without_speculation():
+    scheduler_class = type("Scheduler", (), {})
+    scheduler_class.__module__ = "vllm.v1.core.sched.scheduler"
+    scheduler = SimpleNamespace(
+        async_scheduling=False,
+        scheduler_cls=None,
+        enable_chunked_prefill=True,
+        get_scheduler_cls=lambda: scheduler_class,
+    )
+    vllm_config = SimpleNamespace(
+        scheduler_config=scheduler,
+        speculative_config=None,
+        cache_config=SimpleNamespace(enable_prefix_caching=False),
+        model_config=SimpleNamespace(enforce_eager=True),
+        parallel_config=SimpleNamespace(tensor_parallel_size=2),
+    )
+    evidence = matched_bootstrap_control_evidence(
+        SimpleNamespace(llm_engine=SimpleNamespace(vllm_config=vllm_config))
+    )
+    assert evidence["valid"] is True
+    assert evidence["async_scheduling_requested"] is False
+    assert evidence["async_scheduling_effective"] is False
+    assert evidence["speculative_config"] is None
+    assert evidence["normal_stock_scheduler"] is True
+    assert evidence["custom_class_proposer_absent"] is True
+    assert evidence["resident_setup_scheduler_absent"] is True
+    assert evidence["gate3_closed"] is False
+    assert evidence["phase4b2_blocked"] is True
+
+
+def test_matched_bootstrap_runtime_evidence_fails_closed_on_resident_or_async():
+    value = {
+        "schema_version": "specrhythm.phase4b1-gate3-matched-bootstrap-control.v1",
+        "diagnostic_only": True,
+        "execution_path": "ordinary-stock-vllm-LLM-generate",
+        "async_scheduling_argument": False,
+        "async_scheduling_requested": False,
+        "async_scheduling_effective": True,
+        "speculative_config": None,
+        "speculative_config_is_none": True,
+        "scheduler_cls_argument": None,
+        "scheduler_cls_configured": None,
+        "scheduler_class": "specrhythm.phase4.resident_scheduler.ResidentSetupScheduler",
+        "normal_stock_scheduler": False,
+        "custom_class_proposer_absent": True,
+        "resident_setup_scheduler_absent": False,
+        "global_resident_setup_freeze": False,
+        "draft_model_started": False,
+        "tensor_parallel_size": 2,
+    }
+    errors = validate_matched_bootstrap_control(value)
+    assert any("async_scheduling_effective" in error for error in errors)
+    assert any("scheduler_class" in error for error in errors)
+    assert any("resident_setup_scheduler_absent" in error for error in errors)
+
+
+def test_stock_runner_async_off_control_changes_only_public_llm_argument():
+    source = Path(stock_vllm_module.__file__).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    assert 'llm_arguments["async_scheduling"] = False' in source
+    assert "speculative_config=None" in source
+    assert "scheduler_cls=" not in source
+    calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)]
+    assert any(
+        isinstance(call.func, ast.Name)
+        and call.func.id == "LLM"
+        and any(keyword.arg is None for keyword in call.keywords)
+        for call in calls
+    )
 
 
 def test_runner_sha_verification_does_not_import_vllm(tmp_path, monkeypatch):

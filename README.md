@@ -223,6 +223,12 @@ Target-blind isolation, cleanup, overlap existence and input artifact immutabili
 Mac tests prove these contracts without CUDA. They are not a GPU correctness result. The active
 3×A800 Gate 1/2/3 commands are in
 [docs/phase4b1-dual-correctness-runbook.md](docs/phase4b1-dual-correctness-runbook.md).
+Gate1 and Gate2 are closed at Outcome A. Gate3 remains open after exact per-token evidence
+localized the four corrected-100 divergences to bootstrap K/V. Its only authorized next GPU
+action is one ordinary stock Target-only TP=2 control with async scheduling explicitly disabled;
+the existing async-ON stock and resident endpoints are reused unchanged. The control and strict
+human-classification boundary are documented in
+[docs/phase4b1-gate3-matched-bootstrap.md](docs/phase4b1-gate3-matched-bootstrap.md).
 Packed-tree verification, Dual-Eager, KVConnector, serving performance and SLO evaluation remain
 outside this phase.
 

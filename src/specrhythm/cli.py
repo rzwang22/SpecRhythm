@@ -590,6 +590,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     phase4_smoke.add_argument("--numerical-diagnostic-plan")
     phase4_smoke.add_argument("--numerical-diagnostic-output")
+    phase4_smoke.add_argument(
+        "--matched-bootstrap-async-off",
+        action="store_true",
+        help=(
+            "diagnostic-only ordinary Target control that passes "
+            "LLM(async_scheduling=False) while keeping speculative_config=None"
+        ),
+    )
     phase4_smoke.add_argument("--output", required=True)
 
     phase4_validate = subparsers.add_parser(
@@ -952,6 +960,30 @@ def build_parser() -> argparse.ArgumentParser:
     ):
         phase4_token_kv_compare.add_argument(f"--{name}", required=True)
 
+    phase4_matched_bootstrap = subparsers.add_parser(
+        "phase4b1-gate3-matched-bootstrap-compare",
+        help="compare immutable async-ON/resident endpoints with one stock async-OFF control",
+        description=(
+            "Exact Target-only three-way bootstrap comparison. It never closes Gate3, "
+            "accepts tolerance, or reports serving performance."
+        ),
+    )
+    for name in (
+        "plan",
+        "workload",
+        "reference",
+        "stock-run",
+        "stock-numerical",
+        "control-run",
+        "control-numerical",
+        "resident-run",
+        "resident-numerical",
+        "endpoint-comparison",
+        "output",
+        "markdown-output",
+    ):
+        phase4_matched_bootstrap.add_argument(f"--{name}", required=True)
+
     phase4_resident_serial = subparsers.add_parser(
         "phase4-resident-serial-run",
         help="run the Phase-4B.0b real-KV decode-only Serial correctness gate",
@@ -1222,6 +1254,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     if args.numerical_diagnostic_output
                     else None
                 ),
+                matched_bootstrap_async_off=args.matched_bootstrap_async_off,
             )
         except (
             FileExistsError,
@@ -1261,6 +1294,80 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         markdown = Path(args.markdown_output)
         markdown.parent.mkdir(parents=True, exist_ok=True)
         markdown.write_text(validation_markdown(report), encoding="utf-8")
+        return 0 if report["valid"] else 1
+    if args.command == "phase4b1-gate3-matched-bootstrap-compare":
+        from specrhythm.phase4.manifest import sha256_file
+        from specrhythm.phase4.matched_bootstrap import (
+            compare_matched_bootstrap,
+            comparison_markdown,
+        )
+        from specrhythm.phase4.numerical_diagnostics import load_numerical_plan
+        from specrhythm.phase4.transport import CheckpointJsonl
+
+        try:
+            paths = {
+                name: Path(getattr(args, name.replace("-", "_"))).resolve()
+                for name in (
+                    "workload",
+                    "reference",
+                    "stock-run",
+                    "stock-numerical",
+                    "control-run",
+                    "control-numerical",
+                    "resident-run",
+                    "resident-numerical",
+                    "endpoint-comparison",
+                )
+            }
+            output_path = Path(args.output).resolve()
+            markdown_path = Path(args.markdown_output).resolve()
+            for path in (output_path, markdown_path):
+                if path.exists():
+                    raise FileExistsError(
+                        f"refusing to overwrite matched-bootstrap comparison {path}"
+                    )
+            stock_run = json.loads(paths["stock-run"].read_text(encoding="utf-8"))
+            control_run = json.loads(paths["control-run"].read_text(encoding="utf-8"))
+            resident_run = json.loads(
+                paths["resident-run"].read_text(encoding="utf-8")
+            )
+            report = compare_matched_bootstrap(
+                plan=load_numerical_plan(
+                    Path(args.plan).resolve(), paths["workload"]
+                ),
+                stock_rows=CheckpointJsonl(paths["stock-numerical"]).read(),
+                control_rows=CheckpointJsonl(paths["control-numerical"]).read(),
+                resident_rows=CheckpointJsonl(paths["resident-numerical"]).read(),
+                stock_outputs=stock_run["runs"][0],
+                control_outputs=control_run["runs"][0],
+                resident_outputs=resident_run["outputs"],
+                immutable_reference=json.loads(
+                    paths["reference"].read_text(encoding="utf-8")
+                ),
+                endpoint_comparison=json.loads(
+                    paths["endpoint-comparison"].read_text(encoding="utf-8")
+                ),
+                control_runtime=control_run["matched_bootstrap_control"],
+            )
+            report["provenance"] = {
+                name.replace("-", "_") + "_sha256": sha256_file(path)
+                for name, path in paths.items()
+            }
+            _write_json(report, output_path)
+            markdown_path.parent.mkdir(parents=True, exist_ok=True)
+            markdown_path.write_text(comparison_markdown(report), encoding="utf-8")
+        except (
+            FileExistsError,
+            FileNotFoundError,
+            KeyError,
+            RuntimeError,
+            TypeError,
+            ValueError,
+            json.JSONDecodeError,
+        ) as error:
+            raise SystemExit(
+                f"Gate3 matched-bootstrap comparison failed: {error}"
+            ) from error
         return 0 if report["valid"] else 1
     if args.command == "phase4-stock-reference":
         from specrhythm.phase4.config import load_phase4_config

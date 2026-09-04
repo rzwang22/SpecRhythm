@@ -29,7 +29,15 @@ PER_TOKEN_COMPARISON_SCHEMA = (
 PLAN_ENV = "SR_PHASE4_NUMERICAL_DIAGNOSTIC_PLAN"
 OUTPUT_ENV = "SR_PHASE4_NUMERICAL_DIAGNOSTIC_OUTPUT"
 MODE_ENV = "SR_PHASE4_NUMERICAL_DIAGNOSTIC_MODE"
-ALLOWED_MODES = {"stock-style", "resident-target"}
+ALLOWED_MODES = {"stock-style", "matched-stock-async-off", "resident-target"}
+LOGICAL_RAW_ORDERING = (
+    "contiguous logical tensor [K_or_V,logical_position,...] in C order; "
+    "complete K plane followed by complete V plane"
+)
+TOKEN_DIGEST_ORDERING = (
+    "domain-separated SHA256 over ascending logical_position, then K digest, "
+    "then V digest"
+)
 REQUIRED_STAGES = (
     "decoder_input_hidden_state",
     "last_layer_branch_output",
@@ -257,6 +265,36 @@ def validate_numerical_records(
             errors.append(f"numerical workload checksum differs: {key}")
         if row.get("tp_world_size") != 2:
             errors.append(f"Gate3 numerical record is not TP=2: {key}")
+        if execution_mode == "matched-stock-async-off":
+            control = row.get("matched_bootstrap_control")
+            if not isinstance(control, Mapping) or control != {
+                "async_scheduling_requested": False,
+                "async_scheduling_effective": False,
+                "speculative_config": None,
+                "scheduler_class": "vllm.v1.core.sched.scheduler.Scheduler",
+                "custom_class_proposer_absent": True,
+                "resident_setup_scheduler_absent": True,
+                "target_tp_world_size": 2,
+                "physical_target_gpu_ids": [1, 2],
+            }:
+                errors.append(f"matched-bootstrap runtime control is invalid: {key}")
+            shape = row.get("execution_shape")
+            if not isinstance(shape, Mapping) or (
+                not _positive_int(shape.get("active_request_count"))
+                or shape.get("number_of_active_requests")
+                != shape.get("active_request_count")
+                or not _positive_int(shape.get("sampled_logits_rows"))
+                or not _positive_int(shape.get("lm_head_m"))
+                or not _positive_int(shape.get("total_scheduled_token_count"))
+                or shape.get("planned_request_query_length") != 1
+                or not _nonnegative_int(shape.get("decode_row_count"))
+                or not _nonnegative_int(shape.get("prefill_row_count"))
+                or shape.get("decode_row_count") + shape.get("prefill_row_count")
+                != shape.get("active_request_count")
+                or shape.get("batch_row_kind")
+                not in {"decode-only", "mixed-prefill-decode"}
+            ):
+                errors.append(f"matched-bootstrap execution shape is invalid: {key}")
         planned_row = planned.get(key)
         if per_token_plan:
             placeholder = row.get("async_cpu_placeholder_view")
@@ -297,6 +335,9 @@ def validate_numerical_records(
                     planned_row=planned_row,
                     num_computed_tokens=computed,
                     expected_world_size=2,
+                    require_independent_binding=(
+                        execution_mode == "matched-stock-async-off"
+                    ),
                 ):
                     errors.append(f"numerical per-token KV capture is invalid: {key}")
                 mapping = row.get("kv_position_mapping")
@@ -931,6 +972,16 @@ def prepare_target_numerical_diagnostic(
     sample_cursor = 0
     positions_cpu = positions.detach().cpu().tolist()
     logits_indices_cpu = logits_indices.detach().cpu().tolist()
+    query_lengths = [int(item) for item in num_scheduled_tokens]
+    total_scheduled_tokens = sum(query_lengths)
+    decode_rows = sum(length == 1 for length in query_lengths)
+    prefill_rows = sum(length > 1 for length in query_lengths)
+    if decode_rows and prefill_rows:
+        batch_row_kind = "mixed-prefill-decode"
+    elif decode_rows:
+        batch_row_kind = "decode-only"
+    else:
+        batch_row_kind = "prefill-only"
 
     for index, internal_id in enumerate(runner.input_batch.req_ids):
         query_length = int(num_scheduled_tokens[index])
@@ -978,6 +1029,10 @@ def prepare_target_numerical_diagnostic(
                     "tensor_stages": {},
                     "tp_rank": tp_rank,
                     "tp_world_size": tp_world_size,
+                    "total_scheduled_token_count": total_scheduled_tokens,
+                    "decode_row_count": decode_rows,
+                    "prefill_row_count": prefill_rows,
+                    "batch_row_kind": batch_row_kind,
                 }
                 state["active"][key] = active
         flat_cursor += query_length
@@ -1153,8 +1208,16 @@ def finalize_target_numerical_diagnostic(
             },
             "execution_shape": {
                 "active_request_count": len(runner.input_batch.req_ids),
+                "number_of_active_requests": len(runner.input_batch.req_ids),
                 "sampled_logits_rows": int(logits.shape[0]),
                 "lm_head_m": int(active["lm_head_input_source_shape"][0]),
+                "total_scheduled_token_count": active[
+                    "total_scheduled_token_count"
+                ],
+                "planned_request_query_length": active["query_length"],
+                "decode_row_count": active["decode_row_count"],
+                "prefill_row_count": active["prefill_row_count"],
+                "batch_row_kind": active["batch_row_kind"],
                 "hidden_size": int(active["lm_head_input_source_shape"][-1]),
                 "vocab_size": int(logits.shape[-1]),
             },
@@ -1174,6 +1237,36 @@ def finalize_target_numerical_diagnostic(
                 "semantic_prefix_authority": False,
             }
             record["per_logical_token_kv"] = active["per_logical_token_kv"]
+            if state["mode"] == "matched-stock-async-off":
+                scheduler = runner.vllm_config.scheduler_config
+                scheduler_class = scheduler.get_scheduler_cls()
+                speculative = runner.vllm_config.speculative_config
+                visible = os.environ.get("CUDA_VISIBLE_DEVICES", "")
+                try:
+                    physical_gpu_ids = [
+                        int(item.strip()) for item in visible.split(",") if item.strip()
+                    ]
+                except ValueError as error:
+                    raise RuntimeError(
+                        "matched-bootstrap Target physical GPU mapping is invalid"
+                    ) from error
+                record["matched_bootstrap_control"] = {
+                    "async_scheduling_requested": False,
+                    "async_scheduling_effective": bool(
+                        scheduler.async_scheduling
+                    ),
+                    "speculative_config": None if speculative is None else "non-null",
+                    "scheduler_class": (
+                        f"{scheduler_class.__module__}."
+                        f"{scheduler_class.__qualname__}"
+                    ),
+                    "custom_class_proposer_absent": speculative is None,
+                    "resident_setup_scheduler_absent": (
+                        scheduler_class.__name__ != "ResidentSetupScheduler"
+                    ),
+                    "target_tp_world_size": int(tp_group.world_size),
+                    "physical_target_gpu_ids": physical_gpu_ids,
+                }
         else:
             record.update(
                 {
@@ -1588,6 +1681,51 @@ def _hash_token_kv_payloads(
     return rows
 
 
+def _token_digest_sequence_sha256(tokens: Sequence[Mapping[str, Any]]) -> str:
+    """Commit to the ordered per-token K/V digests without raw tensor bytes."""
+
+    digest = hashlib.sha256(b"specrhythm.logical-kv-token-digests.v1\0")
+    for expected_position, token in enumerate(tokens):
+        if (
+            token.get("logical_position") != expected_position
+            or not _sha256_text(token.get("k_raw_sha256"))
+            or not _sha256_text(token.get("v_raw_sha256"))
+        ):
+            raise RuntimeError("Gate3 per-token K/V digest sequence is invalid")
+        digest.update(str(expected_position).encode("ascii"))
+        digest.update(b"\0K\0")
+        digest.update(str(token["k_raw_sha256"]).encode("ascii"))
+        digest.update(b"\0V\0")
+        digest.update(str(token["v_raw_sha256"]).encode("ascii"))
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def logical_kv_digest_binding(
+    k_payloads: Sequence[bytes], v_payloads: Sequence[bytes]
+) -> dict[str, Any]:
+    """Bind token digests to the exact reconstructed logical tensor bytes.
+
+    The raw digest uses the byte order produced by a contiguous tensor shaped
+    ``[2, logical_tokens, ...]``.  It intentionally differs from the legacy
+    block-by-block full-layer digest when a sequence spans multiple blocks.
+    """
+
+    tokens = _hash_token_kv_payloads(k_payloads, v_payloads)
+    logical_raw = hashlib.sha256()
+    for payload in k_payloads:
+        logical_raw.update(payload)
+    for payload in v_payloads:
+        logical_raw.update(payload)
+    return {
+        "logical_reconstructed_raw_sha256": logical_raw.hexdigest(),
+        "logical_reconstructed_raw_ordering": LOGICAL_RAW_ORDERING,
+        "token_digest_sequence_sha256": _token_digest_sequence_sha256(tokens),
+        "token_digest_sequence_ordering": TOKEN_DIGEST_ORDERING,
+        "tokens": tokens,
+    }
+
+
 def _logical_token_kv_summary(
     cache: Any,
     *,
@@ -1628,6 +1766,7 @@ def _logical_token_kv_summary(
         v_values[position].contiguous().view(torch.uint8).numpy().tobytes()
         for position in range(num_computed_tokens)
     ]
+    binding = logical_kv_digest_binding(k_payloads, v_payloads)
     return {
         "layer_name": layer_name,
         "layer_index": int(layer_index),
@@ -1639,7 +1778,7 @@ def _logical_token_kv_summary(
         "materialized_logical_position_start": 0,
         "materialized_logical_position_end_exclusive": num_computed_tokens,
         "gpu_to_cpu_transfer_count": 1,
-        "tokens": _hash_token_kv_payloads(k_payloads, v_payloads),
+        **binding,
     }
 
 
@@ -1890,6 +2029,7 @@ def _valid_per_token_capture(
     planned_row: Mapping[str, Any],
     num_computed_tokens: int,
     expected_world_size: int,
+    require_independent_binding: bool = False,
 ) -> bool:
     if not isinstance(value, Mapping):
         return False
@@ -1962,6 +2102,32 @@ def _valid_per_token_capture(
                     or not _sha256_text(token.get("k_raw_sha256"))
                     or not _sha256_text(token.get("v_raw_sha256"))
                 ):
+                    return False
+            has_binding = all(
+                field in layer
+                for field in (
+                    "logical_reconstructed_raw_sha256",
+                    "logical_reconstructed_raw_ordering",
+                    "token_digest_sequence_sha256",
+                    "token_digest_sequence_ordering",
+                )
+            )
+            if require_independent_binding and not has_binding:
+                return False
+            if has_binding and (
+                not _sha256_text(layer.get("logical_reconstructed_raw_sha256"))
+                or layer.get("logical_reconstructed_raw_ordering")
+                != LOGICAL_RAW_ORDERING
+                or layer.get("token_digest_sequence_ordering")
+                != TOKEN_DIGEST_ORDERING
+            ):
+                return False
+            if has_binding:
+                try:
+                    sequence_digest = _token_digest_sequence_sha256(tokens)
+                except RuntimeError:
+                    return False
+                if layer.get("token_digest_sequence_sha256") != sequence_digest:
                     return False
     return True
 

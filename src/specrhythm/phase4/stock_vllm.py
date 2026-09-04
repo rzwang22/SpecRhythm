@@ -30,6 +30,11 @@ from specrhythm.phase4.manifest import (
 )
 from specrhythm.phase4.transport import CheckpointJsonl
 
+MATCHED_BOOTSTRAP_CONTROL_SCHEMA = (
+    "specrhythm.phase4b1-gate3-matched-bootstrap-control.v1"
+)
+NORMAL_STOCK_SCHEDULER = "vllm.v1.core.sched.scheduler.Scheduler"
+
 
 @dataclass(frozen=True)
 class SmokeRequest:
@@ -204,6 +209,10 @@ def _worker_runtime_snapshot(worker: Any) -> dict[str, Any]:
                 get_name = getattr(backend, "get_name", None)
                 attention_backends.add(str(get_name()) if callable(get_name) else backend.__name__)
     expected_device = f"cuda:{logical_gpu_id}"
+    scheduler_config = worker.vllm_config.scheduler_config
+    speculative_config = worker.vllm_config.speculative_config
+    scheduler_class = scheduler_config.get_scheduler_cls()
+    configured_scheduler = scheduler_config.scheduler_cls
     result = {
         "global_rank": int(worker.rank),
         "local_rank": int(worker.local_rank),
@@ -226,9 +235,113 @@ def _worker_runtime_snapshot(worker: Any) -> dict[str, Any]:
         "max_allocated_memory_bytes": int(torch.cuda.max_memory_allocated(worker.device)),
         "max_reserved_memory_bytes": int(torch.cuda.max_memory_reserved(worker.device)),
         "attention_backends": sorted(attention_backends),
+        "async_scheduling_effective": bool(scheduler_config.async_scheduling),
+        "scheduler_class": _qualified_class_name(scheduler_class),
+        "scheduler_cls_configured": _configured_class_name(configured_scheduler),
+        "speculative_config_is_none": speculative_config is None,
+        "custom_class_proposer_absent": speculative_config is None,
+        "resident_setup_scheduler_absent": (
+            _qualified_class_name(scheduler_class)
+            != "specrhythm.phase4.resident_scheduler.ResidentSetupScheduler"
+        ),
+        "enable_chunked_prefill": bool(scheduler_config.enable_chunked_prefill),
+        "enable_prefix_caching": bool(worker.vllm_config.cache_config.enable_prefix_caching),
+        "enforce_eager": bool(worker.vllm_config.model_config.enforce_eager),
     }
     result.update(worker_batch_invariant_evidence(worker))
     return result
+
+
+def _qualified_class_name(value: Any) -> str:
+    return f"{value.__module__}.{value.__qualname__}"
+
+
+def _configured_class_name(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    if isinstance(value, type):
+        return _qualified_class_name(value)
+    return f"{type(value).__module__}.{type(value).__qualname__}"
+
+
+def matched_bootstrap_control_evidence(llm: Any) -> dict[str, Any]:
+    """Prove that the ordinary Target engine changed only async scheduling.
+
+    This reads the resolved pinned-vLLM configuration after engine creation.  It
+    does not replace the scheduler or install a speculative proposer.
+    """
+
+    vllm_config = llm.llm_engine.vllm_config
+    scheduler_config = vllm_config.scheduler_config
+    scheduler_class = scheduler_config.get_scheduler_cls()
+    speculative_config = vllm_config.speculative_config
+    evidence = {
+        "schema_version": MATCHED_BOOTSTRAP_CONTROL_SCHEMA,
+        "diagnostic_only": True,
+        "execution_path": "ordinary-stock-vllm-LLM-generate",
+        "async_scheduling_argument": False,
+        "async_scheduling_requested": False,
+        "async_scheduling_effective": bool(scheduler_config.async_scheduling),
+        "speculative_config": None if speculative_config is None else "non-null",
+        "speculative_config_is_none": speculative_config is None,
+        "scheduler_cls_argument": None,
+        "scheduler_cls_configured": _configured_class_name(
+            scheduler_config.scheduler_cls
+        ),
+        "scheduler_class": _qualified_class_name(scheduler_class),
+        "normal_stock_scheduler": (
+            _qualified_class_name(scheduler_class) == NORMAL_STOCK_SCHEDULER
+        ),
+        "custom_class_proposer_absent": speculative_config is None,
+        "resident_setup_scheduler_absent": (
+            _qualified_class_name(scheduler_class)
+            != "specrhythm.phase4.resident_scheduler.ResidentSetupScheduler"
+        ),
+        "global_resident_setup_freeze": False,
+        "draft_model_started": False,
+        "enable_chunked_prefill": bool(scheduler_config.enable_chunked_prefill),
+        "enable_prefix_caching": bool(vllm_config.cache_config.enable_prefix_caching),
+        "enforce_eager": bool(vllm_config.model_config.enforce_eager),
+        "tensor_parallel_size": int(vllm_config.parallel_config.tensor_parallel_size),
+    }
+    errors = validate_matched_bootstrap_control(evidence)
+    evidence["valid"] = not errors
+    evidence["errors"] = errors
+    evidence["gate3_closed"] = False
+    evidence["phase4b2_blocked"] = True
+    evidence["serving_performance_result"] = False
+    return evidence
+
+
+def validate_matched_bootstrap_control(value: Mapping[str, Any]) -> list[str]:
+    errors = []
+    required = {
+        "schema_version": MATCHED_BOOTSTRAP_CONTROL_SCHEMA,
+        "diagnostic_only": True,
+        "execution_path": "ordinary-stock-vllm-LLM-generate",
+        "async_scheduling_argument": False,
+        "async_scheduling_requested": False,
+        "async_scheduling_effective": False,
+        "speculative_config": None,
+        "speculative_config_is_none": True,
+        "scheduler_cls_argument": None,
+        "scheduler_cls_configured": None,
+        "scheduler_class": NORMAL_STOCK_SCHEDULER,
+        "normal_stock_scheduler": True,
+        "custom_class_proposer_absent": True,
+        "resident_setup_scheduler_absent": True,
+        "global_resident_setup_freeze": False,
+        "draft_model_started": False,
+        "tensor_parallel_size": 2,
+    }
+    for field, expected in required.items():
+        if value.get(field) != expected:
+            errors.append(
+                f"matched-bootstrap control {field} must be {expected!r}"
+            )
+    return errors
 
 
 def validate_worker_ranks(rows: Sequence[Mapping[str, Any]], engine: EngineConfig) -> list[str]:
@@ -472,6 +585,7 @@ def run_stock_smoke(
     diagnostic_single_run: bool = False,
     numerical_plan_path: Optional[Path] = None,
     numerical_output_path: Optional[Path] = None,
+    matched_bootstrap_async_off: bool = False,
 ) -> dict[str, Any]:
     """Bring up one independent stock vLLM engine and repeat a frozen workload."""
 
@@ -512,11 +626,16 @@ def run_stock_smoke(
             + ",".join(str(item) for item in engine.physical_gpu_ids)
         )
     effective_count = request_count or config.smoke_request_count
+    numerical_execution_mode = (
+        "matched-stock-async-off"
+        if matched_bootstrap_async_off
+        else ("stock-style" if diagnostic_single_run else None)
+    )
     numerical_plan = configure_numerical_diagnostic(
         plan_path=numerical_plan_path,
         output_path=numerical_output_path,
         workload_path=workload_path,
-        execution_mode=("stock-style" if diagnostic_single_run else None),
+        execution_mode=numerical_execution_mode,
     )
     if diagnostic_single_run and (
         role != "target"
@@ -532,6 +651,19 @@ def run_stock_smoke(
         )
     if not diagnostic_single_run and numerical_plan is not None:
         raise ValueError("numerical instrumentation is allowed only for a single diagnostic run")
+    if matched_bootstrap_async_off and (
+        role != "target"
+        or effective_count != 100
+        or correctness_mode != "batch-invariant"
+        or not diagnostic_single_run
+        or diagnostics_path is None
+        or numerical_plan is None
+        or numerical_output_path is None
+    ):
+        raise ValueError(
+            "matched-bootstrap async-OFF control requires Target corrected-100, "
+            "batch-invariant mode, one diagnostic run, and both diagnostic outputs"
+        )
     requests = load_smoke_requests(
         workload_path,
         effective_count,
@@ -545,7 +677,7 @@ def run_stock_smoke(
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA is unavailable; refusing to generate a fake stock-engine result")
     started = time.monotonic_ns()
-    llm = LLM(
+    llm_arguments = dict(
         model=str(engine.resolved_model_path),
         tokenizer=str(engine.resolved_tokenizer_path),
         tensor_parallel_size=engine.tensor_parallel_size,
@@ -562,13 +694,36 @@ def run_stock_smoke(
         speculative_config=None,
         disable_log_stats=False,
     )
+    if matched_bootstrap_async_off:
+        # Pinned vLLM exposes this SchedulerConfig field through EngineArgs.
+        # No scheduler class or speculative configuration is substituted.
+        llm_arguments["async_scheduling"] = False
+    llm = LLM(**llm_arguments)
     startup_finished = time.monotonic_ns()
+    matched_control = (
+        matched_bootstrap_control_evidence(llm)
+        if matched_bootstrap_async_off
+        else None
+    )
     worker_ranks = llm.collective_rpc(_worker_runtime_snapshot)
     rank_errors = validate_worker_ranks(worker_ranks, engine)
     batch_validation = validate_batch_invariant_ranks(
         worker_ranks, requested=requested_for_mode(correctness_mode)
     )
     rank_errors.extend(batch_validation["batch_invariant_validation"]["errors"])
+    if matched_control is not None:
+        rank_errors.extend(matched_control["errors"])
+        for row in worker_ranks:
+            if row.get("async_scheduling_effective") is not False:
+                rank_errors.append("TP worker did not prove async scheduling disabled")
+            if row.get("scheduler_class") != NORMAL_STOCK_SCHEDULER:
+                rank_errors.append("TP worker did not resolve the normal stock scheduler")
+            if row.get("speculative_config_is_none") is not True:
+                rank_errors.append("TP worker has a non-null speculative configuration")
+            if row.get("custom_class_proposer_absent") is not True:
+                rank_errors.append("TP worker did not prove custom proposer absence")
+            if row.get("resident_setup_scheduler_absent") is not True:
+                rank_errors.append("TP worker did not prove ResidentSetupScheduler absence")
     if rank_errors:
         raise RuntimeError("invalid vLLM worker evidence: " + "; ".join(rank_errors))
     tokenizer = llm.get_tokenizer()
@@ -617,7 +772,9 @@ def run_stock_smoke(
     )
     numerical_errors = (
         validate_numerical_records(
-            numerical_rows, numerical_plan, execution_mode="stock-style"
+            numerical_rows,
+            numerical_plan,
+            execution_mode=numerical_execution_mode or "stock-style",
         )
         if numerical_plan is not None
         else []
@@ -642,6 +799,8 @@ def run_stock_smoke(
         mode_setup=mode_evidence,
         batch_invariant_validation=batch_validation,
     )
+    if matched_control is not None:
+        manifest["matched_bootstrap_control"] = matched_control
     _update_combined_manifest(runtime_manifest_path, manifest)
     finished = time.monotonic_ns()
     report = {
@@ -674,10 +833,11 @@ def run_stock_smoke(
         "diagnostic_only": diagnostic_single_run,
         "reference_freeze_eligible": False if diagnostic_single_run else None,
         "stock_reference_replaced": False,
+        "matched_bootstrap_control": matched_control,
         "numerical_diagnostics": (
             {
                 "enabled": True,
-                "execution_mode": "stock-style",
+                "execution_mode": numerical_execution_mode,
                 "record_count": len(numerical_rows),
                 "valid": not numerical_errors,
                 "errors": numerical_errors,

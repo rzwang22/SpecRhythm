@@ -11,6 +11,18 @@ The freeze requires Python 3.11 for this integration environment. At the pinned 
 CUDA build/runtime, driver, NCCL, Transformers, attention backend, installed-distribution RECORD
 checksum and exact source checkout.
 
+## Gate3 matched-bootstrap async authority
+
+For the same pinned commit, ordinary offline `LLM` accepts `async_scheduling` through
+`EngineArgs`. `SchedulerConfig.async_scheduling=None` auto-enables async scheduling for the
+compatible ordinary Target configuration; explicit `False` remains false and
+`SchedulerConfig.get_scheduler_cls()` resolves the normal
+`vllm.v1.core.sched.scheduler.Scheduler`. The diagnostic control therefore uses only
+`LLM(async_scheduling=False)` while retaining `speculative_config=None` and leaving
+`scheduler_cls` unset. No vLLM patch is needed. Exact pinned-source anchors and the fail-closed
+runtime evidence contract are in
+[phase4b1-gate3-matched-bootstrap.md](phase4b1-gate3-matched-bootstrap.md).
+
 ## Audit matrix
 
 “Public API” means a documented or directly exposed Python entry point at this exact commit; it

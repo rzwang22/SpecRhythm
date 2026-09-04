@@ -34,7 +34,7 @@ claims.
 | [#1 workload-v0.1](https://github.com/rzwang22/SpecRhythm/pull/1) | merged | strict Mooncake replay, R3 proxy config, validator, manifest, fixture tests and docs | workload plumbing only; proxy payload and illustrative acceptance |
 | [#2 simulator-semantics-v0.2](https://github.com/rzwang22/SpecRhythm/pull/2) | frozen draft; Phase 2 complete, not merged | proposal lifecycle, deterministic tree oracle, tree-aware allocators, base-preserving residual controls, Phase-2 nested search pools and common-snapshot oracle replay, path-aware eager and accounting | pure-Python proxy and oracle upper bounds only; no deployable oracle, measured search cost, GPU integration, or performance claim |
 | [#3 gpu-integration-v0.1](https://github.com/rzwang22/SpecRhythm/pull/3) | draft; Phase 3B.1 and corrected-20 Phase 3C.2 complete; Phase 3C.3 corrected-100 awaiting server run | hardened multi-rank primitives, corrected R3-real traces, common-prefix replay, request-bootstrap statistics, 2x shell decomposition and diagnostic learned ranker | user-run 3×A800 correctness artifacts plus Mac CPU tests; no packed-tree/serving engine, Dual-Batch, SLO, calibrated latency or speedup claim |
-| [#4 vllm-serving-v0.1](https://github.com/rzwang22/SpecRhythm/pull/4) | draft; Gate1/Gate2 Outcome A; Gate3 exact output still fails 4/100; e73 coarse localization succeeded and per-logical-token K/V localization awaits one A800 pair | decode-ready Target/Serial plus real asynchronous resident Dual runner, lifecycle/scheduler/KV/accounting evidence, scale-safe chunked-prefill setup and diagnostic-only numerical localization | correctness evidence only; Gate3 remains failed; no tolerance, performance, packed tree, eager, KVConnector, SLO or goodput claim |
+| [#4 vllm-serving-v0.1](https://github.com/rzwang22/SpecRhythm/pull/4) | draft; Gate1/Gate2 Outcome A; Gate3 exact output still fails 4/100; per-token localization is `BOOTSTRAP`; matched async-OFF Target control awaits one A800 run | decode-ready Target/Serial plus real asynchronous resident Dual runner, lifecycle/scheduler/KV/accounting evidence, scale-safe chunked-prefill setup and diagnostic-only numerical localization | correctness evidence only; Gate3 remains open; no tolerance, performance, packed tree, eager, KVConnector, SLO or goodput claim |
 
 ## Phase 4A.0–4A.1: vLLM freeze and Serial Disaggregated correctness
 
@@ -245,14 +245,24 @@ and current-token embeddings. Both TP ranks found request-dependent first-differ
 and each sampler follows its own argmax, excluding a sampler tie-breaking explanation.
 
 The e73 stock `InputBatch.token_ids_cpu` rows contain pinned-vLLM async `-1` placeholders, so that
-field is now explicitly non-authoritative metadata. Semantic comparison uses complete run outputs
-against the immutable stock reference. The only authorized next GPU action is one new
-diagnostic-only corrected-100 stock/resident pair that hashes K and V separately for every
-materialized logical position in each request's exact control and first-different layers. It keeps
-the same full workload shape, requires exact reproduction of all four divergences, and classifies
-only `PROMPT_PREFILL`, `BOOTSTRAP`, `DECODE_HISTORY`, or `FAIL-CLOSED`. Gate3 remains not closed;
-Serial, Dual, Dual-Eager, performance, Phase 4B.2, and tolerant correctness remain blocked. See
-[phase4b1-gate3-numerical-diagnostics.md](phase4b1-gate3-numerical-diagnostics.md).
+field is explicitly non-authoritative metadata. Semantic comparison uses complete run outputs
+against the immutable stock reference. The subsequent immutable 8773 per-logical-token run
+classified all four requests as `BOOTSTRAP`: every prompt K/V position is bitwise exact on both
+TP ranks, and the first difference is the bootstrap token at `prompt_length` in layers 4, 21, 24,
+and 56 respectively. The preceding control layers remain exact. The stock endpoint uses ordinary
+Target-only async scheduling; the resident endpoint disables async through custom-class resident
+execution. This is a causal hypothesis, not proof.
+
+The only authorized next GPU action is therefore one ordinary stock-style corrected-100 Target
+run with the pinned public `LLM(async_scheduling=False)` option. It reuses, checksums, and does not
+rerun either 8773 endpoint. `speculative_config` remains null, the stock scheduler remains in use,
+and no Draft/resident machinery is allowed. A three-way exact comparator reports
+`ASYNC_OFF_MATCHES_RESIDENT`, `ASYNC_OFF_MATCHES_STOCK`, `ASYNC_OFF_THIRD_STATE`,
+`MIXED_BY_REQUEST`, or `FAIL-CLOSED`; none automatically closes Gate3. New captures independently
+bind per-token K/V hashes to the reconstructed logical tensor. Serial, Dual, Dual-Eager,
+performance, Phase 4B.2, and tolerant correctness remain blocked. See
+[phase4b1-gate3-numerical-diagnostics.md](phase4b1-gate3-numerical-diagnostics.md) and
+[phase4b1-gate3-matched-bootstrap.md](phase4b1-gate3-matched-bootstrap.md).
 
 ## Phase 3.0: GPU readiness and real-trace runner
 

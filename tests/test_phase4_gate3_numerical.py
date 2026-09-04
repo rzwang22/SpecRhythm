@@ -10,8 +10,16 @@ from types import ModuleType, SimpleNamespace
 import pytest
 
 from specrhythm.phase4 import numerical_diagnostics as numerical
+from specrhythm.phase4.matched_bootstrap import (
+    COMPARISON_SCHEMA as MATCHED_COMPARISON_SCHEMA,
+)
+from specrhythm.phase4.matched_bootstrap import (
+    compare_matched_bootstrap,
+)
 from specrhythm.phase4.numerical_diagnostics import (
+    LOGICAL_RAW_ORDERING,
     PER_TOKEN_RECORD_SCHEMA,
+    TOKEN_DIGEST_ORDERING,
     _generic_kv_ownership,
     _hash_token_kv_payloads,
     _logical_kv_locations,
@@ -21,6 +29,7 @@ from specrhythm.phase4.numerical_diagnostics import (
     compare_per_token_kv_diagnostics,
     configure_numerical_diagnostic,
     load_numerical_plan,
+    logical_kv_digest_binding,
     per_token_comparison_markdown,
     prepare_target_numerical_diagnostic,
     token_sha256,
@@ -475,6 +484,170 @@ def _per_token_record(item: dict, mode: str, *, plan: dict) -> dict:
     return record
 
 
+def _set_bootstrap_state(record: dict, item: dict, state: str) -> None:
+    bootstrap = int(item["prompt_length"])
+    for rank_row in record["per_logical_token_kv"]["tp_ranks"]:
+        first = rank_row["layers"][1]
+        token = first["tokens"][bootstrap]
+        if state == "resident":
+            token["v_raw_sha256"] = token_sha256(
+                [rank_row["tp_rank"], first["layer_index"], bootstrap, 2, 99]
+            )
+            first["aggregate_raw_sha256"] = token_sha256(
+                [rank_row["tp_rank"], first["layer_index"], 8, 99]
+            )
+        elif state == "third":
+            token["v_raw_sha256"] = token_sha256(
+                [rank_row["tp_rank"], first["layer_index"], bootstrap, 2, 77]
+            )
+            first["aggregate_raw_sha256"] = token_sha256(
+                [rank_row["tp_rank"], first["layer_index"], 8, 77]
+            )
+
+
+def _bind_control_record(record: dict) -> None:
+    for rank_row in record["per_logical_token_kv"]["tp_ranks"]:
+        for layer in rank_row["layers"]:
+            layer["logical_reconstructed_raw_sha256"] = token_sha256(
+                [rank_row["tp_rank"], layer["layer_index"], 12345]
+            )
+            layer["logical_reconstructed_raw_ordering"] = LOGICAL_RAW_ORDERING
+            layer["token_digest_sequence_sha256"] = (
+                numerical._token_digest_sequence_sha256(layer["tokens"])
+            )
+            layer["token_digest_sequence_ordering"] = TOKEN_DIGEST_ORDERING
+    record["matched_bootstrap_control"] = {
+        "async_scheduling_requested": False,
+        "async_scheduling_effective": False,
+        "speculative_config": None,
+        "scheduler_class": "vllm.v1.core.sched.scheduler.Scheduler",
+        "custom_class_proposer_absent": True,
+        "resident_setup_scheduler_absent": True,
+        "target_tp_world_size": 2,
+        "physical_target_gpu_ids": [1, 2],
+    }
+    record["execution_shape"] = {
+        "active_request_count": 50,
+        "number_of_active_requests": 50,
+        "sampled_logits_rows": 50,
+        "lm_head_m": 50,
+        "total_scheduled_token_count": 50,
+        "planned_request_query_length": 1,
+        "decode_row_count": 50,
+        "prefill_row_count": 0,
+        "batch_row_kind": "decode-only",
+        "hidden_size": 5120,
+        "vocab_size": 151936,
+    }
+
+
+def _matched_fixture(plan: dict, states=None):
+    states = states or {row["request_id"]: "resident" for row in plan["requests"]}
+    stock_rows = []
+    control_rows = []
+    resident_rows = []
+    for item in plan["requests"]:
+        stock = _per_token_record(item, "stock-style", plan=plan)
+        resident = copy.deepcopy(stock)
+        resident["execution_mode"] = "resident-target"
+        resident_evidence = _record(item, "resident-target", plan=plan)
+        resident["raw_pre_softmax_logits"] = resident_evidence[
+            "raw_pre_softmax_logits"
+        ]
+        resident["raw_argmax_token_id"] = resident_evidence[
+            "raw_argmax_token_id"
+        ]
+        _set_bootstrap_state(resident, item, "resident")
+        control = copy.deepcopy(stock)
+        control["execution_mode"] = "matched-stock-async-off"
+        state = states[item["request_id"]]
+        _set_bootstrap_state(control, item, state)
+        if state == "resident":
+            control["raw_pre_softmax_logits"] = copy.deepcopy(
+                resident["raw_pre_softmax_logits"]
+            )
+            control["raw_argmax_token_id"] = resident["raw_argmax_token_id"]
+        _bind_control_record(control)
+        for current in (resident, control):
+            for rank, token_rank in enumerate(
+                current["per_logical_token_kv"]["tp_ranks"]
+            ):
+                current["tp_rank_kv_cache_before_forward"][rank][
+                    "kv_cache_before_forward"
+                ]["layers"] = [
+                    {
+                        "layer": layer["layer_name"],
+                        "raw_sha256": layer["aggregate_raw_sha256"],
+                    }
+                    for layer in token_rank["layers"]
+                ]
+        stock_rows.append(stock)
+        control_rows.append(control)
+        resident_rows.append(resident)
+    control_outputs = _outputs(plan, "stock-style")
+    planned_by_id = {item["request_id"]: item for item in plan["requests"]}
+    for output in control_outputs:
+        planned = planned_by_id.get(output["request_id"])
+        if planned is None:
+            continue
+        if states[output["request_id"]] == "resident":
+            output["generated_token_ids"][planned["output_position"]] = planned[
+                "resident_selected_token_id"
+            ]
+    return stock_rows, control_rows, resident_rows, control_outputs
+
+
+def _matched_runtime() -> dict:
+    return {
+        "schema_version": "specrhythm.phase4b1-gate3-matched-bootstrap-control.v1",
+        "diagnostic_only": True,
+        "execution_path": "ordinary-stock-vllm-LLM-generate",
+        "async_scheduling_argument": False,
+        "async_scheduling_requested": False,
+        "async_scheduling_effective": False,
+        "speculative_config": None,
+        "speculative_config_is_none": True,
+        "scheduler_cls_argument": None,
+        "scheduler_cls_configured": None,
+        "scheduler_class": "vllm.v1.core.sched.scheduler.Scheduler",
+        "normal_stock_scheduler": True,
+        "custom_class_proposer_absent": True,
+        "resident_setup_scheduler_absent": True,
+        "global_resident_setup_freeze": False,
+        "draft_model_started": False,
+        "enable_chunked_prefill": True,
+        "enable_prefix_caching": False,
+        "enforce_eager": True,
+        "tensor_parallel_size": 2,
+    }
+
+
+def _matched_comparison(plan: dict, states=None) -> dict:
+    stock_rows, control_rows, resident_rows, control_outputs = _matched_fixture(
+        plan, states
+    )
+    return compare_matched_bootstrap(
+        plan=plan,
+        stock_rows=stock_rows,
+        control_rows=control_rows,
+        resident_rows=resident_rows,
+        stock_outputs=_outputs(plan, "stock-style"),
+        control_outputs=control_outputs,
+        resident_outputs=_outputs(plan, "resident-target"),
+        immutable_reference=_reference(plan),
+        endpoint_comparison={
+            "schema_version": numerical.PER_TOKEN_COMPARISON_SCHEMA,
+            "valid": True,
+            "classification": "BOOTSTRAP",
+            "gate3_closed": False,
+            "phase4b2_blocked": True,
+            "tolerant_correctness_policy": False,
+            "tie_equivalent_tokens_accepted": False,
+        },
+        control_runtime=_matched_runtime(),
+    )
+
+
 def _reference(plan: dict) -> dict:
     from specrhythm.phase4.reference import output_token_hash
     from specrhythm.phase4.transport import payload_sha256
@@ -617,6 +790,190 @@ def test_per_token_hashes_keep_k_and_v_separate():
     assert rows[1]["k_raw_sha256"] != rows[1]["v_raw_sha256"]
     with pytest.raises(RuntimeError, match="counts differ"):
         _hash_token_kv_payloads([b"k"], [])
+
+
+def test_per_token_digest_independently_binds_logical_tensor_bytes():
+    binding = logical_kv_digest_binding([b"k0", b"k1"], [b"v0", b"v1"])
+    import hashlib
+
+    assert binding["logical_reconstructed_raw_sha256"] == hashlib.sha256(
+        b"k0k1v0v1"
+    ).hexdigest()
+    assert binding["logical_reconstructed_raw_ordering"] == LOGICAL_RAW_ORDERING
+    assert binding["token_digest_sequence_ordering"] == TOKEN_DIGEST_ORDERING
+    assert binding["token_digest_sequence_sha256"] == (
+        numerical._token_digest_sequence_sha256(binding["tokens"])
+    )
+
+
+def test_matched_control_matches_resident_without_closing_gate3(tmp_path):
+    plan = load_numerical_plan(PER_TOKEN_PLAN, _workload(tmp_path))
+    report = _matched_comparison(plan)
+    assert report["schema_version"] == MATCHED_COMPARISON_SCHEMA
+    assert report["valid"] is True, report["errors"]
+    assert report["classification"] == "ASYNC_OFF_MATCHES_RESIDENT"
+    assert all(report["request_order_equal_to_immutable_reference"].values())
+    assert all(
+        row["three_way_semantically_paired"]
+        and row["control_token_equals_resident"]
+        for row in report["comparisons"]
+    )
+    assert report["gate3_closed"] is False
+    assert report["phase4b2_blocked"] is True
+    assert report["tolerant_correctness_policy"] is False
+    assert report["tie_equivalent_tokens_accepted"] is False
+
+
+def test_matched_control_accepts_different_token_at_checkpoint(tmp_path):
+    plan = load_numerical_plan(PER_TOKEN_PLAN, _workload(tmp_path))
+    report = _matched_comparison(plan)
+    first = report["comparisons"][0]
+    assert first["pre_checkpoint_prefix_exact"]["matched_async_off"] is True
+    assert first["selected_token_ids"]["matched_async_off"] != first[
+        "selected_token_ids"
+    ]["stock_async_on"]
+
+
+def test_matched_control_fails_if_prefix_diverges_before_checkpoint(tmp_path):
+    plan = load_numerical_plan(PER_TOKEN_PLAN, _workload(tmp_path))
+    stock_rows, control_rows, resident_rows, control_outputs = _matched_fixture(plan)
+    control_outputs[0]["generated_token_ids"][0] = 999
+    report = compare_matched_bootstrap(
+        plan=plan,
+        stock_rows=stock_rows,
+        control_rows=control_rows,
+        resident_rows=resident_rows,
+        stock_outputs=_outputs(plan, "stock-style"),
+        control_outputs=control_outputs,
+        resident_outputs=_outputs(plan, "resident-target"),
+        immutable_reference=_reference(plan),
+        endpoint_comparison={
+            "schema_version": numerical.PER_TOKEN_COMPARISON_SCHEMA,
+            "valid": True,
+            "classification": "BOOTSTRAP",
+            "gate3_closed": False,
+            "phase4b2_blocked": True,
+            "tolerant_correctness_policy": False,
+            "tie_equivalent_tokens_accepted": False,
+        },
+        control_runtime=_matched_runtime(),
+    )
+    assert report["classification"] == "FAIL-CLOSED"
+    assert any("prefix diverges before" in error for error in report["errors"])
+
+
+def test_matched_control_fails_if_request_order_changes(tmp_path):
+    plan = load_numerical_plan(PER_TOKEN_PLAN, _workload(tmp_path))
+    stock_rows, control_rows, resident_rows, control_outputs = _matched_fixture(plan)
+    control_outputs[0], control_outputs[1] = control_outputs[1], control_outputs[0]
+    report = compare_matched_bootstrap(
+        plan=plan,
+        stock_rows=stock_rows,
+        control_rows=control_rows,
+        resident_rows=resident_rows,
+        stock_outputs=_outputs(plan, "stock-style"),
+        control_outputs=control_outputs,
+        resident_outputs=_outputs(plan, "resident-target"),
+        immutable_reference=_reference(plan),
+        endpoint_comparison={
+            "schema_version": numerical.PER_TOKEN_COMPARISON_SCHEMA,
+            "valid": True,
+            "classification": "BOOTSTRAP",
+            "gate3_closed": False,
+            "phase4b2_blocked": True,
+            "tolerant_correctness_policy": False,
+            "tie_equivalent_tokens_accepted": False,
+        },
+        control_runtime=_matched_runtime(),
+    )
+    assert report["classification"] == "FAIL-CLOSED"
+    assert any("request order differs" in error for error in report["errors"])
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    (("prompt", "prompt K/V differs"), ("control", "previous control layer differs")),
+)
+def test_matched_control_fails_on_prompt_or_control_layer_drift(
+    tmp_path, mutation, message
+):
+    plan = load_numerical_plan(PER_TOKEN_PLAN, _workload(tmp_path))
+    stock_rows, control_rows, resident_rows, control_outputs = _matched_fixture(plan)
+    layer = control_rows[0]["per_logical_token_kv"]["tp_ranks"][0]["layers"][
+        1 if mutation == "prompt" else 0
+    ]
+    layer["tokens"][0]["k_raw_sha256"] = "f" * 64
+    layer["token_digest_sequence_sha256"] = numerical._token_digest_sequence_sha256(
+        layer["tokens"]
+    )
+    report = compare_matched_bootstrap(
+        plan=plan,
+        stock_rows=stock_rows,
+        control_rows=control_rows,
+        resident_rows=resident_rows,
+        stock_outputs=_outputs(plan, "stock-style"),
+        control_outputs=control_outputs,
+        resident_outputs=_outputs(plan, "resident-target"),
+        immutable_reference=_reference(plan),
+        endpoint_comparison={
+            "schema_version": numerical.PER_TOKEN_COMPARISON_SCHEMA,
+            "valid": True,
+            "classification": "BOOTSTRAP",
+            "gate3_closed": False,
+            "phase4b2_blocked": True,
+            "tolerant_correctness_policy": False,
+            "tie_equivalent_tokens_accepted": False,
+        },
+        control_runtime=_matched_runtime(),
+    )
+    assert report["classification"] == "FAIL-CLOSED"
+    assert any(message in error for error in report["errors"])
+
+
+@pytest.mark.parametrize(
+    ("state", "classification"),
+    (
+        ("stock", "ASYNC_OFF_MATCHES_STOCK"),
+        ("third", "ASYNC_OFF_THIRD_STATE"),
+    ),
+)
+def test_matched_control_endpoint_and_third_state_classification(
+    tmp_path, state, classification
+):
+    plan = load_numerical_plan(PER_TOKEN_PLAN, _workload(tmp_path))
+    states = {row["request_id"]: state for row in plan["requests"]}
+    report = _matched_comparison(plan, states)
+    assert report["valid"] is True, report["errors"]
+    assert report["classification"] == classification
+
+
+def test_matched_control_mixed_by_request_classification(tmp_path):
+    plan = load_numerical_plan(PER_TOKEN_PLAN, _workload(tmp_path))
+    states = {
+        row["request_id"]: ("resident" if index % 2 else "stock")
+        for index, row in enumerate(plan["requests"])
+    }
+    report = _matched_comparison(plan, states)
+    assert report["valid"] is True
+    assert report["classification"] == "MIXED_BY_REQUEST"
+
+
+def test_matched_control_requires_complete_tp_and_independent_binding(tmp_path):
+    plan = load_numerical_plan(PER_TOKEN_PLAN, _workload(tmp_path))
+    _, control_rows, _, _ = _matched_fixture(plan)
+    control_rows[0]["per_logical_token_kv"]["tp_ranks"].pop()
+    errors = validate_numerical_records(
+        control_rows, plan, execution_mode="matched-stock-async-off"
+    )
+    assert any("per-token KV capture" in error for error in errors)
+    _, control_rows, _, _ = _matched_fixture(plan)
+    control_rows[0]["per_logical_token_kv"]["tp_ranks"][0]["layers"][0].pop(
+        "logical_reconstructed_raw_sha256"
+    )
+    errors = validate_numerical_records(
+        control_rows, plan, execution_mode="matched-stock-async-off"
+    )
+    assert any("per-token KV capture" in error for error in errors)
 
 
 @pytest.mark.parametrize(
@@ -909,6 +1266,82 @@ def test_per_token_comparator_cli_writes_machine_and_markdown_reports(tmp_path):
     assert report["valid"] is True
     assert report["gate3_closed"] is False
     assert "Gate3 remains not closed" in paths["markdown-output"].read_text(
+        encoding="utf-8"
+    )
+
+
+def test_matched_bootstrap_cli_writes_machine_and_markdown_reports(tmp_path):
+    from specrhythm.cli import main
+    from specrhythm.phase4.transport import CheckpointJsonl
+
+    workload = _workload(tmp_path)
+    plan = load_numerical_plan(PER_TOKEN_PLAN, workload)
+    stock_rows, control_rows, resident_rows, control_outputs = _matched_fixture(plan)
+    paths = {
+        "reference": tmp_path / "reference.json",
+        "stock-run": tmp_path / "stock.json",
+        "stock-numerical": tmp_path / "stock.jsonl",
+        "control-run": tmp_path / "control.json",
+        "control-numerical": tmp_path / "control.jsonl",
+        "resident-run": tmp_path / "resident.json",
+        "resident-numerical": tmp_path / "resident.jsonl",
+        "endpoint-comparison": tmp_path / "endpoint.json",
+        "output": tmp_path / "matched.json",
+        "markdown-output": tmp_path / "matched.md",
+    }
+    paths["reference"].write_text(json.dumps(_reference(plan)), encoding="utf-8")
+    paths["stock-run"].write_text(
+        json.dumps({"runs": [_outputs(plan, "stock-style")]}), encoding="utf-8"
+    )
+    paths["control-run"].write_text(
+        json.dumps(
+            {
+                "runs": [control_outputs],
+                "matched_bootstrap_control": _matched_runtime(),
+            }
+        ),
+        encoding="utf-8",
+    )
+    paths["resident-run"].write_text(
+        json.dumps({"outputs": _outputs(plan, "resident-target")}),
+        encoding="utf-8",
+    )
+    paths["endpoint-comparison"].write_text(
+        json.dumps(
+            {
+                "schema_version": numerical.PER_TOKEN_COMPARISON_SCHEMA,
+                "valid": True,
+                "classification": "BOOTSTRAP",
+                "gate3_closed": False,
+                "phase4b2_blocked": True,
+                "tolerant_correctness_policy": False,
+                "tie_equivalent_tokens_accepted": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+    for name, rows in (
+        ("stock-numerical", stock_rows),
+        ("control-numerical", control_rows),
+        ("resident-numerical", resident_rows),
+    ):
+        for row in rows:
+            CheckpointJsonl(paths[name]).append(row)
+    argv = [
+        "phase4b1-gate3-matched-bootstrap-compare",
+        "--plan",
+        str(PER_TOKEN_PLAN),
+        "--workload",
+        str(workload),
+    ]
+    for name, path in paths.items():
+        argv.extend((f"--{name}", str(path)))
+    assert main(argv) == 0
+    report = json.loads(paths["output"].read_text(encoding="utf-8"))
+    assert report["classification"] == "ASYNC_OFF_MATCHES_RESIDENT"
+    assert report["gate3_closed"] is False
+    assert report["provenance"]["endpoint_comparison_sha256"]
+    assert "Phase 4B.2 remains blocked" in paths["markdown-output"].read_text(
         encoding="utf-8"
     )
 
