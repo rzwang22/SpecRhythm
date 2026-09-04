@@ -205,11 +205,13 @@ test "$SR_STOCK_STATUS" -eq 0 || exit "$SR_STOCK_STATUS"
 
 python - \
   "$SR_PER_TOKEN_ROOT/stock-style/stock-style.json" \
-  "$SR_PER_TOKEN_ROOT/stock-style/per-token-kv.jsonl" <<'PY'
+  "$SR_PER_TOKEN_ROOT/stock-style/per-token-kv.jsonl" \
+  "$SR_GATE3_REFERENCE" <<'PY'
 import json
 import sys
 run = json.load(open(sys.argv[1], encoding="utf-8"))
 rows = [json.loads(line) for line in open(sys.argv[2], encoding="utf-8")]
+reference = json.load(open(sys.argv[3], encoding="utf-8"))
 expected = {
     ("r3-c7ee1a73ee79dd6dc21cb8dc", 3),
     ("r3-32ae44a69fffd76f0dd4b787", 4),
@@ -220,6 +222,12 @@ assert run["diagnostic_only"] is True
 assert run["reference_freeze_eligible"] is False
 assert run["stock_reference_replaced"] is False
 assert len(run["runs"]) == 1 and len(run["runs"][0]) == 100
+stock = {row["request_id"]: row for row in run["runs"][0]}
+frozen = {row["request_id"]: row for row in reference["outputs"]}
+assert len(stock) == len(frozen) == 100 and set(stock) == set(frozen)
+assert all(stock[key]["generated_token_ids"] == frozen[key]["generated_token_ids"] for key in frozen)
+assert all(stock[key].get("finish_reason") == frozen[key].get("finish_reason") for key in frozen)
+assert all(stock[key].get("stop_reason") == frozen[key].get("stop_reason") for key in frozen)
 assert run["numerical_diagnostics"]["valid"] is True
 assert run["numerical_diagnostics"]["record_count"] == 4
 assert {(row["request_id"], row["output_position"]) for row in rows} == expected
