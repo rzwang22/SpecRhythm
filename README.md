@@ -223,14 +223,21 @@ Target-blind isolation, cleanup, overlap existence and input artifact immutabili
 Mac tests prove these contracts without CUDA. They are not a GPU correctness result. The active
 3×A800 Gate 1/2/3 commands are in
 [docs/phase4b1-dual-correctness-runbook.md](docs/phase4b1-dual-correctness-runbook.md).
-Gate1 and Gate2 are closed at Outcome A. Gate3 remains open after exact per-token evidence
-localized the four corrected-100 divergences to bootstrap K/V. Its only authorized next GPU
-action is one ordinary stock Target-only TP=2 control with async scheduling explicitly disabled;
-the existing async-ON stock and resident endpoints are reused unchanged. The control and strict
-human-classification boundary are documented in
-[docs/phase4b1-gate3-matched-bootstrap.md](docs/phase4b1-gate3-matched-bootstrap.md).
-Packed-tree verification, Dual-Eager, KVConnector, serving performance and SLO evaluation remain
-outside this phase.
+Gate1 and Gate2 are closed at Outcome A. Gate3 exact stock equivalence remains unachieved at
+96/100, without tolerance or artifact rewriting. Prompt/semantic-prefix/logical-KV correctness
+passed, all four differences were localized to bootstrap BF16 numerical state, and the immutable
+matched async-OFF control reproduced stock rather than resident. The explicit human decision is
+therefore: numerical qualification complete, further Gate3 micro-diagnostics deferred,
+`gate3_exact_stock_equivalence=false`, and `phase4b2_progression_permitted=true`.
+
+Phase 4B.2 now provides a post-setup Target-TP measurement boundary, explicit semantic commit
+timestamps, exact bootstrap/measured-token accounting, decode latency/TPOT/makespan/throughput,
+JIT provenance, and a fail-closed resident Target/Serial/Dual-Batch comparator. Speedups are
+suppressed until all three resident modes match exactly. No GPU performance run has yet been
+performed for this implementation. The corrected-100 procedure is functional bring-up only; see
+[docs/phase4b2-decode-performance-runbook.md](docs/phase4b2-decode-performance-runbook.md).
+Packed-tree verification, Dual-Eager, KVConnector, load/SLO evaluation and final paper performance
+remain outside this phase.
 
 `input_tokens` is preserved in workloads but is not yet an input to the latency surface.
 Context-dependent latency is not implemented. Until GPU calibration, `D(B,K,C)`, `V(B,K,C)`,

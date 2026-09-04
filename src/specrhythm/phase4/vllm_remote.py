@@ -21,11 +21,17 @@ from specrhythm.phase4.decode_ready import (
     validate_decode_ready_manifest,
 )
 from specrhythm.phase4.manifest import atomic_write_json
+from specrhythm.phase4.performance_boundary import (
+    performance_requested,
+    publish_performance_boundary,
+    record_performance_commit,
+)
 from specrhythm.phase4.request_identity import FrozenPromptIdentityMap
 from specrhythm.phase4.resident_setup import (
     IncrementalResidentSetup,
     ResidentSetupRow,
     ResidentSetupStage,
+    build_deferred_initial_proposals_ready,
     build_setup_ready,
     classify_resident_setup_wave,
     load_setup_control,
@@ -105,6 +111,7 @@ class RemoteDraftProposer:
         self.resident_setup_complete = False
         self.resident_setup_tracker: Optional[IncrementalResidentSetup] = None
         self.measurement_start_ns: Optional[int] = None
+        self.performance_measurement_start_ns: Optional[int] = None
         self.decode_ready_manifest_path = (
             _required_path("SR_PHASE4_DECODE_READY_MANIFEST")
             if self.resident_mode
@@ -123,6 +130,11 @@ class RemoteDraftProposer:
         self.resident_setup_ready_path = (
             _required_path("SR_PHASE4_RESIDENT_SETUP_READY")
             if self.resident_mode
+            else None
+        )
+        self.deferred_initial_proposals_path = (
+            _required_path("SR_PHASE4B2_INITIAL_PROPOSALS_READY")
+            if self.resident_mode and performance_requested()
             else None
         )
         if self.resident_mode:
@@ -344,15 +356,18 @@ class RemoteDraftProposer:
         )
         if not isinstance(measurement_start_ns, int):
             raise RuntimeError("Serial measurement boundary was not broadcast")
+        deferred = performance_requested()
+        initial_proposals: tuple[Proposal, ...] = ()
         if self.tp_rank == 0:
             manifest = self._write_decode_ready_manifest(
                 setup,
                 barrier_ns=barrier_ns,
                 measurement_start_ns=measurement_start_ns,
             )
-            initial_proposals = self._generate_initial_resident_proposals(
-                measurement_start_ns
-            )
+            if not deferred:
+                initial_proposals = self._generate_initial_resident_proposals(
+                    measurement_start_ns
+                )
             assert self.resident_setup_ready_path is not None
             assert self.decode_ready_manifest_path is not None
             ready_published_ns = time.monotonic_ns()
@@ -362,6 +377,7 @@ class RemoteDraftProposer:
                 manifest_path=self.decode_ready_manifest_path,
                 initial_proposals=initial_proposals,
                 ready_published_ns=ready_published_ns,
+                initial_proposals_deferred=deferred,
             )
             atomic_write_json(self.resident_setup_ready_path, ready)
             assert self.decode_ready_timing_log is not None
@@ -372,12 +388,53 @@ class RemoteDraftProposer:
                     "timestamp_ns": ready_published_ns,
                     "consumer": "serial",
                     "request_count": len(self.definitions),
-                    "initial_proposal_generated": True,
-                    "initial_proposal_min_start_ns": min(
-                        row.draft_start_ns for row in initial_proposals
+                    "initial_proposal_generated": not deferred,
+                    "initial_proposal_min_start_ns": (
+                        min(row.draft_start_ns for row in initial_proposals)
+                        if initial_proposals
+                        else None
+                    ),
+                    "initial_proposals_deferred_until_performance_boundary": (
+                        deferred
                     ),
                 }
             )
+            published: Optional[Mapping[str, Any]] = ready
+        else:
+            published = None
+        published = self.tp_group.broadcast_object(published, src=0)
+        if (
+            not isinstance(published, Mapping)
+            or published.get("global_decode_ready") is not True
+        ):
+            raise RuntimeError("Serial global setup-ready publication was not broadcast")
+        performance_start = None
+        if deferred:
+            assert self.decode_ready_timing_log is not None
+            performance_start = publish_performance_boundary(
+                tp_group=self.tp_group,
+                torch_module=self.torch,
+                tp_rank=self.tp_rank,
+                timing_log=self.decode_ready_timing_log,
+                consumer="serial",
+                ready_published_ns=int(published["ready_published_ns"]),
+            )
+        if self.tp_rank == 0:
+            if deferred:
+                assert performance_start is not None
+                initial_proposals = self._generate_initial_resident_proposals(
+                    performance_start
+                )
+                assert self.deferred_initial_proposals_path is not None
+                atomic_write_json(
+                    self.deferred_initial_proposals_path,
+                    build_deferred_initial_proposals_ready(
+                        manifest,
+                        proposals=initial_proposals,
+                        performance_measurement_start_ns=performance_start,
+                        published_ns=time.monotonic_ns(),
+                    ),
+                )
             proposal_by_id = {row.request_id: row for row in initial_proposals}
             result: Optional[dict[str, Any]] = {
                 "draft_token_ids": [
@@ -392,6 +449,7 @@ class RemoteDraftProposer:
             raise RuntimeError("Serial initial proposals were not broadcast")
         self.resident_setup_complete = True
         self.measurement_start_ns = measurement_start_ns
+        self.performance_measurement_start_ns = performance_start
         self._write_report()
         return dict(result)
 
@@ -637,9 +695,18 @@ class RemoteDraftProposer:
             else:
                 if state.pending_proposal is None:
                     if generated != state.generated_token_ids:
-                        state.tail_target_tokens += len(generated) - len(state.generated_token_ids)
+                        tail = generated[len(state.generated_token_ids) :]
+                        state.tail_target_tokens += len(tail)
                         state.generated_token_ids = generated
                         state.committed_token_ids = logical_prefix
+                        if self.resident_mode:
+                            assert self.decode_ready_timing_log is not None
+                            record_performance_commit(
+                                self.decode_ready_timing_log,
+                                request_id=stable_id,
+                                token_ids=tail,
+                                source="serial-proposal-free-target-tail-commit",
+                            )
                     state.finished = terminal
                 else:
                     if not _starts_with(logical_prefix, state.committed_token_ids):
@@ -850,6 +917,10 @@ class RemoteDraftProposer:
                     else 0
                 ),
                 "measurement_start_ns": self.measurement_start_ns,
+                "performance_measurement_start_ns": (
+                    self.performance_measurement_start_ns
+                ),
+                "phase4b2_performance_requested": performance_requested(),
             },
         )
 

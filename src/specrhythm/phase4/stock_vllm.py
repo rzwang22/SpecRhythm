@@ -252,6 +252,26 @@ def _worker_runtime_snapshot(worker: Any) -> dict[str, Any]:
     return result
 
 
+def _worker_performance_finalize(worker: Any) -> dict[str, Any]:
+    """Synchronize each Target rank once after decode and timestamp completion."""
+
+    import time
+
+    import torch
+
+    torch.cuda.synchronize(worker.device)
+    identity = active_cuda_device_identity(torch, worker.device)
+    return {
+        "global_rank": int(worker.rank),
+        "local_rank": int(worker.local_rank),
+        "world_size": int(worker.vllm_config.parallel_config.world_size),
+        "logical_cuda_index": identity["logical_cuda_index"],
+        "physical_gpu_id": identity["physical_gpu_id"],
+        "gpu_uuid": identity["gpu_uuid"],
+        "final_cuda_synchronize_complete_ns": time.monotonic_ns(),
+    }
+
+
 def _qualified_class_name(value: Any) -> str:
     return f"{value.__module__}.{value.__qualname__}"
 

@@ -47,6 +47,7 @@ from specrhythm.phase4.serial_runner import (
 from specrhythm.phase4.stock_vllm import (
     _serialize_outputs,
     _visible_physical_ids,
+    _worker_performance_finalize,
     _worker_runtime_snapshot,
     load_smoke_requests,
     validate_worker_ranks,
@@ -363,6 +364,7 @@ def run_resident_dual_batch(
     microbatch_size: int = 2,
     test_coordination: str = "none",
     overlap_requirement: str = "required",
+    phase4b2_performance: bool = False,
 ) -> dict[str, Any]:
     """Run real decode-only resident Dual correctness without performance claims."""
 
@@ -458,6 +460,9 @@ def run_resident_dual_batch(
         request_count=request_count,
         test_coordination=test_coordination,
     )
+    os.environ["SR_PHASE4B2_PERFORMANCE"] = (
+        "1" if phase4b2_performance else "0"
+    )
     try:
         import torch
         from vllm import LLM, SamplingParams
@@ -520,7 +525,13 @@ def run_resident_dual_batch(
     )
     started_ns = time.monotonic_ns()
     outputs = llm.generate(prompts, parameters, use_tqdm=False)
-    torch.cuda.synchronize()
+    final_sync_rows = (
+        llm.collective_rpc(_worker_performance_finalize)
+        if phase4b2_performance
+        else []
+    )
+    if not phase4b2_performance:
+        torch.cuda.synchronize()
     ended_ns = time.monotonic_ns()
     serialized = _serialize_outputs(outputs, requests)
     checkpoint = CheckpointJsonl(output_checkpoint_path)
@@ -608,6 +619,15 @@ def run_resident_dual_batch(
         "errors": errors,
         "gpu_correctness_result": True,
         "performance_result": False,
+        "phase4b2_performance_candidate": phase4b2_performance,
+        "phase4b2_final_sync": final_sync_rows,
+        "historical_gate3_qualification": {
+            "gate3_exact_stock_equivalence": False,
+            "logical_correctness_qualification": True,
+            "numerical_qualification": "complete",
+            "phase4b2_progression_permitted": True,
+            "stock_comparison_required_for_phase4b2_validity": False,
+        },
         "reports_speedup": False,
         "reports_tpot": False,
         "reports_throughput": False,

@@ -825,6 +825,11 @@ def build_parser() -> argparse.ArgumentParser:
         default="required",
         help="keep physical overlap mandatory or report it for a separate gate",
     )
+    phase4b1_dual_run.add_argument(
+        "--phase4b2-performance",
+        action="store_true",
+        help="publish the post-setup Phase-4B.2 measurement boundary",
+    )
 
     phase4b1_validate = subparsers.add_parser(
         "phase4b1-dual-correctness-validate",
@@ -921,6 +926,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     phase4_resident_target.add_argument("--numerical-diagnostic-plan")
     phase4_resident_target.add_argument("--numerical-diagnostic-output")
+    phase4_resident_target.add_argument(
+        "--phase4b2-performance",
+        action="store_true",
+        help="publish the post-setup Phase-4B.2 measurement boundary",
+    )
 
     phase4_numerical_compare = subparsers.add_parser(
         "phase4b1-gate3-numerical-compare",
@@ -1021,6 +1031,11 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("default", "batch-invariant"),
         default="batch-invariant",
     )
+    phase4_resident_serial.add_argument(
+        "--phase4b2-performance",
+        action="store_true",
+        help="defer the initial proposal until the Phase-4B.2 boundary",
+    )
 
     phase4_resident_validate = subparsers.add_parser(
         "phase4-resident-validate",
@@ -1031,6 +1046,33 @@ def build_parser() -> argparse.ArgumentParser:
     phase4_resident_validate.add_argument("--target-manifest", required=True)
     phase4_resident_validate.add_argument("--serial-manifest", required=True)
     phase4_resident_validate.add_argument("--output", required=True)
+
+    phase4b2_run = subparsers.add_parser(
+        "phase4b2-decode-run",
+        help="derive one immutable decode-only performance artifact from a resident run",
+    )
+    phase4b2_run.add_argument(
+        "--mode", choices=("target", "serial", "dual-batch"), required=True
+    )
+    for name in (
+        "run-root",
+        "workload",
+        "config",
+        "topology",
+        "patch-manifest",
+        "output",
+    ):
+        phase4b2_run.add_argument(f"--{name}", required=True)
+
+    phase4b2_compare = subparsers.add_parser(
+        "phase4b2-decode-compare",
+        help="exact-compare resident modes and expose metrics only after the full triangle",
+    )
+    phase4b2_compare.add_argument("--target", required=True)
+    phase4b2_compare.add_argument("--serial", required=True)
+    phase4b2_compare.add_argument("--dual")
+    phase4b2_compare.add_argument("--output", required=True)
+    phase4b2_compare.add_argument("--markdown-output", required=True)
 
     phase4_bi_probe = subparsers.add_parser(
         "phase4-batch-invariant-preflight",
@@ -1667,6 +1709,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 microbatch_size=args.microbatch_size,
                 test_coordination=args.test_coordination,
                 overlap_requirement=args.overlap_requirement,
+                phase4b2_performance=args.phase4b2_performance,
             )
         except (
             FileExistsError,
@@ -1943,6 +1986,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     if args.numerical_diagnostic_output
                     else None
                 ),
+                phase4b2_performance=args.phase4b2_performance,
             )
         except (
             FileExistsError,
@@ -2010,6 +2054,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 resident_initial_proposal_events_path=Path(
                     args.initial_proposal_events
                 ).resolve(),
+                phase4b2_performance=args.phase4b2_performance,
             )
             _write_json(report, args.output)
         except (
@@ -2039,6 +2084,51 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 "performance_result": False,
             }
         _write_json(report, args.output)
+        return 0 if report["valid"] else 1
+    if args.command == "phase4b2-decode-run":
+        from specrhythm.phase4.performance import build_decode_performance_result
+
+        try:
+            report = build_decode_performance_result(
+                mode=args.mode,
+                run_root=Path(args.run_root).resolve(),
+                workload_path=Path(args.workload).resolve(),
+                config_path=Path(args.config).resolve(),
+                topology_path=Path(args.topology).resolve(),
+                patch_manifest_path=Path(args.patch_manifest).resolve(),
+                output_path=Path(args.output).resolve(),
+            )
+        except (
+            FileExistsError,
+            FileNotFoundError,
+            KeyError,
+            RuntimeError,
+            TypeError,
+            ValueError,
+            json.JSONDecodeError,
+        ) as error:
+            raise SystemExit(f"Phase-4B.2 decode measurement failed: {error}") from error
+        return 0 if report["valid"] else 1
+    if args.command == "phase4b2-decode-compare":
+        from specrhythm.phase4.performance import compare_decode_performance_results
+
+        try:
+            report = compare_decode_performance_results(
+                target_path=Path(args.target).resolve(),
+                serial_path=Path(args.serial).resolve(),
+                dual_path=Path(args.dual).resolve() if args.dual else None,
+                output_path=Path(args.output).resolve(),
+                markdown_path=Path(args.markdown_output).resolve(),
+            )
+        except (
+            FileExistsError,
+            FileNotFoundError,
+            KeyError,
+            TypeError,
+            ValueError,
+            json.JSONDecodeError,
+        ) as error:
+            raise SystemExit(f"Phase-4B.2 comparison failed: {error}") from error
         return 0 if report["valid"] else 1
     if args.command == "phase4-batch-invariant-preflight":
         from specrhythm.phase4.batch_invariant import (

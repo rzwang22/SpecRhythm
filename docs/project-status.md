@@ -1,6 +1,6 @@
 # SpecRhythm project status
 
-Last updated: 2026-09-04
+Last updated: 2026-09-05
 
 Maintenance rule: every code-changing PR updates this file with its scope, status, evidence,
 known limitations, and next gate before that PR is considered complete.
@@ -34,7 +34,7 @@ claims.
 | [#1 workload-v0.1](https://github.com/rzwang22/SpecRhythm/pull/1) | merged | strict Mooncake replay, R3 proxy config, validator, manifest, fixture tests and docs | workload plumbing only; proxy payload and illustrative acceptance |
 | [#2 simulator-semantics-v0.2](https://github.com/rzwang22/SpecRhythm/pull/2) | frozen draft; Phase 2 complete, not merged | proposal lifecycle, deterministic tree oracle, tree-aware allocators, base-preserving residual controls, Phase-2 nested search pools and common-snapshot oracle replay, path-aware eager and accounting | pure-Python proxy and oracle upper bounds only; no deployable oracle, measured search cost, GPU integration, or performance claim |
 | [#3 gpu-integration-v0.1](https://github.com/rzwang22/SpecRhythm/pull/3) | draft; Phase 3B.1 and corrected-20 Phase 3C.2 complete; Phase 3C.3 corrected-100 awaiting server run | hardened multi-rank primitives, corrected R3-real traces, common-prefix replay, request-bootstrap statistics, 2x shell decomposition and diagnostic learned ranker | user-run 3×A800 correctness artifacts plus Mac CPU tests; no packed-tree/serving engine, Dual-Batch, SLO, calibrated latency or speedup claim |
-| [#4 vllm-serving-v0.1](https://github.com/rzwang22/SpecRhythm/pull/4) | draft; Gate1/Gate2 Outcome A; Gate3 exact output still fails 4/100; per-token localization is `BOOTSTRAP`; matched async-OFF Target control awaits one A800 run | decode-ready Target/Serial plus real asynchronous resident Dual runner, lifecycle/scheduler/KV/accounting evidence, scale-safe chunked-prefill setup and diagnostic-only numerical localization | correctness evidence only; Gate3 remains open; no tolerance, performance, packed tree, eager, KVConnector, SLO or goodput claim |
+| [#4 vllm-serving-v0.1](https://github.com/rzwang22/SpecRhythm/pull/4) | draft; Gate1/Gate2 Outcome A; Gate3 numerical qualification complete; Phase 4B.2 infrastructure implemented, A800 run pending | resident Target/Serial/Dual correctness, frozen Gate3 localization, post-setup performance boundary, exact commit accounting and cross-mode metric gate | no GPU performance result yet; no tolerance, packed tree, eager, KVConnector, SLO or goodput claim |
 
 ## Phase 4A.0–4A.1: vLLM freeze and Serial Disaggregated correctness
 
@@ -202,8 +202,10 @@ supersedes only structurally proven historical errors. The helper continues to p
 validator exit codes while always checking cleanup. Subsequent user-run A800 evidence established
 Outcome A for controlled Gate1 and default-asynchronous corrected-5 Gate2, including exact
 Target/Serial/Dual output equality, correct GPU1/GPU2 TP identity and hardware-qualified overlap
-in both Gate2 Dual runs. Gate3 recovery is the only authorized next GPU action; performance,
-Dual-Eager, Phase4B.2 and SLO work remain blocked.
+in both Gate2 Dual runs. At that historical checkpoint, Gate3 recovery was the only authorized
+next GPU action and Phase 4B.2 remained blocked. The later numerical qualification and explicit
+human progression decision documented below supersede that project-level block without changing
+the immutable historical artifacts.
 
 The first corrected-100 Gate3 attempt at commit `eba0df4` completed preparation, froze its one
 allowed deterministic stock pair and applied the patch stack, then failed in resident Target
@@ -253,16 +255,56 @@ and 56 respectively. The preceding control layers remain exact. The stock endpoi
 Target-only async scheduling; the resident endpoint disables async through custom-class resident
 execution. This is a causal hypothesis, not proof.
 
-The only authorized next GPU action is therefore one ordinary stock-style corrected-100 Target
-run with the pinned public `LLM(async_scheduling=False)` option. It reuses, checksums, and does not
-rerun either 8773 endpoint. `speculative_config` remains null, the stock scheduler remains in use,
-and no Draft/resident machinery is allowed. A three-way exact comparator reports
-`ASYNC_OFF_MATCHES_RESIDENT`, `ASYNC_OFF_MATCHES_STOCK`, `ASYNC_OFF_THIRD_STATE`,
-`MIXED_BY_REQUEST`, or `FAIL-CLOSED`; none automatically closes Gate3. New captures independently
-bind per-token K/V hashes to the reconstructed logical tensor. Serial, Dual, Dual-Eager,
-performance, Phase 4B.2, and tolerant correctness remain blocked. See
+The immutable matched-bootstrap control under commit `efea5c8` subsequently classified
+`ASYNC_OFF_MATCHES_STOCK`: ordinary stock Target with async scheduling disabled reproduced the
+stock async-ON K/V, raw logits and output for all four divergent requests, not the resident
+endpoint. Async scheduling is therefore ruled out as the root cause and no more async, layer,
+token-KV, mantissa, class-only, freeze-only or cohort-only micro-diagnostics are authorized. See
 [phase4b1-gate3-numerical-diagnostics.md](phase4b1-gate3-numerical-diagnostics.md) and
 [phase4b1-gate3-matched-bootstrap.md](phase4b1-gate3-matched-bootstrap.md).
+
+The explicit human engineering decision is now:
+
+- Gate3 structural, semantic-prefix, prompt-KV and logical-KV-ownership correctness: **PASS**.
+- Gate3 exact stock trajectory: **NOT ACHIEVED (96/100)**; no tolerance is introduced and the
+  four divergent tokens remain visible in immutable artifacts.
+- The residual classification is `cross-execution-regime bootstrap numerical divergence`.
+- Gate3 numerical qualification: **COMPLETE**; further micro-diagnostics: **DEFERRED**.
+- `gate3_exact_stock_equivalence=false` and `phase4b2_progression_permitted=true` coexist by
+  design. Historical artifacts retaining `phase4b2_blocked=true` are not rewritten.
+
+## Phase 4B.2: decode-only performance infrastructure
+
+Phase 4B.2 is a measurement layer around the existing resident Target, Serial and Dual-Batch
+paths; it is not a second serving implementation. The historical decode-ready manifest boundary
+remains unchanged. Performance mode first atomically publishes setup-ready, performs one final
+Target-TP barrier and per-rank CUDA synchronization, broadcasts a later monotonic
+`performance_measurement_start_ns`, and only then permits the Serial round-zero proposal or Dual
+initial enqueue. Target performs no measured Draft proposals. There is no per-token CUDA
+synchronization; after generation, one collective RPC synchronizes every Target rank and records
+the final completion evidence.
+
+Rank-zero resident callbacks emit explicit semantic token-commit events. Serial proposal commits
+use the existing `state_sync_end_ns`, Dual proposal commits use existing `commit_end_ns`, and
+proposal-free Target tails use the new explicit commit event. The measurement layer reconstructs
+every request as exactly one setup bootstrap plus measured commits and fails if that identity does
+not equal the final generated sequence. Per-request latency is final commit minus the shared
+boundary. TPOT is `(last_commit-first_commit)/(measured_tokens-1)` and is null for a one-token
+request. Makespan is the latest final commit minus the boundary; aggregate throughput is measured
+committed tokens divided by makespan.
+
+Standalone mode artifacts cannot produce a speedup. The final comparator requires exact resident
+Target==Serial==Dual request IDs, prompt hashes, bootstrap, maximum output, measured/final tokens,
+finish/termination, workload, patch, configuration and topology provenance. A mismatch sets
+`performance_valid=false` and emits no speedup. Timestamped process output is used only to report
+post-boundary JIT warnings and `warmup_clean`; it is never a latency authority. The initial
+corrected-100 run is functional bring-up, not a final paper workload or result. The Mac coding
+agent implemented and CPU-tested this infrastructure without running CUDA. See
+[phase4b2-decode-performance-runbook.md](phase4b2-decode-performance-runbook.md).
+
+After a successful Phase 4B.2 bring-up, Phase 4B.3 adds fixed-output batch/output/context sweeps;
+Phase 4C then adds real-GPU Dual-Eager. Arrival-rate, throughput/goodput/SLO and capacity-knee
+evaluation remain later work.
 
 ## Phase 3.0: GPU readiness and real-trace runner
 
@@ -574,9 +616,10 @@ compute-waste ratios.
 - `D(B,K,C)`, `V(B,K,C)`, acceptance, confidence, and candidate roof are proxy inputs until GPU
   calibration.
 - R3 proxy lengths are sampled and are not HumanEval, Alpaca, or CNN/DailyMail payloads.
-- Phase 4B.1 has a decode-only asynchronous linear Dual runner and complete controlled A800 raw
-  evidence; the current read-only validator closure still must be executed on that immutable tree. It
-  has no SGLang, packed-tree verification, Dual-Eager, KVConnector, arrival scheduling, or serving
-  performance evaluation. The persistent Draft HF adapter is correctness-only.
+- Phase 4B.1 has a decode-only asynchronous linear Dual runner, complete Gate1/Gate2 A800
+  correctness evidence, and completed Gate3 numerical qualification. Phase 4B.2 performance
+  infrastructure is implemented but has no A800 result yet. It has no SGLang, packed-tree
+  verification, Dual-Eager, KVConnector, arrival scheduling, load/SLO or final-paper evaluation.
+  The persistent Draft HF adapter is still a narrow serving prototype.
 - No current result may be cited as evidence of real GPU speedup or full AdaServe/SpecRhythm
   reproduction.

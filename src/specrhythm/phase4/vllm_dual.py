@@ -23,6 +23,11 @@ from specrhythm.phase4.decode_ready import (
 from specrhythm.phase4.dual import DualProposal
 from specrhythm.phase4.dual_service import DualDraftClient
 from specrhythm.phase4.manifest import atomic_write_json
+from specrhythm.phase4.performance_boundary import (
+    performance_requested,
+    publish_performance_boundary,
+    record_performance_commit,
+)
 from specrhythm.phase4.request_identity import FrozenPromptIdentityMap
 from specrhythm.phase4.resident_setup import (
     IncrementalResidentSetup,
@@ -107,6 +112,7 @@ class DualBatchRemoteProposer:
         self.setup_complete = False
         self.setup_tracker: Optional[IncrementalResidentSetup] = None
         self.measurement_start_ns: Optional[int] = None
+        self.performance_measurement_start_ns: Optional[int] = None
         if self.resident_decode_ready:
             self.manifest_path = _required_path("SR_PHASE4_DECODE_READY_MANIFEST")
             self.setup_control_path = _required_path("SR_PHASE4_RESIDENT_SETUP_CONTROL")
@@ -335,6 +341,7 @@ class DualBatchRemoteProposer:
         )
         if not isinstance(measurement_start_ns, int):
             raise RuntimeError("resident Dual measurement boundary was not broadcast")
+        performance_mode = performance_requested()
         if self.tp_rank == 0:
             observations = setup.get("observations")
             if not isinstance(observations, list):
@@ -348,11 +355,12 @@ class DualBatchRemoteProposer:
                 measurement_start_ns=measurement_start_ns,
             )
             atomic_write_json(self.manifest_path, manifest.to_dict())
+            ready_published_ns = time.monotonic_ns()
             ready = build_setup_ready(
                 manifest,
                 consumer="dual-batch",
                 manifest_path=self.manifest_path,
-                ready_published_ns=time.monotonic_ns(),
+                ready_published_ns=ready_published_ns,
             )
             atomic_write_json(self.setup_ready_path, ready)
             self.timing_log.append(
@@ -365,26 +373,8 @@ class DualBatchRemoteProposer:
                     "initial_proposal_generated": False,
                 }
             )
-            initial_rows = []
-            for request_id, state in self.requests.items():
-                if state.terminal:
-                    continue
-                self._transition(
-                    request_id,
-                    "DRAFTING",
-                    reason="post-measurement-initial-proposal",
-                )
-                initial_rows.append(
-                    {
-                        **self._work_row(request_id, state, terminal=False),
-                        "measurement_start_ns": measurement_start_ns,
-                    }
-                )
-            if initial_rows:
-                self.client.call(
-                    "enqueue",
-                    {"work_operation": "propose_only", "rows": initial_rows},
-                )
+            if not performance_mode:
+                self._enqueue_initial_proposals(measurement_start_ns)
             published: Optional[Mapping[str, Any]] = ready
         else:
             published = None
@@ -394,9 +384,52 @@ class DualBatchRemoteProposer:
             or published.get("global_decode_ready") is not True
         ):
             raise RuntimeError("resident Dual setup-ready publication was not broadcast")
+        performance_start = None
+        if performance_mode:
+            performance_start = publish_performance_boundary(
+                tp_group=self.tp_group,
+                torch_module=self.torch,
+                tp_rank=self.tp_rank,
+                timing_log=self.timing_log,
+                consumer="dual-batch",
+                ready_published_ns=int(published["ready_published_ns"]),
+            )
+            if self.tp_rank == 0:
+                self._enqueue_initial_proposals(performance_start)
+                initial_enqueued: Optional[bool] = True
+            else:
+                initial_enqueued = None
+            initial_enqueued = self.tp_group.broadcast_object(
+                initial_enqueued, src=0
+            )
+            if initial_enqueued is not True:
+                raise RuntimeError("resident Dual initial enqueue was not broadcast")
         self.setup_complete = True
         self.measurement_start_ns = measurement_start_ns
+        self.performance_measurement_start_ns = performance_start
         self._write_report()
+
+    def _enqueue_initial_proposals(self, measurement_start_ns: int) -> None:
+        initial_rows = []
+        for request_id, state in self.requests.items():
+            if state.terminal:
+                continue
+            self._transition(
+                request_id,
+                "DRAFTING",
+                reason="post-measurement-initial-proposal",
+            )
+            initial_rows.append(
+                {
+                    **self._work_row(request_id, state, terminal=False),
+                    "measurement_start_ns": measurement_start_ns,
+                }
+            )
+        if initial_rows:
+            self.client.call(
+                "enqueue",
+                {"work_operation": "propose_only", "rows": initial_rows},
+            )
 
     def _setup_tracker(self) -> IncrementalResidentSetup:
         if self.setup_tracker is None:
@@ -819,6 +852,12 @@ class DualBatchRemoteProposer:
                 state.committed_token_ids = prefix
                 state.generated_token_ids = generated
                 state.terminal = True
+                record_performance_commit(
+                    self.timing_log,
+                    request_id=request_id,
+                    token_ids=delta,
+                    source="dual-proposal-free-target-tail-commit",
+                )
                 tail_rows.append(
                     {
                         "request_id": request_id,
@@ -938,6 +977,10 @@ class DualBatchRemoteProposer:
                 "resident_decode_ready": self.resident_decode_ready,
                 "setup_complete": self.setup_complete,
                 "measurement_start_ns": self.measurement_start_ns,
+                "performance_measurement_start_ns": (
+                    self.performance_measurement_start_ns
+                ),
+                "phase4b2_performance_requested": performance_requested(),
                 "request_identity": {
                     "stable_key": "frozen workload request_id",
                     "internal_key": "opaque vLLM request_id",

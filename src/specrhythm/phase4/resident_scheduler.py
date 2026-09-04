@@ -13,6 +13,7 @@ from specrhythm.phase4.resident_initial_proposal import (
 )
 from specrhythm.phase4.resident_setup import (
     ADMISSION_EVENT_SCHEMA,
+    load_deferred_initial_proposals_ready,
     load_setup_ready,
     resident_admission_decision,
 )
@@ -56,6 +57,11 @@ class ResidentSetupScheduler(Scheduler):
         self._resident_initial_lifecycle: Optional[
             ResidentInitialProposalLifecycle
         ] = None
+        self._resident_deferred_proposals_path = (
+            _required_path("SR_PHASE4B2_INITIAL_PROPOSALS_READY")
+            if consumer == "serial" and os.environ.get("SR_PHASE4B2_PERFORMANCE") == "1"
+            else None
+        )
         self._resident_proposal_events = (
             CheckpointJsonl(
                 _required_path("SR_PHASE4_RESIDENT_INITIAL_PROPOSAL_EVENTS")
@@ -69,6 +75,7 @@ class ResidentSetupScheduler(Scheduler):
     def schedule(self, *args: Any, **kwargs: Any) -> Any:
         self._bind_requests()
         self._refresh_readiness()
+        self._refresh_deferred_initial_proposals()
         if self._resident_initial_lifecycle is not None:
             self._resident_initial_lifecycle.prepare_for_schedule(
                 self.requests, cycle_id=self._resident_cycle_id
@@ -181,9 +188,34 @@ class ResidentSetupScheduler(Scheduler):
                 mappings.get(stable_id, "")
             ):
                 raise RuntimeError("resident scheduler identity differs from setup-ready")
+        if ready.get("initial_proposals_deferred_until_performance_boundary") is True:
+            return
         proposals = tuple(
             Proposal.from_dict(row) for row in ready.get("initial_proposals", ())
         )
+        self._publish_initial_proposals(mappings, proposals)
+
+    def _refresh_deferred_initial_proposals(self) -> None:
+        if (
+            self._resident_ready is None
+            or self._resident_initial_lifecycle is not None
+            or self._resident_deferred_proposals_path is None
+            or not self._resident_deferred_proposals_path.is_file()
+        ):
+            return
+        mappings = self._resident_ready.get("stable_to_internal_request_id", {})
+        if not isinstance(mappings, dict):
+            raise RuntimeError("resident setup-ready identity mapping is invalid")
+        proposals = load_deferred_initial_proposals_ready(
+            self._resident_deferred_proposals_path,
+            manifest_path=self._resident_manifest_path,
+            expected_request_ids=self._resident_expected_ids,
+        )
+        self._publish_initial_proposals(mappings, proposals)
+
+    def _publish_initial_proposals(
+        self, mappings: dict[str, Any], proposals: tuple[Proposal, ...]
+    ) -> None:
         assert self._resident_proposal_events is not None
         self._resident_initial_lifecycle = ResidentInitialProposalLifecycle(
             expected_request_ids=self._resident_expected_ids,

@@ -1,5 +1,9 @@
 # Phase 4B.1 real decode-only Dual-Batch correctness runbook
 
+> Historical procedure, frozen 2026-09-05. Gate1/Gate2 Outcome A and Gate3 numerical
+> qualification are complete. Do not rerun the Gate3 micro-diagnostic commands below. The active
+> next procedure is [Phase 4B.2 decode-only performance](phase4b2-decode-performance-runbook.md).
+
 This is the active 3×A800 procedure after Phase 4B.0. It runs correctness only. It must not be
 used to report TPOT, latency, throughput, goodput, SLO, speedup or overlap benefit. Stop on the
 first nonzero command. Never reuse a run directory, delete an earlier failure, or run Gate 2/3
@@ -75,7 +79,7 @@ Each state accepts only its exact pinned runner/scheduler SHA pair; a partial or
 fails closed. The legacy read-only section remains the immutable `3ee1c3e` closure procedure; it
 is not part of the active Gate3 recovery and must keep its output outside the old tree.
 
-## Active Gate3 matched-bootstrap async-OFF control
+## Historical completed Gate3 matched-bootstrap async-OFF control
 
 The immutable endpoint root is:
 

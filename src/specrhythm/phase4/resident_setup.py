@@ -25,6 +25,7 @@ from specrhythm.phase4.serial import Proposal
 
 SETUP_CONTROL_SCHEMA = "specrhythm.phase4b-resident-setup-control.v1"
 SETUP_READY_SCHEMA = "specrhythm.phase4b-resident-setup-ready.v1"
+DEFERRED_PROPOSALS_SCHEMA = "specrhythm.phase4b2-initial-proposals-ready.v1"
 ADMISSION_EVENT_SCHEMA = "specrhythm.phase4b-resident-admission-event.v1"
 RESIDENT_CONSUMERS = {"target-only", "serial", "dual-batch"}
 
@@ -388,6 +389,7 @@ def build_setup_ready(
     manifest_path: Path,
     initial_proposals: Sequence[Proposal] = (),
     ready_published_ns: int,
+    initial_proposals_deferred: bool = False,
 ) -> dict[str, Any]:
     if consumer not in RESIDENT_CONSUMERS:
         raise ValueError(
@@ -398,9 +400,17 @@ def build_setup_ready(
     proposals = tuple(initial_proposals)
     proposal_ids = {proposal.request_id for proposal in proposals}
     expected_ids = {request.request_id for request in manifest.requests}
+    if initial_proposals_deferred and consumer != "serial":
+        raise ValueError("only Serial readiness may defer its initial proposals")
+    if initial_proposals_deferred and proposals:
+        raise ValueError("deferred Serial readiness cannot contain initial proposals")
     if consumer in {"target-only", "dual-batch"} and proposals:
         raise ValueError(f"{consumer} readiness cannot contain proposals")
-    if consumer == "serial" and proposal_ids != expected_ids:
+    if (
+        consumer == "serial"
+        and not initial_proposals_deferred
+        and proposal_ids != expected_ids
+    ):
         raise ValueError("Serial readiness requires one initial proposal per request")
     if len(proposal_ids) != len(proposals):
         raise ValueError("resident readiness proposal IDs must be unique")
@@ -433,6 +443,9 @@ def build_setup_ready(
         "measurement_start_ns": manifest.measurement_start_ns,
         "ready_published_ns": ready_published_ns,
         "initial_proposals": [proposal.to_dict() for proposal in proposals],
+        "initial_proposals_deferred_until_performance_boundary": (
+            initial_proposals_deferred
+        ),
         "initial_proposal_generated_before_measurement": False,
     }
     return {**payload, "artifact_sha256": _payload_sha256(payload)}
@@ -455,6 +468,98 @@ def load_setup_ready(
     if errors:
         raise RuntimeError("invalid resident setup readiness: " + "; ".join(errors))
     return value
+
+
+def build_deferred_initial_proposals_ready(
+    manifest: DecodeReadyManifest,
+    *,
+    proposals: Sequence[Proposal],
+    performance_measurement_start_ns: int,
+    published_ns: int,
+) -> dict[str, Any]:
+    proposal_rows = tuple(proposals)
+    expected = [row.request_id for row in manifest.requests]
+    if [row.request_id for row in proposal_rows] != expected:
+        raise ValueError("deferred initial proposal request set/order differs")
+    if published_ns < performance_measurement_start_ns:
+        raise ValueError("deferred proposal publication predates performance boundary")
+    if any(
+        row.round_id != 0
+        or row.draft_start_ns < performance_measurement_start_ns
+        for row in proposal_rows
+    ):
+        raise ValueError("deferred initial proposal predates performance boundary")
+    request_by_id = {row.request_id: row for row in manifest.requests}
+    if any(
+        proposal.parent_prefix_len
+        != request_by_id[proposal.request_id].logical_committed_prefix_count
+        or proposal.parent_prefix_hash
+        != request_by_id[proposal.request_id].logical_committed_prefix_sha256
+        for proposal in proposal_rows
+    ):
+        raise ValueError("deferred initial proposal parent differs from manifest")
+    payload = {
+        "schema_version": DEFERRED_PROPOSALS_SCHEMA,
+        "manifest_sha256": manifest.manifest_sha256,
+        "performance_measurement_start_ns": performance_measurement_start_ns,
+        "published_ns": published_ns,
+        "request_ids": expected,
+        "proposals": [row.to_dict() for row in proposal_rows],
+    }
+    return {**payload, "artifact_sha256": _payload_sha256(payload)}
+
+
+def load_deferred_initial_proposals_ready(
+    path: Path,
+    *,
+    manifest_path: Path,
+    expected_request_ids: Sequence[str],
+) -> tuple[Proposal, ...]:
+    value = _read_object(path)
+    manifest = load_decode_ready_manifest(_read_object(manifest_path))
+    payload = {key: item for key, item in value.items() if key != "artifact_sha256"}
+    errors = []
+    if value.get("schema_version") != DEFERRED_PROPOSALS_SCHEMA:
+        errors.append("unsupported deferred initial-proposal schema")
+    if value.get("manifest_sha256") != manifest.manifest_sha256:
+        errors.append("deferred proposals reference a different manifest")
+    expected = [str(item) for item in expected_request_ids]
+    if value.get("request_ids") != expected:
+        errors.append("deferred initial-proposal request set/order differs")
+    start = value.get("performance_measurement_start_ns")
+    published = value.get("published_ns")
+    if not isinstance(start, int) or not isinstance(published, int) or published < start:
+        errors.append("deferred proposal timing is invalid")
+    rows = value.get("proposals")
+    proposals = []
+    if not isinstance(rows, list):
+        errors.append("deferred proposals are not a list")
+    else:
+        for row in rows:
+            try:
+                proposals.append(Proposal.from_dict(row))
+            except (TypeError, ValueError) as error:
+                errors.append(f"deferred initial proposal is invalid: {error}")
+    if [row.request_id for row in proposals] != expected:
+        errors.append("deferred proposal identities differ")
+    if isinstance(start, int) and any(
+        row.round_id != 0 or row.draft_start_ns < start for row in proposals
+    ):
+        errors.append("deferred initial proposal predates performance boundary")
+    manifest_by_id = {row.request_id: row for row in manifest.requests}
+    if all(row.request_id in manifest_by_id for row in proposals) and any(
+        row.parent_prefix_len
+        != manifest_by_id[row.request_id].logical_committed_prefix_count
+        or row.parent_prefix_hash
+        != manifest_by_id[row.request_id].logical_committed_prefix_sha256
+        for row in proposals
+    ):
+        errors.append("deferred initial proposal parent differs from manifest")
+    if value.get("artifact_sha256") != _payload_sha256(payload):
+        errors.append("deferred initial-proposal artifact hash is invalid")
+    if errors:
+        raise RuntimeError("invalid deferred initial proposals: " + "; ".join(errors))
+    return tuple(proposals)
 
 
 def validate_setup_ready(
@@ -524,7 +629,14 @@ def validate_setup_ready(
     proposal_ids = [proposal.request_id for proposal in proposals]
     if consumer in {"target-only", "dual-batch"} and proposals:
         errors.append(f"{consumer} setup-ready contains proposals")
-    if consumer == "serial" and proposal_ids != expected:
+    deferred = value.get("initial_proposals_deferred_until_performance_boundary")
+    if deferred not in (True, False, None):
+        errors.append("setup-ready initial-proposal deferral flag is invalid")
+    if deferred is True and consumer != "serial":
+        errors.append("only Serial setup-ready may defer initial proposals")
+    if deferred is True and proposals:
+        errors.append("deferred Serial setup-ready contains initial proposals")
+    if consumer == "serial" and deferred is not True and proposal_ids != expected:
         errors.append("Serial setup-ready proposal request set/order differs")
     for proposal in proposals:
         request = next(

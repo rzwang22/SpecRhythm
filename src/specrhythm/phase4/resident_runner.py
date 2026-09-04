@@ -46,6 +46,7 @@ from specrhythm.phase4.serial_runner import (
 from specrhythm.phase4.stock_vllm import (
     _serialize_outputs,
     _visible_physical_ids,
+    _worker_performance_finalize,
     _worker_runtime_snapshot,
     load_smoke_requests,
     validate_worker_ranks,
@@ -122,6 +123,7 @@ def run_resident_target(
     correctness_mode: str = "batch-invariant",
     numerical_plan_path: Optional[Path] = None,
     numerical_output_path: Optional[Path] = None,
+    phase4b2_performance: bool = False,
 ) -> dict[str, Any]:
     """Run a real-KV decode-only Target pass; never derive performance metrics."""
 
@@ -217,6 +219,7 @@ def run_resident_target(
             "SR_PHASE4_RESIDENT_ADMISSION_EVENTS": str(admission_events_path),
             "SR_PHASE4_TARGET_DIAGNOSTICS": str(target_diagnostics_path),
             "SR_PHASE4_PLUGIN_REPORT": str(plugin_report_path),
+            "SR_PHASE4B2_PERFORMANCE": "1" if phase4b2_performance else "0",
         }
     )
     try:
@@ -280,7 +283,13 @@ def run_resident_target(
         ),
     )
     outputs = llm.generate(prompts, parameters, use_tqdm=False)
-    torch.cuda.synchronize()
+    final_sync_rows = (
+        llm.collective_rpc(_worker_performance_finalize)
+        if phase4b2_performance
+        else []
+    )
+    if not phase4b2_performance:
+        torch.cuda.synchronize()
     serialized = _serialize_outputs(outputs, requests)
     draft_shutdown = UnixDraftClient(draft_socket_path).shutdown()
     manifest_value = json.loads(decode_ready_manifest_path.read_text(encoding="utf-8"))
@@ -349,9 +358,12 @@ def run_resident_target(
         + admission_errors
         + numerical_errors
     )
-    if not raw_decode["valid"]:
+    if not raw_decode["valid"] and not phase4b2_performance:
         errors.extend(raw_decode["errors"])
-    if not stock_comparison["all_sequences_equal"]:
+    if (
+        not stock_comparison["all_sequences_equal"]
+        and not phase4b2_performance
+    ):
         errors.append("resident Target differs from immutable raw-prompt stock Target")
     result = {
         "schema_version": "specrhythm.phase4b-resident-target-run.v1",
@@ -362,6 +374,21 @@ def run_resident_target(
         "errors": errors,
         "gpu_correctness_result": True,
         "gpu_performance_result": False,
+        "phase4b2_performance_candidate": phase4b2_performance,
+        "phase4b2_final_sync": final_sync_rows,
+        "historical_gate3_qualification": {
+            "gate3_exact_stock_equivalence": False,
+            "exact_stock_trajectory": "96/100",
+            "current_run_stock_comparison_exact": stock_comparison[
+                "all_sequences_equal"
+            ],
+            "logical_correctness_qualification": True,
+            "numerical_qualification": "complete",
+            "phase4b2_progression_permitted": True,
+            "stock_comparison_excluded_from_phase4b2_validity": (
+                phase4b2_performance
+            ),
+        },
         "reports_speedup": False,
         "end_to_end_pd_deployment": False,
         "kv_connector_handoff": False,

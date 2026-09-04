@@ -336,6 +336,14 @@ phase4b1_run_mode () {
       --output "$phase4b1_dir/resident-dual.json"
     )
   fi
+  if test "${SR_PHASE4B2_PERFORMANCE:-0}" = 1; then
+    phase4b1_command+=(--phase4b2-performance)
+    phase4b1_command=(
+      python integrations/vllm/phase4b2_timestamp_command.py
+      --output "$phase4b1_dir/timestamped-target-log.jsonl"
+      -- "${phase4b1_command[@]}"
+    )
+  fi
   if phase4b_run_target_with_cleanup \
       "$PHASE4B1_DRAFT_PID" "$phase4b1_dir/target.log" \
       "$phase4b1_dir/draft-service.log" -- \

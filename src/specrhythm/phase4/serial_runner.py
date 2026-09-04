@@ -41,6 +41,7 @@ from specrhythm.phase4.stock_vllm import (
     _serialize_outputs,
     _update_combined_manifest,
     _visible_physical_ids,
+    _worker_performance_finalize,
     _worker_runtime_snapshot,
     load_smoke_requests,
     run_stock_smoke,
@@ -219,6 +220,7 @@ def run_serial_disaggregated(
     resident_setup_ready_path: Optional[Path] = None,
     resident_admission_events_path: Optional[Path] = None,
     resident_initial_proposal_events_path: Optional[Path] = None,
+    phase4b2_performance: bool = False,
 ) -> dict[str, Any]:
     """Run one real GPU correctness pass; no performance metrics are derived."""
 
@@ -296,6 +298,7 @@ def run_serial_disaggregated(
             "SR_PHASE4_TRANSPORT_EVENTS": str(transport_events_path),
             "SR_PHASE4_PLUGIN_REPORT": str(plugin_report_path),
             "SR_PHASE4_REQUEST_COUNT": str(effective_count),
+            "SR_PHASE4B2_PERFORMANCE": "1" if phase4b2_performance else "0",
         }
     )
     if resident_mode:
@@ -306,6 +309,13 @@ def run_serial_disaggregated(
         assert resident_setup_ready_path is not None
         assert resident_admission_events_path is not None
         assert resident_initial_proposal_events_path is not None
+        deferred_initial_proposals_path = resident_setup_ready_path.with_name(
+            "initial-proposals-ready.json"
+        )
+        if deferred_initial_proposals_path.exists():
+            raise FileExistsError(
+                "refusing to overwrite deferred initial-proposal artifact"
+            )
         os.environ.update(
             {
                 "SR_PHASE4_DECODE_READY_MODE": "1",
@@ -326,6 +336,9 @@ def run_serial_disaggregated(
                 "SR_PHASE4_RESIDENT_INITIAL_PROPOSAL_EVENTS": str(
                     resident_initial_proposal_events_path
                 ),
+                "SR_PHASE4B2_INITIAL_PROPOSALS_READY": str(
+                    deferred_initial_proposals_path
+                ),
             }
         )
     else:
@@ -340,6 +353,7 @@ def run_serial_disaggregated(
             "SR_PHASE4_RESIDENT_SETUP_READY",
             "SR_PHASE4_RESIDENT_ADMISSION_EVENTS",
             "SR_PHASE4_RESIDENT_INITIAL_PROPOSAL_EVENTS",
+            "SR_PHASE4B2_INITIAL_PROPOSALS_READY",
         ):
             os.environ.pop(name, None)
     if diagnostics_path is not None:
@@ -412,7 +426,13 @@ def run_serial_disaggregated(
             ),
         )
     outputs = llm.generate(prompts, parameters, use_tqdm=False)
-    torch.cuda.synchronize()
+    final_sync_rows = (
+        llm.collective_rpc(_worker_performance_finalize)
+        if phase4b2_performance
+        else []
+    )
+    if not phase4b2_performance:
+        torch.cuda.synchronize()
     generation_end = time.monotonic_ns()
     serialized = _serialize_outputs(outputs, requests)
     comparison = compare_outputs_to_reference(serialized, reference)
@@ -460,6 +480,21 @@ def run_serial_disaggregated(
         **batch_validation,
         "gpu_correctness_result": True,
         "gpu_performance_result": False,
+        "phase4b2_performance_candidate": phase4b2_performance,
+        "phase4b2_final_sync": final_sync_rows,
+        "historical_gate3_qualification": {
+            "gate3_exact_stock_equivalence": False,
+            "exact_stock_trajectory": "96/100",
+            "current_run_stock_comparison_exact": comparison[
+                "all_sequences_equal"
+            ],
+            "logical_correctness_qualification": True,
+            "numerical_qualification": "complete",
+            "phase4b2_progression_permitted": True,
+            "stock_comparison_excluded_from_phase4b2_validity": (
+                phase4b2_performance
+            ),
+        },
         "draft_service_ready_file": draft_ready_path.name,
         "draft_service_ready_sha256": sha256_file(draft_ready_path),
         "draft_service": draft_ready,
@@ -733,7 +768,7 @@ def run_serial_disaggregated(
         raw_decode = compare_raw_and_decode_outputs(
             _reference_rows(reference, requests), decode_rows, manifest
         )
-        if not raw_decode["valid"]:
+        if not raw_decode["valid"] and not phase4b2_performance:
             resident_errors.extend(raw_decode["errors"])
         result.update(
             {
@@ -758,10 +793,18 @@ def run_serial_disaggregated(
                     "event_count": len(initial_proposal_rows),
                     "artifact_file": resident_initial_proposal_events_path.name,
                 },
+                "phase4b2_initial_proposals_ready": (
+                    {
+                        "file": deferred_initial_proposals_path.name,
+                        "sha256": sha256_file(deferred_initial_proposals_path),
+                    }
+                    if phase4b2_performance
+                    else None
+                ),
             }
         )
     result["valid"] = bool(
-        comparison["all_sequences_equal"]
+        (comparison["all_sequences_equal"] or phase4b2_performance)
         and result["strict_serial_timeline"]["validated_in_runner"]
         and accounting["valid"]
         and not kv_errors

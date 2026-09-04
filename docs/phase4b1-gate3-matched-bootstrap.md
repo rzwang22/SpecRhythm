@@ -1,5 +1,12 @@
 # Phase 4B.1 Gate3 matched-bootstrap control
 
+> Historical diagnostic contract. Its immutable artifacts retain their original
+> `phase4b2_blocked=true` field. After the successful `ASYNC_OFF_MATCHES_STOCK` control, the
+> 2026-09-05 human engineering decision completed numerical qualification and separately set
+> `phase4b2_progression_permitted=true` without claiming exact stock equivalence. See
+> [project status](project-status.md) and the
+> [Phase 4B.2 runbook](phase4b2-decode-performance-runbook.md).
+
 This is a Target-only numerical diagnostic. It does not close Gate3, change exact-correctness
 policy, or authorize Phase 4B.2 or performance work.
 

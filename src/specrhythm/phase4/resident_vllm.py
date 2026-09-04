@@ -15,6 +15,11 @@ from specrhythm.phase4.decode_ready import (
     validate_decode_ready_manifest,
 )
 from specrhythm.phase4.manifest import atomic_write_json
+from specrhythm.phase4.performance_boundary import (
+    performance_requested,
+    publish_performance_boundary,
+    record_performance_commit,
+)
 from specrhythm.phase4.request_identity import FrozenPromptIdentityMap
 from specrhythm.phase4.resident_setup import (
     IncrementalResidentSetup,
@@ -73,6 +78,7 @@ class ResidentTargetProposer:
         self.setup_complete = False
         self.setup_tracker: Optional[IncrementalResidentSetup] = None
         self.measurement_start_ns: Optional[int] = None
+        self.performance_measurement_start_ns: Optional[int] = None
         self._write_report()
 
     @property
@@ -113,6 +119,15 @@ class ResidentTargetProposer:
                 raise RuntimeError("incremental resident setup observation failed")
             if setup.get("complete") is True:
                 self._complete_global_setup(setup)
+        elif self.tp_rank == 0:
+            for internal_id, sampled in zip(request_ids, sampled_token_ids):
+                if sampled:
+                    record_performance_commit(
+                        self.timing_log,
+                        request_id=self.identity.stable_id(str(internal_id)),
+                        token_ids=sampled,
+                        source="resident-target-sampled-commit",
+                    )
         return [[] for _ in request_ids]
 
     def _rank_zero_observe_setup(
@@ -286,8 +301,19 @@ class ResidentTargetProposer:
             or published.get("global_decode_ready") is not True
         ):
             raise RuntimeError("resident global setup-ready publication was not broadcast")
+        performance_start = None
+        if performance_requested():
+            performance_start = publish_performance_boundary(
+                tp_group=self.tp_group,
+                torch_module=self.torch,
+                tp_rank=self.tp_rank,
+                timing_log=self.timing_log,
+                consumer="target-only",
+                ready_published_ns=int(published["ready_published_ns"]),
+            )
         self.setup_complete = True
         self.measurement_start_ns = measurement_start_ns
+        self.performance_measurement_start_ns = performance_start
         self._write_report()
 
     def _setup_tracker(self) -> IncrementalResidentSetup:
@@ -385,6 +411,10 @@ class ResidentTargetProposer:
                     else 0
                 ),
                 "measurement_start_ns": self.measurement_start_ns,
+                "performance_measurement_start_ns": (
+                    self.performance_measurement_start_ns
+                ),
+                "phase4b2_performance_requested": performance_requested(),
                 "target_tp_world_size": self.tp_world_size,
             },
         )
