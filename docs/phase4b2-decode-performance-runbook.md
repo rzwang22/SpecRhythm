@@ -36,6 +36,123 @@ TPOT_i = (last_commit_ns - first_commit_ns) / (measured_tokens_i - 1)
 TPOT is null when a request has exactly one measured token. Batch makespan is the latest final
 commit minus the boundary. Throughput is total measured committed tokens divided by makespan.
 
+## Recover the successful `56bd0a5` Serial execution without rerunning GPU work
+
+Commit `56bd0a50e3b5f33cf30e32564532b1483ea7e34d` wrote its Phase-4B.2 Serial
+candidate flag and two-rank final synchronization into `runtime-manifest.json["phase4a1"]`, but
+omitted the same fields from `resident-serial.json`. The GPU execution is usable; only the
+derived measurement failed. The offline compatibility loader is deliberately limited to that
+execution commit, Serial mode, and the case where both raw fields are absent. It requires exact
+raw/runtime/decode-ready provenance and never edits either source artifact.
+
+After checking out the current PR head and reinstalling it, identify the one existing result root
+explicitly and run only the following recovery. Do not invoke `phase4b2_run_mode`, Target, Serial,
+or Dual. If more than one old root exists, set `SR_PHASE4B2_ROOT` to the intended exact path by
+hand instead of selecting one by recency.
+
+```bash
+cd /root/autodl-tmp/src/SpecRhythm || exit 1
+git fetch origin codex/vllm-serving-v0.1 || exit 1
+git switch --detach origin/codex/vllm-serving-v0.1 || exit 1
+export SR_PHASE4B_MEASUREMENT_COMMIT="$(git rev-parse HEAD)"
+test "$SR_PHASE4B_MEASUREMENT_COMMIT" != \
+  "56bd0a50e3b5f33cf30e32564532b1483ea7e34d" || exit 1
+test -z "$(git status --porcelain)" || exit 1
+
+conda activate /root/autodl-tmp/envs/specrhythm-phase4-vllm-0.25.1 || exit 1
+python -m pip install -e '.[dev]' --no-deps --no-build-isolation || exit 1
+
+mapfile -t SR_PHASE4B2_OLD_ROOTS < <(
+  find "/root/autodl-tmp/SpecRhythm-data/results/phase4/56bd0a50e3b5f33cf30e32564532b1483ea7e34d" \
+    -mindepth 1 -maxdepth 1 -type d -name 'phase4b2-decode-performance-*' -print
+)
+test "${#SR_PHASE4B2_OLD_ROOTS[@]}" -eq 1 || {
+  printf 'expected exactly one old Phase-4B.2 root; found %s\n' \
+    "${#SR_PHASE4B2_OLD_ROOTS[@]}" >&2
+  printf '%s\n' "${SR_PHASE4B2_OLD_ROOTS[@]}" >&2
+  exit 1
+}
+export SR_PHASE4B2_ROOT="${SR_PHASE4B2_OLD_ROOTS[0]}"
+
+export SR_INPUT_ROOT="/root/autodl-tmp/SpecRhythm-data/results/phase4/eba0df493a7fd350ef3c8776e06d30e6196b6749/phase4b1-gate2-corrected5-20260827T040244Z"
+export SR_PHASE4B_WORKLOAD="$SR_INPUT_ROOT/workloads/corrected-100.jsonl"
+export SR_PHASE4B_CONFIG="$PWD/configs/phase4b_dual_batch_1d2v.yaml"
+export SR_PHASE4B_TOPOLOGY="$SR_PHASE4B2_ROOT/topology.json"
+export SR_PHASE4B_PATCH_MANIFEST="$SR_PHASE4B2_ROOT/patch-stage/vllm-patch-stack.json"
+
+test -f "$SR_PHASE4B_WORKLOAD" || exit 1
+test -f "$SR_PHASE4B_CONFIG" || exit 1
+test -f "$SR_PHASE4B_TOPOLOGY" || exit 1
+test -f "$SR_PHASE4B_PATCH_MANIFEST" || exit 1
+test -f "$SR_PHASE4B2_ROOT/target/decode-performance.json" || exit 1
+test -f "$SR_PHASE4B2_ROOT/serial/resident-serial.json" || exit 1
+test -f "$SR_PHASE4B2_ROOT/serial/runtime-manifest.json" || exit 1
+test -f "$SR_PHASE4B2_ROOT/serial/decode-performance.json" || exit 1
+test ! -e "$SR_PHASE4B2_ROOT/serial/decode-performance.invalid-pre-fix.json" || exit 1
+
+sha256sum \
+  "$SR_PHASE4B2_ROOT/serial/resident-serial.json" \
+  "$SR_PHASE4B2_ROOT/serial/runtime-manifest.json" \
+  > "$SR_PHASE4B2_ROOT/serial/recovery-source-before.sha256"
+sha256sum "$SR_PHASE4B2_ROOT/serial/decode-performance.json" \
+  > "$SR_PHASE4B2_ROOT/serial/decode-performance.invalid-pre-fix.sha256"
+mv "$SR_PHASE4B2_ROOT/serial/decode-performance.json" \
+  "$SR_PHASE4B2_ROOT/serial/decode-performance.invalid-pre-fix.json"
+
+source integrations/vllm/phase4b2_run_helpers.sh || exit 1
+phase4b2_measure_mode serial "$SR_PHASE4B2_ROOT/serial" \
+  "$SR_PHASE4B_WORKLOAD" || exit 1
+
+sha256sum \
+  "$SR_PHASE4B2_ROOT/serial/resident-serial.json" \
+  "$SR_PHASE4B2_ROOT/serial/runtime-manifest.json" \
+  > "$SR_PHASE4B2_ROOT/serial/recovery-source-after.sha256"
+diff -u "$SR_PHASE4B2_ROOT/serial/recovery-source-before.sha256" \
+  "$SR_PHASE4B2_ROOT/serial/recovery-source-after.sha256" || exit 1
+
+python - "$SR_PHASE4B2_ROOT/serial/decode-performance.json" \
+  "$SR_PHASE4B_MEASUREMENT_COMMIT" <<'PY'
+import json, sys
+
+value = json.load(open(sys.argv[1], encoding="utf-8"))
+metadata = value["phase4b2_metadata_provenance"]
+assert value["mode"] == "serial"
+assert value["valid"] is True
+assert value["errors"] == []
+assert value["performance_result"] is True
+assert value["execution_git_commit"] == \
+    "56bd0a50e3b5f33cf30e32564532b1483ea7e34d"
+assert value["measurement_code_git_commit"] == sys.argv[2]
+assert metadata["legacy_serial_metadata_recovered"] is True
+assert metadata["performance_candidate_source"] == "runtime-manifest.phase4a1"
+assert metadata["final_sync_source"] == "runtime-manifest.phase4a1"
+assert metadata["recovery_validation_errors"] == []
+assert value["cleanup_valid"] is True
+assert all(row["token_accounting_valid"] for row in value["requests"])
+print("SERIAL VALID")
+PY
+
+test ! -e "$SR_PHASE4B2_ROOT/target-serial-exact.json" || exit 1
+test ! -e "$SR_PHASE4B2_ROOT/target-serial-exact.md" || exit 1
+phase4b2_compare_target_serial "$SR_PHASE4B2_ROOT" || exit 1
+
+python - "$SR_PHASE4B2_ROOT/target-serial-exact.json" <<'PY'
+import json, sys
+
+value = json.load(open(sys.argv[1], encoding="utf-8"))
+assert value["valid"] is True
+assert value["comparison_complete"] is False
+assert value["performance_valid"] is False
+assert value["speedups"] is None
+assert value["exact_correctness_triangle"]["target_equals_serial"]["equal"] is True
+print("TARGET == SERIAL EXACT")
+PY
+```
+
+Expected output is `SERIAL VALID`, followed by `TARGET == SERIAL EXACT`. Stop on every other
+outcome. Only then is a fresh Dual-Batch GPU run permitted. The recovered Serial metrics remain
+preliminary, and no speedup exists until the exact three-mode triangle passes.
+
 ## One-shot A800 procedure
 
 Run every block in the same shell. Stop immediately on any nonzero command or failed assertion.

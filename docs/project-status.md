@@ -302,6 +302,17 @@ corrected-100 run is functional bring-up, not a final paper workload or result. 
 agent implemented and CPU-tested this infrastructure without running CUDA. See
 [phase4b2-decode-performance-runbook.md](phase4b2-decode-performance-runbook.md).
 
+The first A800 bring-up under `56bd0a5` completed Target and Serial GPU execution. Target derived
+successfully; Serial execution returned zero but its derived artifact failed because two
+Phase-4B.2 fields were written only to `runtime-manifest.json["phase4a1"]`, not the top-level raw
+Serial result. Future Serial runs now publish one canonical evidence block to both locations. A
+strict offline compatibility path can reuse only that exact historical execution commit, only
+when both raw fields are absent, and only after exact raw/runtime/decode-ready provenance and
+two-rank GPU1/GPU2 synchronization validation. It records execution and measurement-code commits
+separately and never rewrites the raw GPU artifacts. Target and Dual have no fallback. The
+observed Serial metrics remain invalid until this offline recovery and the exact Target/Serial
+gate pass; Dual remains gated behind that comparison.
+
 After a successful Phase 4B.2 bring-up, Phase 4B.3 adds fixed-output batch/output/context sweeps;
 Phase 4C then adds real-GPU Dual-Eager. Arrival-rate, throughput/goodput/SLO and capacity-knee
 evaluation remain later work.

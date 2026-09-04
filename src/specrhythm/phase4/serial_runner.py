@@ -59,6 +59,31 @@ PATCHED_VLLM_SCHEDULER_SHA256 = (
 )
 
 
+def _phase4b2_serial_execution_evidence(
+    *,
+    phase4b2_performance: bool,
+    final_sync_rows: list[dict[str, Any]],
+    stock_comparison_exact: bool,
+) -> dict[str, Any]:
+    """Build the one canonical Phase-4B.2 Serial execution-evidence block."""
+
+    return {
+        "phase4b2_performance_candidate": phase4b2_performance,
+        "phase4b2_final_sync": final_sync_rows,
+        "historical_gate3_qualification": {
+            "gate3_exact_stock_equivalence": False,
+            "exact_stock_trajectory": "96/100",
+            "current_run_stock_comparison_exact": stock_comparison_exact,
+            "logical_correctness_qualification": True,
+            "numerical_qualification": "complete",
+            "phase4b2_progression_permitted": True,
+            "stock_comparison_excluded_from_phase4b2_validity": (
+                phase4b2_performance
+            ),
+        },
+    }
+
+
 def load_patch_manifest(path: Path, config: Phase4Config) -> dict[str, Any]:
     value = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(value, dict):
@@ -474,27 +499,18 @@ def run_serial_disaggregated(
     _update_combined_manifest(runtime_manifest_path, manifest)
     runtime_bundle = json.loads(runtime_manifest_path.read_text(encoding="utf-8"))
     runtime_bundle["stage"] = "phase4a1-serial-disaggregated-correctness"
+    phase4b2_evidence = _phase4b2_serial_execution_evidence(
+        phase4b2_performance=phase4b2_performance,
+        final_sync_rows=final_sync_rows,
+        stock_comparison_exact=comparison["all_sequences_equal"],
+    )
     runtime_bundle["phase4a1"] = {
         "mode": "serial-disaggregated",
         "correctness_mode": correctness_mode,
         **batch_validation,
         "gpu_correctness_result": True,
         "gpu_performance_result": False,
-        "phase4b2_performance_candidate": phase4b2_performance,
-        "phase4b2_final_sync": final_sync_rows,
-        "historical_gate3_qualification": {
-            "gate3_exact_stock_equivalence": False,
-            "exact_stock_trajectory": "96/100",
-            "current_run_stock_comparison_exact": comparison[
-                "all_sequences_equal"
-            ],
-            "logical_correctness_qualification": True,
-            "numerical_qualification": "complete",
-            "phase4b2_progression_permitted": True,
-            "stock_comparison_excluded_from_phase4b2_validity": (
-                phase4b2_performance
-            ),
-        },
+        **phase4b2_evidence,
         "draft_service_ready_file": draft_ready_path.name,
         "draft_service_ready_sha256": sha256_file(draft_ready_path),
         "draft_service": draft_ready,
@@ -524,6 +540,7 @@ def run_serial_disaggregated(
         ),
         "gpu_correctness_result": True,
         "gpu_performance_result": False,
+        **phase4b2_evidence,
         "reports_goodput": False,
         "reports_slo_attainment": False,
         "reports_speedup": False,

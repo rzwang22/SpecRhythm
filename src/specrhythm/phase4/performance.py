@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import subprocess
 from pathlib import Path
 from statistics import mean
 from typing import Any, Mapping, Optional, Sequence
@@ -42,6 +43,27 @@ GATE3_QUALIFICATION = {
     "further_micro_diagnostics": "deferred",
     "phase4b2_progression_permitted": True,
 }
+LEGACY_SERIAL_METADATA_COMMIT = "56bd0a50e3b5f33cf30e32564532b1483ea7e34d"
+SERIAL_RUN_SCHEMA = "specrhythm.phase4-serial-disaggregated-run.v1"
+RUNTIME_BUNDLE_SCHEMA = "specrhythm.phase4-runtime-bundle.v1"
+
+
+def _measurement_code_git_commit() -> Optional[str]:
+    repository = Path(__file__).resolve().parents[3]
+    completed = subprocess.run(
+        ("git", "-C", str(repository), "rev-parse", "HEAD"),
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    value = completed.stdout.strip()
+    if completed.returncode != 0 or len(value) != 40:
+        return None
+    try:
+        int(value, 16)
+    except ValueError:
+        return None
+    return value
 
 
 def percentile(values: Sequence[float], probability: float) -> Optional[float]:
@@ -133,9 +155,25 @@ def build_decode_performance_result(
         timing_rows, consumer=CONSUMERS[mode]
     )
     errors = list(errors)
+    (
+        performance_candidate,
+        final_sync_value,
+        metadata_provenance,
+        metadata_errors,
+    ) = _resolve_phase4b2_execution_metadata(
+        mode=mode,
+        run_root=run_root,
+        raw=raw,
+        manifest=manifest,
+        workload_path=workload_path,
+        config_path=config_path,
+        topology_path=topology_path,
+        patch_manifest_path=patch_manifest_path,
+    )
+    errors.extend(metadata_errors)
     if raw.get("valid") is not True:
         errors.append("underlying resident run is invalid")
-    if raw.get("phase4b2_performance_candidate") is not True:
+    if performance_candidate is not True:
         errors.append("underlying run did not request Phase-4B.2 measurement")
     errors.extend(validate_lifecycle_artifact(lifecycle))
     if lifecycle.get("run_valid") is not True:
@@ -171,7 +209,7 @@ def build_decode_performance_result(
     errors.extend(accounting_errors)
     errors.extend(_validate_mode_boundary(mode, run_root, raw, plugin, boundary))
     final_sync, final_sync_errors = _validate_final_sync(
-        raw.get("phase4b2_final_sync"),
+        final_sync_value,
         manifest.target_tensor_parallel_size,
         manifest.target_physical_gpu_ids,
         max(
@@ -190,6 +228,9 @@ def build_decode_performance_result(
     )
     jit = _jit_evidence(timestamped_log_path, boundary)
     errors.extend(jit["errors"])
+    measurement_code_git_commit = _measurement_code_git_commit()
+    if measurement_code_git_commit is None:
+        errors.append("measurement code git commit is unavailable")
     metrics = None
     if request_metrics:
         try:
@@ -207,6 +248,8 @@ def build_decode_performance_result(
         "requires_exact_cross_mode_comparison": True,
         "stage": "phase4b2-decode-only-performance-bringup",
         "git_commit": manifest.specrhythm_git_commit,
+        "execution_git_commit": manifest.specrhythm_git_commit,
+        "measurement_code_git_commit": measurement_code_git_commit,
         "vllm_version": manifest.vllm_version,
         "vllm_commit": manifest.vllm_commit,
         "patch_hashes": list(manifest.vllm_patch_stack_sha256),
@@ -249,6 +292,7 @@ def build_decode_performance_result(
         "jit_observation": jit,
         "cleanup_valid": not validate_lifecycle_artifact(lifecycle),
         "mode_semantics": _mode_semantics(mode, plugin),
+        "phase4b2_metadata_provenance": metadata_provenance,
         "gate3_qualification": dict(GATE3_QUALIFICATION),
         "artifact_sha256": {
             "raw_run": sha256_file(raw_path),
@@ -262,6 +306,12 @@ def build_decode_performance_result(
             "config": sha256_file(config_path),
             "topology": sha256_file(topology_path),
             "patch_manifest": sha256_file(patch_manifest_path),
+            **(
+                {"runtime_manifest": sha256_file(run_root / "runtime-manifest.json")}
+                if mode == "serial"
+                and (run_root / "runtime-manifest.json").is_file()
+                else {}
+            ),
             **(
                 {
                     "initial_proposals_ready": sha256_file(
@@ -345,6 +395,293 @@ def compare_decode_performance_results(
     markdown_path.parent.mkdir(parents=True, exist_ok=True)
     markdown_path.write_text(_comparison_markdown(report), encoding="utf-8")
     return report
+
+
+def _resolve_phase4b2_execution_metadata(
+    *,
+    mode: str,
+    run_root: Path,
+    raw: Mapping[str, Any],
+    manifest: Any,
+    workload_path: Path,
+    config_path: Path,
+    topology_path: Path,
+    patch_manifest_path: Path,
+) -> tuple[Any, Any, dict[str, Any], list[str]]:
+    candidate_present = "phase4b2_performance_candidate" in raw
+    sync_present = "phase4b2_final_sync" in raw
+    provenance = {
+        "performance_candidate_source": "raw-run",
+        "final_sync_source": "raw-run",
+        "legacy_serial_metadata_recovered": False,
+        "recovery_allowed_mode": "serial-only",
+        "legacy_execution_commit": LEGACY_SERIAL_METADATA_COMMIT,
+    }
+    if mode != "serial" or (candidate_present and sync_present):
+        return (
+            raw.get("phase4b2_performance_candidate"),
+            raw.get("phase4b2_final_sync"),
+            provenance,
+            [],
+        )
+    if candidate_present != sync_present:
+        return (
+            raw.get("phase4b2_performance_candidate"),
+            raw.get("phase4b2_final_sync"),
+            provenance,
+            [
+                "Serial Phase-4B.2 raw metadata is partially present; "
+                "runtime-manifest recovery is forbidden"
+            ],
+        )
+    runtime_path = run_root / "runtime-manifest.json"
+    provenance.update(
+        {
+            "performance_candidate_source": "runtime-manifest.phase4a1",
+            "final_sync_source": "runtime-manifest.phase4a1",
+            "runtime_manifest_file": runtime_path.name,
+            "runtime_manifest_sha256": (
+                sha256_file(runtime_path) if runtime_path.is_file() else None
+            ),
+        }
+    )
+    try:
+        runtime = _read_object(runtime_path)
+    except (FileNotFoundError, json.JSONDecodeError, ValueError) as error:
+        return None, None, provenance, [f"legacy Serial metadata recovery failed: {error}"]
+    candidate, final_sync, errors = _recover_legacy_serial_metadata(
+        raw=raw,
+        runtime=runtime,
+        manifest=manifest,
+        run_root=run_root,
+        workload_path=workload_path,
+        config_path=config_path,
+        topology_path=topology_path,
+        patch_manifest_path=patch_manifest_path,
+    )
+    provenance["legacy_serial_metadata_recovered"] = not errors
+    provenance["recovery_validation_errors"] = errors
+    return candidate, final_sync, provenance, errors
+
+
+def _recover_legacy_serial_metadata(
+    *,
+    raw: Mapping[str, Any],
+    runtime: Mapping[str, Any],
+    manifest: Any,
+    run_root: Path,
+    workload_path: Path,
+    config_path: Path,
+    topology_path: Path,
+    patch_manifest_path: Path,
+) -> tuple[Any, Any, list[str]]:
+    errors = []
+    if raw.get("schema_version") != SERIAL_RUN_SCHEMA:
+        errors.append("legacy Serial raw artifact schema differs")
+    if raw.get("mode") != "serial-disaggregated":
+        errors.append("legacy Serial raw artifact mode differs")
+    if raw.get("provider_kind") != "resident-warm-start":
+        errors.append("legacy Serial raw artifact is not resident")
+    if raw.get("valid") is not True:
+        errors.append("legacy Serial raw artifact is invalid")
+    if runtime.get("schema_version") != RUNTIME_BUNDLE_SCHEMA:
+        errors.append("legacy Serial runtime manifest schema differs")
+    if runtime.get("stage") != "phase4a1-serial-disaggregated-correctness":
+        errors.append("legacy Serial runtime manifest stage differs")
+    phase = runtime.get("phase4a1")
+    roles = runtime.get("roles")
+    role = roles.get("target") if isinstance(roles, Mapping) else None
+    if not isinstance(phase, Mapping):
+        errors.append("legacy Serial runtime manifest phase4a1 is missing")
+        phase = {}
+    if not isinstance(role, Mapping):
+        errors.append("legacy Serial Target runtime role is missing")
+        role = {}
+    if phase.get("mode") != "serial-disaggregated":
+        errors.append("legacy Serial phase4a1 mode differs")
+    if role.get("role") != "target":
+        errors.append("legacy Serial runtime role is not Target")
+
+    raw_provenance = _nested_mapping(raw, "provenance")
+    role_inputs = _nested_mapping(role, "inputs")
+    role_framework = _nested_mapping(role, "framework")
+    role_correctness = _nested_mapping(role, "correctness")
+    role_engine = _nested_mapping(role, "engine")
+    raw_target = _nested_mapping(raw, "target_runtime_configuration")
+    raw_patch = _nested_mapping(raw, "patch_manifest")
+    raw_reference = _nested_mapping(raw, "stock_reference")
+
+    execution_commit = manifest.specrhythm_git_commit
+    _require_same(
+        errors,
+        "execution git commit",
+        execution_commit,
+        raw_provenance.get("git_commit"),
+        role.get("git_commit"),
+        LEGACY_SERIAL_METADATA_COMMIT,
+    )
+    workload_sha256 = sha256_file(workload_path)
+    _require_same(
+        errors,
+        "workload SHA256",
+        workload_sha256,
+        manifest.workload_sha256,
+        raw_provenance.get("workload_sha256"),
+        role_inputs.get("workload_sha256"),
+    )
+    config_sha256 = sha256_file(config_path)
+    _require_same(
+        errors,
+        "config SHA256",
+        config_sha256,
+        raw_provenance.get("config_sha256"),
+        role_inputs.get("config_sha256"),
+    )
+    topology_sha256 = sha256_file(topology_path)
+    _require_same(
+        errors,
+        "topology SHA256",
+        topology_sha256,
+        role_inputs.get("topology_sha256"),
+    )
+    patch_sha256 = sha256_file(patch_manifest_path)
+    _require_same(
+        errors,
+        "patch-manifest SHA256",
+        patch_sha256,
+        raw_patch.get("file_sha256"),
+        phase.get("patch_manifest_sha256"),
+    )
+    _require_same(
+        errors,
+        "patch-manifest filename",
+        patch_manifest_path.name,
+        raw_patch.get("file"),
+        phase.get("patch_manifest_file"),
+    )
+    _require_same(
+        errors,
+        "active patch SHA256",
+        raw_patch.get("patch_sha256"),
+        role_framework.get("vllm_patch_sha256"),
+    )
+    _require_same(
+        errors,
+        "stock-reference SHA256",
+        raw_reference.get("file_sha256"),
+        phase.get("stock_reference_sha256"),
+    )
+    _require_same(
+        errors,
+        "stock-reference filename",
+        raw_reference.get("file"),
+        phase.get("stock_reference_file"),
+    )
+
+    draft_ready_path = run_root / "draft-service-ready.json"
+    draft_ready_sha256 = sha256_file(draft_ready_path) if draft_ready_path.is_file() else None
+    _require_same(
+        errors,
+        "Draft-ready SHA256",
+        draft_ready_sha256,
+        phase.get("draft_service_ready_sha256"),
+    )
+    if phase.get("draft_service_ready_file") != draft_ready_path.name:
+        errors.append("Draft-ready filename differs")
+    phase_draft = phase.get("draft_service")
+    raw_residency = _nested_mapping(raw, "engine_residency")
+    raw_draft = _nested_mapping(raw_residency, "draft")
+    if not isinstance(phase_draft, Mapping) or phase_draft.get(
+        "provenance"
+    ) != raw_draft.get("service_provenance"):
+        errors.append("Draft-ready provenance differs between raw and runtime artifacts")
+
+    _require_same(
+        errors,
+        "correctness mode",
+        raw.get("correctness_mode"),
+        phase.get("correctness_mode"),
+        role_correctness.get("mode"),
+        "batch-invariant",
+    )
+    _require_same(
+        errors,
+        "vLLM source commit",
+        raw_provenance.get("vllm_source_commit"),
+        role_framework.get("source_commit"),
+        manifest.vllm_commit,
+        "752a3a504485790a2e8491cacbb35c137339ad34",
+    )
+
+    output_rows = raw.get("outputs")
+    workload_count = sum(
+        1 for line in workload_path.read_text(encoding="utf-8").splitlines() if line.strip()
+    )
+    _require_same(
+        errors,
+        "request count",
+        raw.get("request_count"),
+        len(output_rows) if isinstance(output_rows, list) else None,
+        len(manifest.requests),
+        workload_count,
+    )
+    _require_same(
+        errors,
+        "Target physical GPU placement",
+        raw_target.get("physical_gpu_ids"),
+        role_engine.get("physical_gpu_ids"),
+        list(manifest.target_physical_gpu_ids),
+        [1, 2],
+    )
+    _require_same(
+        errors,
+        "Target tensor-parallel size",
+        raw_target.get("tensor_parallel_size"),
+        role_engine.get("tensor_parallel_size"),
+        manifest.target_tensor_parallel_size,
+        2,
+    )
+    if phase.get("phase4b2_performance_candidate") is not True:
+        errors.append("legacy Serial runtime performance candidate is not true")
+    final_sync = phase.get("phase4b2_final_sync")
+    errors.extend(_validate_legacy_serial_sync_shape(final_sync))
+    return phase.get("phase4b2_performance_candidate"), final_sync, errors
+
+
+def _validate_legacy_serial_sync_shape(value: Any) -> list[str]:
+    if not isinstance(value, list) or len(value) != 2:
+        return ["legacy Serial runtime final synchronization must contain two rows"]
+    if any(not isinstance(row, Mapping) for row in value):
+        return ["legacy Serial runtime final synchronization row is malformed"]
+    errors = []
+    if {row.get("global_rank") for row in value} != {0, 1}:
+        errors.append("legacy Serial runtime final synchronization global ranks differ")
+    if {row.get("local_rank") for row in value} != {0, 1}:
+        errors.append("legacy Serial runtime final synchronization local ranks differ")
+    if {row.get("physical_gpu_id") for row in value} != {1, 2}:
+        errors.append("legacy Serial runtime final synchronization physical GPUs differ")
+    if {row.get("world_size") for row in value} != {2}:
+        errors.append("legacy Serial runtime final synchronization world size differs")
+    if any(
+        not isinstance(row.get("final_cuda_synchronize_complete_ns"), int)
+        or isinstance(row.get("final_cuda_synchronize_complete_ns"), bool)
+        or row["final_cuda_synchronize_complete_ns"] <= 0
+        for row in value
+    ):
+        errors.append("legacy Serial runtime final synchronization timestamps are invalid")
+    return errors
+
+
+def _nested_mapping(value: Mapping[str, Any], key: str) -> Mapping[str, Any]:
+    nested = value.get(key)
+    return nested if isinstance(nested, Mapping) else {}
+
+
+def _require_same(errors: list[str], label: str, *values: Any) -> None:
+    if not values or any(value is None or value == "" for value in values):
+        errors.append(f"legacy Serial {label} is missing")
+    elif any(value != values[0] for value in values[1:]):
+        errors.append(f"legacy Serial {label} differs")
 
 
 def _commit_events(

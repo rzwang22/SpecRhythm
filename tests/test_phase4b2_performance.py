@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Optional
 
 import pytest
 
@@ -13,6 +14,7 @@ from specrhythm.phase4.decode_ready import (
 )
 from specrhythm.phase4.performance import (
     GATE3_QUALIFICATION,
+    LEGACY_SERIAL_METADATA_COMMIT,
     build_decode_performance_result,
     compare_decode_performance_results,
     percentile,
@@ -33,10 +35,12 @@ from specrhythm.phase4.resident_setup import (
     validate_setup_ready,
 )
 from specrhythm.phase4.serial import PROTOCOL_VERSION, Proposal
+from specrhythm.phase4.serial_runner import _phase4b2_serial_execution_evidence
 from specrhythm.phase4.transport import CheckpointJsonl
 
 START = 1_000_000_000
 REQUESTS = ("a", "b")
+PINNED_VLLM_COMMIT = "752a3a504485790a2e8491cacbb35c137339ad34"
 
 
 def _json(path: Path, value: object) -> None:
@@ -53,7 +57,11 @@ def _checkpoint(path: Path, rows: list[dict[str, object]]) -> None:
 
 
 def _make_run(
-    tmp_path: Path, mode: str, *, one_token: bool = False
+    tmp_path: Path,
+    mode: str,
+    *,
+    one_token: bool = False,
+    execution_commit: str = "f" * 40,
 ) -> tuple[Path, dict[str, Path]]:
     root = tmp_path / mode
     root.mkdir()
@@ -103,9 +111,9 @@ def _make_run(
     manifest = ResidentWarmStartProvider().prepare(
         observations,
         DecodeReadyProvenance(
-            specrhythm_git_commit="f" * 40,
+            specrhythm_git_commit=execution_commit,
             vllm_version="0.25.1",
-            vllm_commit="7" * 40,
+            vllm_commit=PINNED_VLLM_COMMIT,
             vllm_patch_stack_sha256=("a" * 64, "b" * 64, "c" * 64),
             target_model_path="/models/target",
             target_model_revision="target-revision",
@@ -291,36 +299,126 @@ def _make_run(
         "serial": "resident-serial.json",
         "dual-batch": "resident-dual.json",
     }[mode]
-    _json(
-        root / raw_name,
+    final_sync = [
         {
-            "valid": True,
-            "phase4b2_performance_candidate": True,
-            "phase4b2_initial_proposals_ready": (
-                {
-                    "file": "initial-proposals-ready.json",
-                    "sha256": sha256_file(root / "initial-proposals-ready.json"),
-                }
-                if mode == "serial"
-                else None
-            ),
-            "outputs": outputs,
-            "phase4b2_final_sync": [
-                {
-                    "local_rank": rank,
-                    "physical_gpu_id": rank + 1,
-                    "final_cuda_synchronize_complete_ns": START + 10_000_000,
-                }
-                for rank in range(2)
-            ],
-        },
-    )
-    return root, {
+            "global_rank": rank,
+            "local_rank": rank,
+            "world_size": 2,
+            "logical_cuda_index": rank,
+            "physical_gpu_id": rank + 1,
+            "gpu_uuid": f"GPU-{rank + 1}",
+            "final_cuda_synchronize_complete_ns": START + 10_000_000 + rank,
+        }
+        for rank in range(2)
+    ]
+    paths = {
         "workload": workload,
         "config": config,
         "topology": topology,
         "patch": patch,
     }
+    raw = {
+        "valid": True,
+        "phase4b2_performance_candidate": True,
+        "phase4b2_initial_proposals_ready": (
+            {
+                "file": "initial-proposals-ready.json",
+                "sha256": sha256_file(root / "initial-proposals-ready.json"),
+            }
+            if mode == "serial"
+            else None
+        ),
+        "outputs": outputs,
+        "phase4b2_final_sync": final_sync,
+    }
+    if mode == "serial":
+        reference = tmp_path / "stock-target-reference.json"
+        if not reference.exists():
+            _json(reference, {"reference": "same"})
+        draft_ready = root / "draft-service-ready.json"
+        draft_ready_value = {
+            "schema_version": "specrhythm.phase4-draft-service-ready.v1",
+            "provenance": {"physical_gpu_id": 0, "model": "draft"},
+        }
+        _json(draft_ready, draft_ready_value)
+        active_patch_sha = "d" * 64
+        raw.update(
+            {
+                "schema_version": "specrhythm.phase4-serial-disaggregated-run.v1",
+                "mode": "serial-disaggregated",
+                "provider_kind": "resident-warm-start",
+                "correctness_mode": "batch-invariant",
+                "request_count": len(REQUESTS),
+                "target_runtime_configuration": {
+                    "physical_gpu_ids": [1, 2],
+                    "tensor_parallel_size": 2,
+                },
+                "engine_residency": {
+                    "draft": {
+                        "service_provenance": draft_ready_value["provenance"]
+                    }
+                },
+                "stock_reference": {
+                    "file": reference.name,
+                    "file_sha256": sha256_file(reference),
+                },
+                "patch_manifest": {
+                    "file": patch.name,
+                    "file_sha256": sha256_file(patch),
+                    "patch_sha256": active_patch_sha,
+                },
+                "provenance": {
+                    "git_commit": execution_commit,
+                    "config_sha256": sha256_file(config),
+                    "workload_sha256": sha256_file(workload),
+                    "vllm_source_commit": PINNED_VLLM_COMMIT,
+                },
+            }
+        )
+        _json(
+            root / "runtime-manifest.json",
+            {
+                "schema_version": "specrhythm.phase4-runtime-bundle.v1",
+                "stage": "phase4a1-serial-disaggregated-correctness",
+                "roles": {
+                    "target": {
+                        "role": "target",
+                        "git_commit": execution_commit,
+                        "framework": {
+                            "source_commit": PINNED_VLLM_COMMIT,
+                            "vllm_patch_sha256": active_patch_sha,
+                        },
+                        "correctness": {"mode": "batch-invariant"},
+                        "engine": {
+                            "physical_gpu_ids": [1, 2],
+                            "tensor_parallel_size": 2,
+                        },
+                        "inputs": {
+                            "config_sha256": sha256_file(config),
+                            "workload_sha256": sha256_file(workload),
+                            "topology_sha256": sha256_file(topology),
+                        },
+                    }
+                },
+                "phase4a1": {
+                    "mode": "serial-disaggregated",
+                    "correctness_mode": "batch-invariant",
+                    "phase4b2_performance_candidate": True,
+                    "phase4b2_final_sync": final_sync,
+                    "draft_service_ready_file": draft_ready.name,
+                    "draft_service_ready_sha256": sha256_file(draft_ready),
+                    "draft_service": draft_ready_value,
+                    "stock_reference_file": reference.name,
+                    "stock_reference_sha256": sha256_file(reference),
+                    "patch_manifest_file": patch.name,
+                    "patch_manifest_sha256": sha256_file(patch),
+                },
+            },
+        )
+        paths["reference"] = reference
+        paths["draft_ready"] = draft_ready
+    _json(root / raw_name, raw)
+    return root, paths
 
 
 def _measure(tmp_path: Path, mode: str, *, one_token: bool = False) -> dict[str, object]:
@@ -334,6 +432,248 @@ def _measure(tmp_path: Path, mode: str, *, one_token: bool = False) -> dict[str,
         patch_manifest_path=paths["patch"],
         output_path=root / "decode-performance.json",
     )
+
+
+def _legacy_serial_run(tmp_path: Path) -> tuple[Path, dict[str, Path]]:
+    root, paths = _make_run(
+        tmp_path,
+        "serial",
+        execution_commit=LEGACY_SERIAL_METADATA_COMMIT,
+    )
+    raw_path = root / "resident-serial.json"
+    raw = json.loads(raw_path.read_text(encoding="utf-8"))
+    raw.pop("phase4b2_performance_candidate")
+    raw.pop("phase4b2_final_sync")
+    _json(raw_path, raw)
+    return root, paths
+
+
+def _build_result(root: Path, paths: dict[str, Path], mode: str) -> dict[str, object]:
+    return build_decode_performance_result(
+        mode=mode,
+        run_root=root,
+        workload_path=paths["workload"],
+        config_path=paths["config"],
+        topology_path=paths["topology"],
+        patch_manifest_path=paths["patch"],
+        output_path=root / "decode-performance.json",
+    )
+
+
+def test_serial_execution_evidence_is_shared_by_runtime_and_top_level_result() -> None:
+    rows = [{"global_rank": 0}]
+    evidence = _phase4b2_serial_execution_evidence(
+        phase4b2_performance=True,
+        final_sync_rows=rows,
+        stock_comparison_exact=False,
+    )
+    assert evidence["phase4b2_performance_candidate"] is True
+    assert evidence["phase4b2_final_sync"] == rows
+    assert evidence["historical_gate3_qualification"][
+        "phase4b2_progression_permitted"
+    ] is True
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "src/specrhythm/phase4/serial_runner.py"
+    ).read_text(encoding="utf-8")
+    assert source.count("**phase4b2_evidence") == 2
+
+
+def test_future_serial_uses_raw_phase4b2_metadata(tmp_path: Path) -> None:
+    result = _measure(tmp_path, "serial")
+    assert result["valid"] is True
+    assert result["phase4b2_metadata_provenance"] == {
+        "performance_candidate_source": "raw-run",
+        "final_sync_source": "raw-run",
+        "legacy_serial_metadata_recovered": False,
+        "recovery_allowed_mode": "serial-only",
+        "legacy_execution_commit": LEGACY_SERIAL_METADATA_COMMIT,
+    }
+
+
+def test_matching_legacy_serial_metadata_is_recovered_auditably(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    measurement_commit = "e" * 40
+    monkeypatch.setattr(
+        "specrhythm.phase4.performance._measurement_code_git_commit",
+        lambda: measurement_commit,
+    )
+    root, paths = _legacy_serial_run(tmp_path)
+    result = _build_result(root, paths, "serial")
+    provenance = result["phase4b2_metadata_provenance"]
+    assert result["valid"] is True
+    assert result["errors"] == []
+    assert result["performance_result"] is True
+    assert result["execution_git_commit"] == LEGACY_SERIAL_METADATA_COMMIT
+    assert result["measurement_code_git_commit"] == measurement_commit
+    assert result["measurement_code_git_commit"] != result["execution_git_commit"]
+    assert provenance["legacy_serial_metadata_recovered"] is True
+    assert provenance["performance_candidate_source"] == "runtime-manifest.phase4a1"
+    assert provenance["final_sync_source"] == "runtime-manifest.phase4a1"
+    assert provenance["recovery_validation_errors"] == []
+
+
+@pytest.mark.parametrize(
+    ("missing", "replacement"),
+    [
+        ("phase4b2_final_sync", {"phase4b2_performance_candidate": False}),
+        (None, {"phase4b2_performance_candidate": False}),
+        (None, {"phase4b2_final_sync": [{"malformed": True}]}),
+    ],
+)
+def test_raw_serial_contradiction_never_uses_runtime_fallback(
+    tmp_path: Path, missing: Optional[str], replacement: dict[str, object]
+) -> None:
+    root, paths = _make_run(tmp_path, "serial")
+    raw_path = root / "resident-serial.json"
+    raw = json.loads(raw_path.read_text(encoding="utf-8"))
+    if missing is not None:
+        raw.pop(missing)
+    raw.update(replacement)
+    _json(raw_path, raw)
+    result = _build_result(root, paths, "serial")
+    assert result["valid"] is False
+    assert result["phase4b2_metadata_provenance"][
+        "legacy_serial_metadata_recovered"
+    ] is False
+
+
+@pytest.mark.parametrize(
+    "failure",
+    (
+        "candidate-false",
+        "wrong-runtime-schema",
+        "missing-phase4a1",
+        "malformed-sync",
+        "wrong-ranks",
+        "wrong-gpus",
+        "wrong-world-size",
+    ),
+)
+def test_legacy_serial_runtime_metadata_must_be_exact(
+    tmp_path: Path, failure: str
+) -> None:
+    root, paths = _legacy_serial_run(tmp_path)
+    runtime_path = root / "runtime-manifest.json"
+    runtime = json.loads(runtime_path.read_text(encoding="utf-8"))
+    phase = runtime["phase4a1"]
+    if failure == "candidate-false":
+        phase["phase4b2_performance_candidate"] = False
+    elif failure == "wrong-runtime-schema":
+        runtime["schema_version"] = "wrong"
+    elif failure == "missing-phase4a1":
+        runtime.pop("phase4a1")
+    elif failure == "malformed-sync":
+        phase["phase4b2_final_sync"] = {}
+    elif failure == "wrong-ranks":
+        phase["phase4b2_final_sync"][1]["global_rank"] = 0
+    elif failure == "wrong-gpus":
+        phase["phase4b2_final_sync"][1]["physical_gpu_id"] = 0
+    else:
+        phase["phase4b2_final_sync"][1]["world_size"] = 1
+    _json(runtime_path, runtime)
+    result = _build_result(root, paths, "serial")
+    assert result["valid"] is False
+    assert result["phase4b2_metadata_provenance"][
+        "legacy_serial_metadata_recovered"
+    ] is False
+
+
+def test_legacy_serial_recovery_requires_runtime_manifest(tmp_path: Path) -> None:
+    root, paths = _legacy_serial_run(tmp_path)
+    (root / "runtime-manifest.json").unlink()
+    result = _build_result(root, paths, "serial")
+    assert result["valid"] is False
+    assert any("runtime-manifest.json" in error for error in result["errors"])
+
+
+@pytest.mark.parametrize(
+    "failure",
+    (
+        "commit",
+        "workload",
+        "config",
+        "patch",
+        "request-count",
+        "topology",
+        "placement",
+        "tp-size",
+    ),
+)
+def test_legacy_serial_recovery_rejects_provenance_mismatch(
+    tmp_path: Path, failure: str
+) -> None:
+    root, paths = _legacy_serial_run(tmp_path)
+    raw_path = root / "resident-serial.json"
+    runtime_path = root / "runtime-manifest.json"
+    raw = json.loads(raw_path.read_text(encoding="utf-8"))
+    runtime = json.loads(runtime_path.read_text(encoding="utf-8"))
+    role = runtime["roles"]["target"]
+    if failure == "commit":
+        role["git_commit"] = "e" * 40
+    elif failure == "workload":
+        role["inputs"]["workload_sha256"] = "e" * 64
+    elif failure == "config":
+        role["inputs"]["config_sha256"] = "e" * 64
+    elif failure == "patch":
+        runtime["phase4a1"]["patch_manifest_sha256"] = "e" * 64
+    elif failure == "request-count":
+        raw["request_count"] = 3
+    elif failure == "topology":
+        role["inputs"]["topology_sha256"] = "e" * 64
+    elif failure == "placement":
+        role["engine"]["physical_gpu_ids"] = [0, 1]
+    else:
+        role["engine"]["tensor_parallel_size"] = 1
+    _json(raw_path, raw)
+    _json(runtime_path, runtime)
+    result = _build_result(root, paths, "serial")
+    assert result["valid"] is False
+    assert result["phase4b2_metadata_provenance"][
+        "legacy_serial_metadata_recovered"
+    ] is False
+
+
+def test_recovered_sync_still_passes_through_authoritative_validator(
+    tmp_path: Path,
+) -> None:
+    root, paths = _legacy_serial_run(tmp_path)
+    runtime_path = root / "runtime-manifest.json"
+    runtime = json.loads(runtime_path.read_text(encoding="utf-8"))
+    for row in runtime["phase4a1"]["phase4b2_final_sync"]:
+        row["final_cuda_synchronize_complete_ns"] = START + 1
+    _json(runtime_path, runtime)
+    result = _build_result(root, paths, "serial")
+    assert result["valid"] is False
+    assert result["phase4b2_metadata_provenance"][
+        "legacy_serial_metadata_recovered"
+    ] is True
+    assert any("predates a measured commit" in error for error in result["errors"])
+
+
+@pytest.mark.parametrize("mode", ("target", "dual-batch"))
+def test_non_serial_modes_never_recover_missing_raw_metadata(
+    tmp_path: Path, mode: str
+) -> None:
+    root, paths = _make_run(tmp_path, mode)
+    raw_path = root / {
+        "target": "resident-target.json",
+        "dual-batch": "resident-dual.json",
+    }[mode]
+    raw = json.loads(raw_path.read_text(encoding="utf-8"))
+    raw.pop("phase4b2_performance_candidate")
+    raw.pop("phase4b2_final_sync")
+    _json(raw_path, raw)
+    _json(
+        root / "runtime-manifest.json",
+        {"phase4a1": {"phase4b2_performance_candidate": True}},
+    )
+    result = _build_result(root, paths, mode)
+    assert result["valid"] is False
+    assert result["phase4b2_metadata_provenance"][
+        "legacy_serial_metadata_recovered"
+    ] is False
 
 
 def test_boundary_excludes_setup_and_counts_first_post_bootstrap_token(tmp_path: Path) -> None:
