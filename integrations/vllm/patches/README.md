@@ -32,6 +32,16 @@ It does not modify model inputs, scheduler state,
 sampling, proposals, KV ownership or outputs. A patched-observational stock-style run remains
 ineligible for stock-reference freezing.
 
+The per-logical-token Gate3 localizer does not require another vLLM patch. The same default-off
+`0004` hook enters the out-of-tree Python observer before the forward. A new immutable plan asks
+that observer to reconstruct only two selected layers per checkpoint in logical block-table order
+and transfer each selected layer to CPU once for separate K/V token hashing. The active exact
+patched runner remains the e73 SHA256
+`a8b56ee511ad04d4f6e56e802417e6b8fb8b723a9fef05de36148f4218e9e945`; scheduler SHA256 remains
+`ffaefd61869589f086e6acdf9a0c4f55f80d5dad145ca3f6fff2379f7a4e2455`. Restore from that exact
+state, stock check, reapply, and patched check are all still mandatory. No patch changes model,
+attention, KV ownership, scheduler, sampling, C++/CUDA, or Triton semantics.
+
 The patch is required because the public custom proposer signature at this commit does not expose
 stable request identity or exact Target-forward boundaries. The out-of-tree proposer uses the
 hooks only for stable IPC correlation and strict-serial correctness timestamps.

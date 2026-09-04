@@ -1,6 +1,6 @@
 # SpecRhythm project status
 
-Last updated: 2026-08-27
+Last updated: 2026-09-04
 
 Maintenance rule: every code-changing PR updates this file with its scope, status, evidence,
 known limitations, and next gate before that PR is considered complete.
@@ -34,7 +34,7 @@ claims.
 | [#1 workload-v0.1](https://github.com/rzwang22/SpecRhythm/pull/1) | merged | strict Mooncake replay, R3 proxy config, validator, manifest, fixture tests and docs | workload plumbing only; proxy payload and illustrative acceptance |
 | [#2 simulator-semantics-v0.2](https://github.com/rzwang22/SpecRhythm/pull/2) | frozen draft; Phase 2 complete, not merged | proposal lifecycle, deterministic tree oracle, tree-aware allocators, base-preserving residual controls, Phase-2 nested search pools and common-snapshot oracle replay, path-aware eager and accounting | pure-Python proxy and oracle upper bounds only; no deployable oracle, measured search cost, GPU integration, or performance claim |
 | [#3 gpu-integration-v0.1](https://github.com/rzwang22/SpecRhythm/pull/3) | draft; Phase 3B.1 and corrected-20 Phase 3C.2 complete; Phase 3C.3 corrected-100 awaiting server run | hardened multi-rank primitives, corrected R3-real traces, common-prefix replay, request-bootstrap statistics, 2x shell decomposition and diagnostic learned ranker | user-run 3×A800 correctness artifacts plus Mac CPU tests; no packed-tree/serving engine, Dual-Batch, SLO, calibrated latency or speedup claim |
-| [#4 vllm-serving-v0.1](https://github.com/rzwang22/SpecRhythm/pull/4) | draft; Gate1/Gate2 Outcome A; Gate3 Target setup passes but exact output fails 4/100; first numerical observer run failed before evidence and the generic-KV fix awaits one fresh A800 pair | decode-ready Target/Serial plus real asynchronous resident Dual runner, lifecycle/scheduler/KV/accounting evidence, scale-safe chunked-prefill setup and diagnostic-only numerical localization | correctness evidence only; Gate3 remains failed; no tolerance, performance, packed tree, eager, KVConnector, SLO or goodput claim |
+| [#4 vllm-serving-v0.1](https://github.com/rzwang22/SpecRhythm/pull/4) | draft; Gate1/Gate2 Outcome A; Gate3 exact output still fails 4/100; e73 coarse localization succeeded and per-logical-token K/V localization awaits one A800 pair | decode-ready Target/Serial plus real asynchronous resident Dual runner, lifecycle/scheduler/KV/accounting evidence, scale-safe chunked-prefill setup and diagnostic-only numerical localization | correctness evidence only; Gate3 remains failed; no tolerance, performance, packed tree, eager, KVConnector, SLO or goodput claim |
 
 ## Phase 4A.0–4A.1: vLLM freeze and Serial Disaggregated correctness
 
@@ -237,17 +237,21 @@ preference is nonzero.
 The first attempted pair at `c142fa7` failed in both stock TP workers before any numerical
 checkpoint because the observer incorrectly treated speculative-only common attention metadata
 as the generic block-table authority. Resident and comparator were not run. Its exact directory
-is immutable `diagnostic-infrastructure-failed` provenance and does not consume the scientific
-one-shot comparison. The observer now filters planned checkpoints first and uses the pinned
-`MultiGroupBlockTable` plus generic per-group slot mappings, validating group and layer ownership
-on every TP rank.
+is immutable `diagnostic-infrastructure-failed` provenance. The generic observer at `e73e884`
+then completed exactly one stock-style and one resident corrected-100 run. Read-only comparison
+proved equal actual pre-divergence output history, computed-token boundaries, logical ownership,
+and current-token embeddings. Both TP ranks found request-dependent first-different KV layers
+4, 21, 24, and 56; earlier layers were exact and later layers differed. Raw logits already differ
+and each sampler follows its own argmax, excluding a sampler tie-breaking explanation.
 
-The next and only authorized GPU action is one fresh diagnostic-only corrected-100 pair: one
-patched-observational stock-style execution and one resident Target execution. The full workload
-is mandatory because a four-request replay changes chunking, cohort and LM-head shape. Selected
-hidden rows, pre-forward logical KV bytes, block mappings and raw competing logits will localize
-the first differing stage. The immutable stock correctness reference is not rerun or replaced;
-Serial, Dual, performance and tolerant correctness remain blocked. See
+The e73 stock `InputBatch.token_ids_cpu` rows contain pinned-vLLM async `-1` placeholders, so that
+field is now explicitly non-authoritative metadata. Semantic comparison uses complete run outputs
+against the immutable stock reference. The only authorized next GPU action is one new
+diagnostic-only corrected-100 stock/resident pair that hashes K and V separately for every
+materialized logical position in each request's exact control and first-different layers. It keeps
+the same full workload shape, requires exact reproduction of all four divergences, and classifies
+only `PROMPT_PREFILL`, `BOOTSTRAP`, `DECODE_HISTORY`, or `FAIL-CLOSED`. Gate3 remains not closed;
+Serial, Dual, Dual-Eager, performance, Phase 4B.2, and tolerant correctness remain blocked. See
 [phase4b1-gate3-numerical-diagnostics.md](phase4b1-gate3-numerical-diagnostics.md).
 
 ## Phase 3.0: GPU readiness and real-trace runner

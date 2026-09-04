@@ -21,6 +21,11 @@ from specrhythm.phase4.transport import CheckpointJsonl
 PLAN_SCHEMA = "specrhythm.phase4b1-gate3-numerical-plan.v1"
 RECORD_SCHEMA = "specrhythm.phase4b1-gate3-numerical-record.v1"
 COMPARISON_SCHEMA = "specrhythm.phase4b1-gate3-numerical-comparison.v1"
+PER_TOKEN_PLAN_SCHEMA = "specrhythm.phase4b1-gate3-per-token-kv-plan.v1"
+PER_TOKEN_RECORD_SCHEMA = "specrhythm.phase4b1-gate3-per-token-kv-record.v1"
+PER_TOKEN_COMPARISON_SCHEMA = (
+    "specrhythm.phase4b1-gate3-per-token-kv-comparison.v1"
+)
 PLAN_ENV = "SR_PHASE4_NUMERICAL_DIAGNOSTIC_PLAN"
 OUTPUT_ENV = "SR_PHASE4_NUMERICAL_DIAGNOSTIC_OUTPUT"
 MODE_ENV = "SR_PHASE4_NUMERICAL_DIAGNOSTIC_MODE"
@@ -32,13 +37,28 @@ REQUIRED_STAGES = (
     "final_normalized_hidden_state",
     "lm_head_input",
 )
+EXPECTED_PER_TOKEN_CHECKPOINTS = {
+    "r3-c7ee1a73ee79dd6dc21cb8dc": (3, 3, 4, 600, 296),
+    "r3-646c340a0281105c1c20de27": (12, 20, 21, 448, 323),
+    "r3-32ae44a69fffd76f0dd4b787": (4, 23, 24, 3435, 15),
+    "r3-e00f5312321ec537a9c716cd": (2, 55, 56, 23826, 1674),
+}
+EXPECTED_PER_TOKEN_LAYERS = {
+    request_id: (values[1], values[2])
+    for request_id, values in EXPECTED_PER_TOKEN_CHECKPOINTS.items()
+}
+SEMANTIC_PREFIX_AUTHORITY = "final-run-output-vs-immutable-stock-reference"
+SOURCE_GATE3_COMMIT = "32b09a6749dc44200fffe37411002d862ca1098a"
+SOURCE_COARSE_DIAGNOSTIC_COMMIT = "e73e8848904eee7f18e7beba80d1ec2da94e8267"
+SOURCE_COARSE_DIAGNOSTIC_ROOT = "phase4b1-gate3-numerical-20260904T070021Z"
 
 
 def load_numerical_plan(path: Path, workload_path: Path) -> dict[str, Any]:
     """Load and resolve the four-point diagnostic plan against one workload."""
 
     value = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(value, Mapping) or value.get("schema_version") != PLAN_SCHEMA:
+    schema_version = value.get("schema_version") if isinstance(value, Mapping) else None
+    if schema_version not in {PLAN_SCHEMA, PER_TOKEN_PLAN_SCHEMA}:
         raise ValueError("unsupported Gate3 numerical diagnostic plan")
     if value.get("diagnostic_only") is not True:
         raise ValueError("Gate3 numerical plan must be diagnostic-only")
@@ -47,6 +67,15 @@ def load_numerical_plan(path: Path, workload_path: Path) -> dict[str, Any]:
         raise ValueError("Gate3 numerical plan requires the frozen 100-request shape")
     if value.get("position_indexing") != "zero-based-generated-token-index":
         raise ValueError("Gate3 numerical output positions must be explicitly zero-based")
+    if schema_version == PER_TOKEN_PLAN_SCHEMA and (
+        value.get("materialized_kv_position_range") != "[0,num_computed_tokens)"
+        or value.get("source_gate3_commit") != SOURCE_GATE3_COMMIT
+        or value.get("source_coarse_diagnostic_commit")
+        != SOURCE_COARSE_DIAGNOSTIC_COMMIT
+        or value.get("source_coarse_diagnostic_root")
+        != SOURCE_COARSE_DIAGNOSTIC_ROOT
+    ):
+        raise ValueError("Gate3 per-token plan provenance or KV boundary differs")
     workload_rows = _load_jsonl(workload_path)
     if len(workload_rows) != expected_count:
         raise ValueError("Gate3 numerical workload must contain exactly 100 requests")
@@ -83,6 +112,36 @@ def load_numerical_plan(path: Path, workload_path: Path) -> dict[str, Any]:
         prompt = workload_by_id[request_id].get("prompt_token_ids")
         if not _token_list(prompt):
             raise ValueError("Gate3 numerical request has invalid frozen prompt tokens")
+        layer_fields = {}
+        if schema_version == PER_TOKEN_PLAN_SCHEMA:
+            control_layer = row.get("control_layer_index")
+            first_layer = row.get("first_different_layer_index")
+            if (
+                not _nonnegative_int(control_layer)
+                or not _positive_int(first_layer)
+                or first_layer != control_layer + 1
+                or EXPECTED_PER_TOKEN_CHECKPOINTS.get(request_id)
+                != (
+                    position,
+                    control_layer,
+                    first_layer,
+                    stock_token,
+                    resident_token,
+                )
+            ):
+                raise ValueError(
+                    "Gate3 per-token plan has an unverified control/first layer pair"
+                )
+            layer_fields = {
+                "control_layer_index": int(control_layer),
+                "control_layer_name": (
+                    f"model.layers.{control_layer}.self_attn.attn"
+                ),
+                "first_different_layer_index": int(first_layer),
+                "first_different_layer_name": (
+                    f"model.layers.{first_layer}.self_attn.attn"
+                ),
+            }
         seen.add(request_id)
         resolved.append(
             {
@@ -92,16 +151,38 @@ def load_numerical_plan(path: Path, workload_path: Path) -> dict[str, Any]:
                 "resident_selected_token_id": int(resident_token),
                 "prompt_token_ids": list(prompt),
                 "prompt_sha256": token_sha256(prompt),
+                "prompt_length": len(prompt),
                 "maximum_new_tokens": int(maximum),
+                **layer_fields,
             }
         )
+    if schema_version == PER_TOKEN_PLAN_SCHEMA and seen != set(
+        EXPECTED_PER_TOKEN_CHECKPOINTS
+    ):
+        raise ValueError("Gate3 per-token plan does not contain the exact four requests")
     return {
-        "schema_version": PLAN_SCHEMA,
+        "schema_version": schema_version,
         "diagnostic_only": True,
+        "diagnostic_kind": (
+            "per-logical-token-kv"
+            if schema_version == PER_TOKEN_PLAN_SCHEMA
+            else "coarse-numerical-localization"
+        ),
         "expected_request_count": 100,
         "position_indexing": "zero-based-generated-token-index",
         "source_gate3_commit": str(value.get("source_gate3_commit", "")),
         "source_failed_root": str(value.get("source_failed_root", "")),
+        "source_coarse_diagnostic_root": str(
+            value.get("source_coarse_diagnostic_root", "")
+        ),
+        "source_coarse_diagnostic_commit": str(
+            value.get("source_coarse_diagnostic_commit", "")
+        ),
+        "materialized_kv_position_range": (
+            "[0,num_computed_tokens)"
+            if schema_version == PER_TOKEN_PLAN_SCHEMA
+            else None
+        ),
         "workload_file": workload_path.name,
         "workload_sha256": sha256_file(workload_path),
         "plan_file": path.name,
@@ -146,6 +227,10 @@ def validate_numerical_records(
     execution_mode: str,
 ) -> list[str]:
     errors = []
+    per_token_plan = plan.get("schema_version") == PER_TOKEN_PLAN_SCHEMA
+    expected_record_schema = (
+        PER_TOKEN_RECORD_SCHEMA if per_token_plan else RECORD_SCHEMA
+    )
     planned = {
         (str(row["request_id"]), int(row["output_position"])): row
         for row in plan.get("requests", ())
@@ -158,7 +243,7 @@ def validate_numerical_records(
             errors.append(f"duplicate numerical checkpoint: {key}")
             continue
         observed[key] = row
-        if row.get("schema_version") != RECORD_SCHEMA:
+        if row.get("schema_version") != expected_record_schema:
             errors.append(f"unsupported numerical record schema: {key}")
         if row.get("execution_mode") != execution_mode:
             errors.append(f"numerical execution mode differs: {key}")
@@ -172,25 +257,91 @@ def validate_numerical_records(
             errors.append(f"numerical workload checksum differs: {key}")
         if row.get("tp_world_size") != 2:
             errors.append(f"Gate3 numerical record is not TP=2: {key}")
-        prefix = row.get("logical_committed_prefix_token_ids")
-        if not isinstance(prefix, list) or row.get(
-            "logical_committed_prefix_sha256"
-        ) != token_sha256(prefix if isinstance(prefix, list) else []):
-            errors.append(f"numerical prefix checksum is invalid: {key}")
         planned_row = planned.get(key)
-        if isinstance(prefix, list) and isinstance(planned_row, Mapping):
-            prompt = list(planned_row["prompt_token_ids"])
-            position = int(planned_row["output_position"])
-            if prefix[: len(prompt)] != prompt or len(prefix) != len(prompt) + position:
-                errors.append(f"numerical committed prefix is not the planned boundary: {key}")
-            computed = len(prefix) - 1
+        if per_token_plan:
+            placeholder = row.get("async_cpu_placeholder_view")
+            tokens = (
+                placeholder.get("token_ids")
+                if isinstance(placeholder, Mapping)
+                else None
+            )
             if (
-                row.get("num_computed_tokens") != computed
-                or row.get("target_input_token_position") != computed
-                or row.get("target_input_token_id") != prefix[-1]
-                or row.get("previous_committed_token_id") != prefix[-1]
+                not isinstance(placeholder, Mapping)
+                or not isinstance(tokens, list)
+                or not _signed_token_list(tokens)
+                or placeholder.get("source") != "InputBatch.token_ids_cpu"
+                or placeholder.get("semantic_prefix_authority") is not False
+                or placeholder.get("token_ids_sha256") != token_sha256(tokens or [])
+                or placeholder.get("contains_negative_placeholder")
+                != any(token_id < 0 for token_id in tokens or [])
             ):
-                errors.append(f"numerical pending Target input is inconsistent: {key}")
+                errors.append(f"numerical async CPU placeholder view is invalid: {key}")
+            if isinstance(tokens, list) and isinstance(planned_row, Mapping):
+                prompt = list(planned_row["prompt_token_ids"])
+                position = int(planned_row["output_position"])
+                computed = len(prompt) + position - 1
+                if tokens[: len(prompt)] != prompt or len(tokens) != len(prompt) + position:
+                    errors.append(
+                        f"numerical async CPU placeholder boundary is invalid: {key}"
+                    )
+                if (
+                    row.get("prompt_length") != len(prompt)
+                    or row.get("num_computed_tokens") != computed
+                    or row.get("target_input_token_position") != computed
+                ):
+                    errors.append(
+                        f"numerical materialized Target boundary is inconsistent: {key}"
+                    )
+                if not _valid_per_token_capture(
+                    row.get("per_logical_token_kv"),
+                    planned_row=planned_row,
+                    num_computed_tokens=computed,
+                    expected_world_size=2,
+                ):
+                    errors.append(f"numerical per-token KV capture is invalid: {key}")
+                mapping = row.get("kv_position_mapping")
+                groups = mapping.get("groups") if isinstance(mapping, Mapping) else None
+                owned_layers = (
+                    list(groups[0].get("layer_names", ()))
+                    if isinstance(groups, list)
+                    and len(groups) == 1
+                    and isinstance(groups[0], Mapping)
+                    else []
+                )
+                if any(
+                    owned_layers.count(planned_row[name]) != 1
+                    for name in (
+                        "control_layer_name",
+                        "first_different_layer_name",
+                    )
+                ):
+                    errors.append(f"numerical per-token layer ownership is ambiguous: {key}")
+        else:
+            prefix = row.get("logical_committed_prefix_token_ids")
+            if not isinstance(prefix, list) or row.get(
+                "logical_committed_prefix_sha256"
+            ) != token_sha256(prefix if isinstance(prefix, list) else []):
+                errors.append(f"numerical prefix checksum is invalid: {key}")
+            if isinstance(prefix, list) and isinstance(planned_row, Mapping):
+                prompt = list(planned_row["prompt_token_ids"])
+                position = int(planned_row["output_position"])
+                if (
+                    prefix[: len(prompt)] != prompt
+                    or len(prefix) != len(prompt) + position
+                ):
+                    errors.append(
+                        f"numerical committed prefix is not the planned boundary: {key}"
+                    )
+                computed = len(prefix) - 1
+                if (
+                    row.get("num_computed_tokens") != computed
+                    or row.get("target_input_token_position") != computed
+                    or row.get("target_input_token_id") != prefix[-1]
+                    or row.get("previous_committed_token_id") != prefix[-1]
+                ):
+                    errors.append(
+                        f"numerical pending Target input is inconsistent: {key}"
+                    )
         stages = row.get("tensor_stages")
         if not isinstance(stages, Mapping):
             errors.append(f"numerical tensor stages are missing: {key}")
@@ -223,6 +374,12 @@ def validate_numerical_records(
             for rank_row in rank_kv
         ):
             errors.append(f"numerical per-rank KV evidence is incomplete: {key}")
+        if per_token_plan and not _per_token_aggregates_match_rank_kv(
+            row.get("per_logical_token_kv"), rank_kv
+        ):
+            errors.append(
+                f"numerical per-token checksums do not match rank KV evidence: {key}"
+            )
         rank_evidence = row.get("tp_rank_evidence")
         if not _valid_tp_rank_rows(rank_evidence, expected_world_size=2):
             errors.append(f"numerical per-rank tensor evidence is invalid: {key}")
@@ -335,7 +492,7 @@ def compare_numerical_diagnostics(
         resident_token = _output_token(resident_output_by_id.get(request_id), position)
         expected_stock = int(item["stock_selected_token_id"])
         expected_resident = int(item["resident_selected_token_id"])
-        semantic_fields = (
+        placeholder_fields = (
             "logical_committed_prefix_token_ids",
             "logical_committed_prefix_sha256",
             "num_computed_tokens",
@@ -343,7 +500,20 @@ def compare_numerical_diagnostics(
             "target_input_token_id",
             "previous_committed_token_id",
         )
-        semantic_equal = all(stock.get(name) == resident.get(name) for name in semantic_fields)
+        placeholder_equal = all(
+            stock.get(name) == resident.get(name) for name in placeholder_fields
+        )
+        stock_generated = _generated_tokens(stock_output_by_id.get(request_id))
+        resident_generated = _generated_tokens(
+            resident_output_by_id.get(request_id)
+        )
+        semantic_equal = (
+            stock_generated is not None
+            and resident_generated is not None
+            and stock_generated[:position] == resident_generated[:position]
+            and len(stock_generated) > position
+            and len(resident_generated) > position
+        )
         ownership_equal = _logical_ownership(stock) == _logical_ownership(resident)
         stage_equal = {
             name: _stage_sha(stock, name) == _stage_sha(resident, name)
@@ -383,6 +553,8 @@ def compare_numerical_diagnostics(
                 "stock_output_token_id": stock_token,
                 "resident_output_token_id": resident_token,
                 "semantic_input_equal": semantic_equal,
+                "semantic_prefix_authority": "paired-final-run-output",
+                "async_cpu_placeholder_view_equal": placeholder_equal,
                 "logical_kv_ownership_equal": ownership_equal,
                 "kv_raw_bytes_equal": kv_equal,
                 "tensor_stage_raw_bytes_equal": stage_equal,
@@ -436,6 +608,295 @@ def comparison_markdown(report: Mapping[str, Any]) -> str:
             "",
             "Exact token equality remains mandatory. No tolerance or "
             "tie-equivalence policy is enabled.",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def compare_per_token_kv_diagnostics(
+    *,
+    plan: Mapping[str, Any],
+    stock_rows: Sequence[Mapping[str, Any]],
+    resident_rows: Sequence[Mapping[str, Any]],
+    stock_outputs: Sequence[Mapping[str, Any]],
+    resident_outputs: Sequence[Mapping[str, Any]],
+    immutable_reference: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Compare exact logical-token K/V bytes under final-output authority."""
+
+    errors = []
+    if plan.get("schema_version") != PER_TOKEN_PLAN_SCHEMA:
+        errors.append("per-token KV comparison requires the immutable per-token plan")
+    errors.extend(
+        f"stock: {item}"
+        for item in validate_numerical_records(
+            stock_rows, plan, execution_mode="stock-style"
+        )
+    )
+    errors.extend(
+        f"resident: {item}"
+        for item in validate_numerical_records(
+            resident_rows, plan, execution_mode="resident-target"
+        )
+    )
+    stock_by_id = _validated_output_map(stock_outputs, "stock", errors)
+    resident_by_id = _validated_output_map(resident_outputs, "resident", errors)
+    reference_by_id = _validated_reference_map(immutable_reference, plan, errors)
+    expected_ids = set(reference_by_id)
+    if set(stock_by_id) != expected_ids:
+        errors.append("stock final outputs differ from immutable reference request IDs")
+    if set(resident_by_id) != expected_ids:
+        errors.append("resident final outputs differ from immutable reference request IDs")
+
+    stock_divergences = _output_divergences(stock_by_id, reference_by_id)
+    if stock_divergences:
+        errors.append(
+            "stock final outputs differ from immutable reference: "
+            + repr(sorted(stock_divergences.items()))
+        )
+    resident_divergences = _output_divergences(resident_by_id, reference_by_id)
+    expected_divergences = {
+        str(row["request_id"]): int(row["output_position"])
+        for row in plan.get("requests", ())
+        if isinstance(row, Mapping)
+    }
+    if resident_divergences != expected_divergences:
+        errors.append(
+            "resident final outputs do not reproduce exactly the four divergences: "
+            f"observed={sorted(resident_divergences.items())}"
+        )
+
+    stock_by_key = _records_by_key(stock_rows)
+    resident_by_key = _records_by_key(resident_rows)
+    comparisons = []
+    observed_phases = []
+    for item in plan.get("requests", ()):
+        if not isinstance(item, Mapping):
+            continue
+        request_id = str(item["request_id"])
+        output_position = int(item["output_position"])
+        key = (request_id, output_position)
+        stock_record = stock_by_key.get(key)
+        resident_record = resident_by_key.get(key)
+        if stock_record is None or resident_record is None:
+            continue
+        row_errors = []
+        reference_tokens = _generated_tokens(reference_by_id.get(request_id))
+        stock_tokens = _generated_tokens(stock_by_id.get(request_id))
+        resident_tokens = _generated_tokens(resident_by_id.get(request_id))
+        reference_prefix = (
+            reference_tokens[:output_position]
+            if reference_tokens is not None
+            else None
+        )
+        stock_prefix = (
+            stock_tokens[:output_position] if stock_tokens is not None else None
+        )
+        resident_prefix = (
+            resident_tokens[:output_position]
+            if resident_tokens is not None
+            else None
+        )
+        stock_prefix_exact = (
+            reference_prefix is not None
+            and stock_prefix == reference_prefix
+            and stock_tokens is not None
+            and len(stock_tokens) > output_position
+        )
+        resident_prefix_exact = (
+            reference_prefix is not None
+            and resident_prefix == reference_prefix
+            and resident_tokens is not None
+            and len(resident_tokens) > output_position
+        )
+        paired_prefix_exact = (
+            stock_prefix is not None
+            and resident_prefix is not None
+            and stock_prefix == resident_prefix
+            and len(stock_prefix) == output_position
+        )
+        if not stock_prefix_exact:
+            row_errors.append("stock actual pre-divergence prefix differs from reference")
+        if not resident_prefix_exact:
+            row_errors.append("resident actual pre-divergence prefix differs from reference")
+        if not paired_prefix_exact:
+            row_errors.append("stock and resident actual pre-divergence prefixes differ")
+        if (
+            _output_token(reference_by_id.get(request_id), output_position)
+            != item["stock_selected_token_id"]
+            or _output_token(stock_by_id.get(request_id), output_position)
+            != item["stock_selected_token_id"]
+            or _output_token(resident_by_id.get(request_id), output_position)
+            != item["resident_selected_token_id"]
+        ):
+            row_errors.append("the exact planned stock/resident token pair was not reproduced")
+        expected_computed = int(item["prompt_length"]) + output_position - 1
+        if (
+            stock_record.get("num_computed_tokens") != expected_computed
+            or resident_record.get("num_computed_tokens") != expected_computed
+            or stock_record.get("target_input_token_position") != expected_computed
+            or resident_record.get("target_input_token_position") != expected_computed
+        ):
+            row_errors.append("materialized KV boundary differs from the planned position")
+        if _logical_ownership(stock_record) != _logical_ownership(resident_record):
+            row_errors.append("logical KV ownership differs")
+
+        rank_comparisons = []
+        stock_capture = stock_record.get("per_logical_token_kv", {})
+        resident_capture = resident_record.get("per_logical_token_kv", {})
+        stock_ranks = _rank_capture_map(stock_capture)
+        resident_ranks = _rank_capture_map(resident_capture)
+        if set(stock_ranks) != {0, 1} or set(resident_ranks) != {0, 1}:
+            row_errors.append("per-token KV TP rank evidence is incomplete")
+        for tp_rank in (0, 1):
+            stock_rank = stock_ranks.get(tp_rank)
+            resident_rank = resident_ranks.get(tp_rank)
+            if stock_rank is None or resident_rank is None:
+                continue
+            control = _compare_selected_token_layer(
+                stock_rank,
+                resident_rank,
+                layer_name=str(item["control_layer_name"]),
+                layer_index=int(item["control_layer_index"]),
+                layer_role="control",
+                prompt_length=int(item["prompt_length"]),
+            )
+            first = _compare_selected_token_layer(
+                stock_rank,
+                resident_rank,
+                layer_name=str(item["first_different_layer_name"]),
+                layer_index=int(item["first_different_layer_index"]),
+                layer_role="first-different",
+                prompt_length=int(item["prompt_length"]),
+            )
+            if not control["identity_valid"] or not first["identity_valid"]:
+                row_errors.append(f"TP{tp_rank} selected layer identity differs")
+            if not control["all_k_token_hashes_equal"] or not control[
+                "all_v_token_hashes_equal"
+            ]:
+                row_errors.append(f"TP{tp_rank} control layer is not bitwise exact")
+            if control["aggregate_raw_bytes_equal"] is not True:
+                row_errors.append(f"TP{tp_rank} control aggregate layer differs")
+            if first["aggregate_raw_bytes_equal"] is not False:
+                row_errors.append(
+                    f"TP{tp_rank} established first-different aggregate did not differ"
+                )
+            if first["first_differing_logical_position"] is None:
+                row_errors.append(
+                    f"TP{tp_rank} aggregate differs but no per-token K/V difference exists"
+                )
+            else:
+                observed_phases.append(str(first["phase"]))
+            rank_comparisons.append(
+                {
+                    "tp_rank": tp_rank,
+                    "prompt_length": int(item["prompt_length"]),
+                    "num_computed_tokens": expected_computed,
+                    "control_layer": control,
+                    "first_different_layer": first,
+                }
+            )
+        errors.extend(
+            f"{request_id}@{output_position}: {message}" for message in row_errors
+        )
+        comparisons.append(
+            {
+                "request_id": request_id,
+                "divergent_output_position": output_position,
+                "prompt_length": int(item["prompt_length"]),
+                "num_computed_tokens": expected_computed,
+                "target_input_position": expected_computed,
+                "previous_generated_output_position": output_position - 1,
+                "stock_previous_actual_token_id": _output_token(
+                    stock_by_id.get(request_id), output_position - 1
+                ),
+                "resident_previous_actual_token_id": _output_token(
+                    resident_by_id.get(request_id), output_position - 1
+                ),
+                "immutable_previous_token_id": _output_token(
+                    reference_by_id.get(request_id), output_position - 1
+                ),
+                "stock_selected_token_id": int(item["stock_selected_token_id"]),
+                "resident_selected_token_id": int(
+                    item["resident_selected_token_id"]
+                ),
+                "semantic_prefix_authority": SEMANTIC_PREFIX_AUTHORITY,
+                "stock_predivergence_prefix_exact": stock_prefix_exact,
+                "resident_predivergence_prefix_exact": resident_prefix_exact,
+                "paired_semantic_prefix_exact": paired_prefix_exact,
+                "async_cpu_placeholder_view_is_authoritative": False,
+                "tp_ranks": rank_comparisons,
+                "errors": row_errors,
+            }
+        )
+    if len(comparisons) != 4:
+        errors.append("per-token KV comparison did not resolve all four requests")
+    classification = _per_token_classification(observed_phases, errors)
+    return {
+        "schema_version": PER_TOKEN_COMPARISON_SCHEMA,
+        "diagnostic_only": True,
+        "valid": not errors,
+        "errors": errors,
+        "request_count": len(comparisons),
+        "semantic_prefix_authority": SEMANTIC_PREFIX_AUTHORITY,
+        "comparisons": comparisons,
+        "classification": classification,
+        "gate3_closed": False,
+        "phase4b2_blocked": True,
+        "tolerant_correctness_policy": False,
+        "tie_equivalent_tokens_accepted": False,
+        "replaces_stock_reference": False,
+        "correctness_decision": "fail-closed-pending-human-classification",
+    }
+
+
+def per_token_comparison_markdown(report: Mapping[str, Any]) -> str:
+    lines = [
+        "# Gate3 per-logical-token K/V localization",
+        "",
+        "Diagnostic-only exact byte comparison; Gate3 remains not closed.",
+        "",
+        f"Classification: **{report.get('classification', 'FAIL-CLOSED')}**",
+        "",
+        f"Semantic prefix authority: `{report.get('semantic_prefix_authority')}`",
+        "",
+        "| Request | Output pos | TP | Control layer K/V exact | First layer | "
+        "First logical difference | Phase | K differences | V differences |",
+        "| --- | ---: | ---: | --- | --- | ---: | --- | ---: | ---: |",
+    ]
+    for request in report.get("comparisons", ()):
+        for rank in request.get("tp_ranks", ()):
+            control = rank["control_layer"]
+            first = rank["first_different_layer"]
+            control_exact = (
+                control["all_k_token_hashes_equal"]
+                and control["all_v_token_hashes_equal"]
+            )
+            lines.append(
+                "| {request} | {position} | {rank} | {control_name}: {control} | "
+                "{first_name} | {first_position} | {phase} | {k_count} | "
+                "{v_count} |".format(
+                    request=request["request_id"],
+                    position=request["divergent_output_position"],
+                    rank=rank["tp_rank"],
+                    control_name=control["layer_name"],
+                    control=control_exact,
+                    first_name=first["layer_name"],
+                    first_position=first["first_differing_logical_position"],
+                    phase=first["phase"],
+                    k_count=first["differing_k_logical_position_count"],
+                    v_count=first["differing_v_logical_position_count"],
+                )
+            )
+    lines.extend(
+        [
+            "",
+            "The JSON report contains separate first/last K and V positions plus a ±2 "
+            "checksum/equality window around each first difference.",
+            "",
+            "No tolerance or tie-equivalence rule is enabled. Do not run Serial, Dual or "
+            "performance work from this diagnostic.",
             "",
         ]
     )
@@ -559,6 +1020,12 @@ def prepare_target_numerical_diagnostic(
         ]
         active["tp_rank_kv_cache_before_forward"] = rank_rows
         active["kv_cache_before_forward"] = _combine_rank_kv(rank_rows)
+        if "control_layer_index" in active["plan"]:
+            active["per_logical_token_kv"] = _combine_rank_per_token_kv(
+                rank_rows,
+                plan_row=active["plan"],
+                num_computed_tokens=active["num_computed_tokens"],
+            )
 
 
 def finalize_target_numerical_diagnostic(
@@ -640,8 +1107,11 @@ def finalize_target_numerical_diagnostic(
             range(int(tp_group.world_size))
         ):
             raise RuntimeError("Gate3 numerical TP-rank evidence is incomplete")
+        per_token_plan = state["plan"]["schema_version"] == PER_TOKEN_PLAN_SCHEMA
         record = {
-            "schema_version": RECORD_SCHEMA,
+            "schema_version": (
+                PER_TOKEN_RECORD_SCHEMA if per_token_plan else RECORD_SCHEMA
+            ),
             "diagnostic_only": True,
             "execution_mode": state["mode"],
             "plan_sha256": state["plan"]["plan_sha256"],
@@ -651,12 +1121,9 @@ def finalize_target_numerical_diagnostic(
             "internal_request_id": active["internal_request_id"],
             "output_position": active["output_position"],
             "position_indexing": "zero-based-generated-token-index",
-            "logical_committed_prefix_token_ids": active["prefix"],
-            "logical_committed_prefix_sha256": token_sha256(active["prefix"]),
             "num_computed_tokens": active["num_computed_tokens"],
+            "prompt_length": len(plan_row["prompt_token_ids"]),
             "target_input_token_position": active["target_input_token_position"],
-            "target_input_token_id": active["target_input_token_id"],
-            "previous_committed_token_id": active["prefix"][-1],
             "kv_cache_before_forward": active["kv_cache_before_forward"],
             "tp_rank_kv_cache_before_forward": active[
                 "tp_rank_kv_cache_before_forward"
@@ -696,6 +1163,28 @@ def finalize_target_numerical_diagnostic(
             "target_only_artifact": True,
             "visible_to_draft": False,
         }
+        if per_token_plan:
+            record["async_cpu_placeholder_view"] = {
+                "source": "InputBatch.token_ids_cpu",
+                "token_ids": active["prefix"],
+                "token_ids_sha256": token_sha256(active["prefix"]),
+                "contains_negative_placeholder": any(
+                    token_id < 0 for token_id in active["prefix"]
+                ),
+                "semantic_prefix_authority": False,
+            }
+            record["per_logical_token_kv"] = active["per_logical_token_kv"]
+        else:
+            record.update(
+                {
+                    "logical_committed_prefix_token_ids": active["prefix"],
+                    "logical_committed_prefix_sha256": token_sha256(
+                        active["prefix"]
+                    ),
+                    "target_input_token_id": active["target_input_token_id"],
+                    "previous_committed_token_id": active["prefix"][-1],
+                }
+            )
         log.append(record)
         state["captured"].add(key)
     state["active"] = {}
@@ -870,6 +1359,10 @@ def _generic_kv_ownership(
             raise RuntimeError(
                 "Gate3 numerical generic block-table layout is unsupported"
             ) from error
+        if len(set(physical_blocks)) != len(physical_blocks):
+            raise RuntimeError(
+                "Gate3 numerical logical blocks map ambiguously to physical storage"
+            )
         mapping = slot_mappings_by_group[group_id]
         slots = _to_int_list(mapping, name="generic slot mapping")
         query_end = flat_query_start + query_length
@@ -941,6 +1434,9 @@ def _kv_cache_summary(runner: Any, active: Mapping[str, Any]) -> dict[str, Any]:
                 raise RuntimeError("Gate3 numerical KV layer belongs to multiple groups")
             group_by_layer[layer_name] = group
     layers = []
+    per_token_layers = []
+    plan_row = active.get("plan")
+    selected_layers = _selected_per_token_layers(plan_row)
     aggregate = hashlib.sha256()
     observed_layers = set()
     for name, module in model.named_modules():
@@ -959,6 +1455,8 @@ def _kv_cache_summary(runner: Any, active: Mapping[str, Any]) -> dict[str, Any]:
             raise RuntimeError("Gate3 numerical diagnostic supports FlashAttention KV layout only")
         if int(cache.shape[2]) != block_size:
             raise RuntimeError("Gate3 numerical KV cache block size differs from block table")
+        if any(block >= int(cache.shape[0]) for block in blocks):
+            raise RuntimeError("Gate3 numerical logical position maps outside KV storage")
         raw_hash = hashlib.sha256()
         numeric_min = None
         numeric_max = None
@@ -998,10 +1496,26 @@ def _kv_cache_summary(runner: Any, active: Mapping[str, Any]) -> dict[str, Any]:
                 "norm": math.sqrt(squared_norm),
             }
         )
+        if layer_name in selected_layers:
+            selection = selected_layers[layer_name]
+            token_summary = _logical_token_kv_summary(
+                cache,
+                group=group,
+                num_computed_tokens=computed,
+                layer_name=layer_name,
+                layer_index=selection["layer_index"],
+                layer_role=selection["layer_role"],
+            )
+            token_summary["aggregate_raw_sha256"] = digest
+            per_token_layers.append(token_summary)
     if not layers:
         raise RuntimeError("Gate3 numerical diagnostic found no Target KV-cache layers")
     if observed_layers != set(group_by_layer):
         raise RuntimeError("Gate3 numerical KV-cache layers differ from group ownership")
+    if set(selected_layers) != {
+        row["layer_name"] for row in per_token_layers
+    }:
+        raise RuntimeError("Gate3 numerical selected per-token KV layer is missing")
     return {
         "layout": "flash-attention-paged-kv[num_blocks,2,block_size,...]",
         "logical_token_count": computed,
@@ -1009,6 +1523,123 @@ def _kv_cache_summary(runner: Any, active: Mapping[str, Any]) -> dict[str, Any]:
         "layer_count": len(layers),
         "aggregate_raw_sha256": aggregate.hexdigest(),
         "layers": layers,
+        "per_logical_token_kv_layers": per_token_layers,
+    }
+
+
+def _selected_per_token_layers(plan_row: Any) -> dict[str, dict[str, Any]]:
+    if not isinstance(plan_row, Mapping) or "control_layer_index" not in plan_row:
+        return {}
+    return {
+        str(plan_row["control_layer_name"]): {
+            "layer_index": int(plan_row["control_layer_index"]),
+            "layer_role": "control",
+        },
+        str(plan_row["first_different_layer_name"]): {
+            "layer_index": int(plan_row["first_different_layer_index"]),
+            "layer_role": "first-different",
+        },
+    }
+
+
+def _logical_kv_locations(
+    physical_blocks: Sequence[int], block_size: int, num_tokens: int
+) -> list[tuple[int, int, int]]:
+    """Map logical tokens to authoritative paged-KV storage locations."""
+
+    if not _positive_int(block_size) or not _nonnegative_int(num_tokens):
+        raise RuntimeError("Gate3 per-token KV logical mapping dimensions are invalid")
+    required_blocks = math.ceil(num_tokens / block_size) if num_tokens else 0
+    if len(physical_blocks) != required_blocks or any(
+        not _nonnegative_int(block) for block in physical_blocks
+    ) or len(set(physical_blocks)) != len(physical_blocks):
+        raise RuntimeError("Gate3 per-token KV block table is truncated or invalid")
+    return [
+        (
+            logical_position,
+            int(physical_blocks[logical_position // block_size]),
+            logical_position % block_size,
+        )
+        for logical_position in range(num_tokens)
+    ]
+
+
+def _hash_token_kv_payloads(
+    k_payloads: Sequence[bytes],
+    v_payloads: Sequence[bytes],
+) -> list[dict[str, Any]]:
+    """Hash separate K/V byte planes after one bounded layer transfer."""
+
+    if len(k_payloads) != len(v_payloads):
+        raise RuntimeError("Gate3 per-token K/V payload counts differ")
+    rows = []
+    for logical_position, (k_payload, v_payload) in enumerate(
+        zip(k_payloads, v_payloads)
+    ):
+        if not isinstance(k_payload, bytes) or not isinstance(v_payload, bytes):
+            raise RuntimeError("Gate3 per-token K/V payload is not raw bytes")
+        rows.append(
+            {
+                "logical_position": logical_position,
+                "k_raw_sha256": hashlib.sha256(k_payload).hexdigest(),
+                "v_raw_sha256": hashlib.sha256(v_payload).hexdigest(),
+            }
+        )
+    return rows
+
+
+def _logical_token_kv_summary(
+    cache: Any,
+    *,
+    group: Mapping[str, Any],
+    num_computed_tokens: int,
+    layer_name: str,
+    layer_index: int,
+    layer_role: str,
+) -> dict[str, Any]:
+    """Copy one selected logical layer once, then hash token K/V slices on CPU."""
+
+    import torch
+
+    block_size = int(group["block_size"])
+    blocks = list(group["physical_block_ids"])
+    locations = _logical_kv_locations(blocks, block_size, num_computed_tokens)
+    if any(block >= int(cache.shape[0]) for _, block, _ in locations):
+        raise RuntimeError("Gate3 per-token KV logical position is outside storage")
+    pieces = []
+    remaining = num_computed_tokens
+    for physical_block in blocks:
+        take = min(block_size, remaining)
+        if take:
+            pieces.append(cache[physical_block, :, :take])
+        remaining -= take
+    if remaining != 0 or not pieces:
+        raise RuntimeError("Gate3 per-token KV reconstruction is incomplete")
+    logical = torch.cat(pieces, dim=1).detach().contiguous().cpu()
+    if list(logical.shape[:2]) != [2, num_computed_tokens]:
+        raise RuntimeError("Gate3 per-token KV reconstructed shape is invalid")
+    k_values = logical[0]
+    v_values = logical[1]
+    k_payloads = [
+        k_values[position].contiguous().view(torch.uint8).numpy().tobytes()
+        for position in range(num_computed_tokens)
+    ]
+    v_payloads = [
+        v_values[position].contiguous().view(torch.uint8).numpy().tobytes()
+        for position in range(num_computed_tokens)
+    ]
+    return {
+        "layer_name": layer_name,
+        "layer_index": int(layer_index),
+        "layer_role": layer_role,
+        "kv_cache_group_id": int(group["kv_cache_group_id"]),
+        "dtype": str(cache.dtype),
+        "k_shape_per_logical_token": list(k_values.shape[1:]),
+        "v_shape_per_logical_token": list(v_values.shape[1:]),
+        "materialized_logical_position_start": 0,
+        "materialized_logical_position_end_exclusive": num_computed_tokens,
+        "gpu_to_cpu_transfer_count": 1,
+        "tokens": _hash_token_kv_payloads(k_payloads, v_payloads),
     }
 
 
@@ -1061,6 +1692,89 @@ def _combine_rank_kv(rank_rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
             }
             for row in rank_rows
         ],
+    }
+
+
+def _combine_rank_per_token_kv(
+    rank_rows: Sequence[Mapping[str, Any]],
+    *,
+    plan_row: Mapping[str, Any],
+    num_computed_tokens: int,
+) -> dict[str, Any]:
+    ranks = [int(row["tp_rank"]) for row in rank_rows]
+    if ranks != list(range(len(rank_rows))):
+        raise RuntimeError("Gate3 per-token KV TP rank evidence is incomplete")
+    expected = {
+        str(plan_row["control_layer_name"]): (
+            int(plan_row["control_layer_index"]),
+            "control",
+        ),
+        str(plan_row["first_different_layer_name"]): (
+            int(plan_row["first_different_layer_index"]),
+            "first-different",
+        ),
+    }
+    combined_ranks = []
+    group_counts = []
+    for row in rank_rows:
+        summary = row.get("kv_cache_before_forward")
+        ownership = row.get("kv_ownership")
+        if not isinstance(summary, Mapping) or not isinstance(ownership, Mapping):
+            raise RuntimeError("Gate3 per-token KV rank summary is missing")
+        layers = summary.get("per_logical_token_kv_layers")
+        if not isinstance(layers, list) or {
+            layer.get("layer_name") for layer in layers if isinstance(layer, Mapping)
+        } != set(expected):
+            raise RuntimeError("Gate3 per-token KV selected layers differ across ranks")
+        for layer in layers:
+            if not isinstance(layer, Mapping):
+                raise RuntimeError("Gate3 per-token KV selected layer is malformed")
+            name = str(layer["layer_name"])
+            layer_index, layer_role = expected[name]
+            aggregate_layers = summary.get("layers")
+            aggregate_matches = (
+                [
+                    aggregate_layer
+                    for aggregate_layer in aggregate_layers
+                    if isinstance(aggregate_layer, Mapping)
+                    and aggregate_layer.get("layer") == name
+                ]
+                if isinstance(aggregate_layers, list)
+                else []
+            )
+            if (
+                layer.get("layer_index") != layer_index
+                or layer.get("layer_role") != layer_role
+                or layer.get("materialized_logical_position_start") != 0
+                or layer.get("materialized_logical_position_end_exclusive")
+                != num_computed_tokens
+                or len(aggregate_matches) != 1
+                or aggregate_matches[0].get("raw_sha256")
+                != layer.get("aggregate_raw_sha256")
+            ):
+                raise RuntimeError("Gate3 per-token KV selected layer contract differs")
+        group_counts.append(int(ownership.get("kv_cache_group_count", -1)))
+        combined_ranks.append(
+            {
+                "tp_rank": int(row["tp_rank"]),
+                "layers": sorted(layers, key=lambda item: int(item["layer_index"])),
+            }
+        )
+    if group_counts != [1] * len(rank_rows):
+        raise RuntimeError("Gate3 per-token KV requires the validated one-group layout")
+    return {
+        "schema_version": "specrhythm.phase4b1-per-logical-token-kv-capture.v1",
+        "authority": (
+            "InputBatch.MultiGroupBlockTable logical block order + "
+            "FlashAttention cache[physical_block,K_or_V,block_offset]"
+        ),
+        "layout": "flash-attention-paged-kv[num_blocks,2,block_size,...]",
+        "materialized_position_definition": "[0,num_computed_tokens)",
+        "materialized_logical_position_start": 0,
+        "materialized_logical_position_end_exclusive": num_computed_tokens,
+        "kv_cache_group_count": 1,
+        "tp_world_size": len(rank_rows),
+        "tp_ranks": combined_ranks,
     }
 
 
@@ -1158,6 +1872,7 @@ def _valid_kv_ownership(
             or not isinstance(physical, list)
             or len(physical) != used
             or any(not _nonnegative_int(item) for item in physical)
+            or len(set(physical)) != len(physical)
             or not isinstance(slots, list)
             or len(slots) != 1
             or any(not _nonnegative_int(item) for item in slots)
@@ -1167,6 +1882,149 @@ def _valid_kv_ownership(
         ):
             return False
     return True
+
+
+def _valid_per_token_capture(
+    value: Any,
+    *,
+    planned_row: Mapping[str, Any],
+    num_computed_tokens: int,
+    expected_world_size: int,
+) -> bool:
+    if not isinstance(value, Mapping):
+        return False
+    if (
+        value.get("schema_version")
+        != "specrhythm.phase4b1-per-logical-token-kv-capture.v1"
+        or value.get("authority")
+        != (
+            "InputBatch.MultiGroupBlockTable logical block order + "
+            "FlashAttention cache[physical_block,K_or_V,block_offset]"
+        )
+        or value.get("layout")
+        != "flash-attention-paged-kv[num_blocks,2,block_size,...]"
+        or value.get("materialized_position_definition")
+        != "[0,num_computed_tokens)"
+        or value.get("materialized_logical_position_start") != 0
+        or value.get("materialized_logical_position_end_exclusive")
+        != num_computed_tokens
+        or value.get("kv_cache_group_count") != 1
+        or value.get("tp_world_size") != expected_world_size
+    ):
+        return False
+    ranks = value.get("tp_ranks")
+    if not _valid_tp_rank_rows(ranks, expected_world_size=expected_world_size):
+        return False
+    expected_layers = {
+        str(planned_row["control_layer_name"]): (
+            int(planned_row["control_layer_index"]),
+            "control",
+        ),
+        str(planned_row["first_different_layer_name"]): (
+            int(planned_row["first_different_layer_index"]),
+            "first-different",
+        ),
+    }
+    for rank in ranks:
+        layers = rank.get("layers") if isinstance(rank, Mapping) else None
+        if not isinstance(layers, list) or len(layers) != 2:
+            return False
+        by_name = {
+            str(layer.get("layer_name")): layer
+            for layer in layers
+            if isinstance(layer, Mapping)
+        }
+        if set(by_name) != set(expected_layers):
+            return False
+        for name, (layer_index, layer_role) in expected_layers.items():
+            layer = by_name[name]
+            tokens = layer.get("tokens")
+            if (
+                layer.get("layer_index") != layer_index
+                or layer.get("layer_role") != layer_role
+                or layer.get("kv_cache_group_id") != 0
+                or not layer.get("dtype")
+                or not _sha256_text(layer.get("aggregate_raw_sha256"))
+                or not _positive_shape(layer.get("k_shape_per_logical_token"))
+                or not _positive_shape(layer.get("v_shape_per_logical_token"))
+                or layer.get("materialized_logical_position_start") != 0
+                or layer.get("materialized_logical_position_end_exclusive")
+                != num_computed_tokens
+                or layer.get("gpu_to_cpu_transfer_count") != 1
+                or not isinstance(tokens, list)
+                or len(tokens) != num_computed_tokens
+            ):
+                return False
+            for position, token in enumerate(tokens):
+                if (
+                    not isinstance(token, Mapping)
+                    or token.get("logical_position") != position
+                    or not _sha256_text(token.get("k_raw_sha256"))
+                    or not _sha256_text(token.get("v_raw_sha256"))
+                ):
+                    return False
+    return True
+
+
+def _per_token_aggregates_match_rank_kv(
+    capture: Any, rank_kv: Any
+) -> bool:
+    """Bind selected token hashes to the existing full-layer rank checksums."""
+
+    token_ranks = _rank_capture_map(capture)
+    if not _valid_tp_rank_rows(rank_kv, expected_world_size=2):
+        return False
+    aggregate_ranks = {
+        int(row["tp_rank"]): row for row in rank_kv if isinstance(row, Mapping)
+    }
+    if set(token_ranks) != {0, 1} or set(aggregate_ranks) != {0, 1}:
+        return False
+    for rank, token_row in token_ranks.items():
+        summary = aggregate_ranks[rank].get("kv_cache_before_forward")
+        aggregate_layers = summary.get("layers") if isinstance(summary, Mapping) else None
+        token_layers = token_row.get("layers")
+        if not isinstance(aggregate_layers, list) or not isinstance(token_layers, list):
+            return False
+        aggregate_by_name = {}
+        for layer in aggregate_layers:
+            if not isinstance(layer, Mapping):
+                return False
+            name = layer.get("layer")
+            if not isinstance(name, str) or name in aggregate_by_name:
+                return False
+            aggregate_by_name[name] = layer.get("raw_sha256")
+        for layer in token_layers:
+            if (
+                not isinstance(layer, Mapping)
+                or aggregate_by_name.get(layer.get("layer_name"))
+                != layer.get("aggregate_raw_sha256")
+            ):
+                return False
+    return True
+
+
+def _positive_shape(value: Any) -> bool:
+    return bool(
+        isinstance(value, list)
+        and value
+        and all(_positive_int(dimension) for dimension in value)
+    )
+
+
+def _signed_token_list(value: Any) -> bool:
+    return bool(
+        isinstance(value, list)
+        and value
+        and all(isinstance(item, int) and not isinstance(item, bool) for item in value)
+    )
+
+
+def _sha256_text(value: Any) -> bool:
+    return bool(
+        isinstance(value, str)
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    )
 
 
 def _logical_ownership(row: Mapping[str, Any]) -> dict[str, Any]:
@@ -1231,6 +2089,277 @@ def _first_different_stage(
     return "none-observed"
 
 
+def _validated_output_map(
+    rows: Sequence[Mapping[str, Any]], label: str, errors: list[str]
+) -> dict[str, Mapping[str, Any]]:
+    result = {}
+    if len(rows) != 100:
+        errors.append(f"{label} final output does not preserve the 100-request shape")
+    for row in rows:
+        request_id = str(row.get("request_id", ""))
+        tokens = _generated_tokens(row)
+        if not request_id or request_id in result or tokens is None:
+            errors.append(f"{label} final output request/token data is invalid")
+            continue
+        result[request_id] = row
+    return result
+
+
+def _validated_reference_map(
+    reference: Mapping[str, Any], plan: Mapping[str, Any], errors: list[str]
+) -> dict[str, Mapping[str, Any]]:
+    from specrhythm.phase4.reference import validate_stock_reference
+
+    errors.extend(
+        f"immutable reference: {error}"
+        for error in validate_stock_reference(reference)
+    )
+    workload = reference.get("workload")
+    if (
+        not isinstance(workload, Mapping)
+        or workload.get("sha256") != plan.get("workload_sha256")
+    ):
+        errors.append("immutable stock reference workload checksum differs")
+    frozen_requests = (
+        workload.get("requests") if isinstance(workload, Mapping) else None
+    )
+    frozen_by_id = {
+        str(row.get("request_id", "")): row
+        for row in frozen_requests
+        if isinstance(row, Mapping)
+    } if isinstance(frozen_requests, list) else {}
+    for planned in plan.get("requests", ()):
+        if not isinstance(planned, Mapping):
+            continue
+        frozen = frozen_by_id.get(str(planned["request_id"]))
+        if (
+            not isinstance(frozen, Mapping)
+            or frozen.get("prompt_token_ids") != planned.get("prompt_token_ids")
+            or frozen.get("maximum_new_tokens") != planned.get("maximum_new_tokens")
+        ):
+            errors.append(
+                "immutable stock reference planned prompt/output limit differs: "
+                f"{planned['request_id']}"
+            )
+    outputs = reference.get("outputs")
+    if not isinstance(outputs, list):
+        errors.append("immutable stock reference outputs are missing")
+        return {}
+    return _validated_output_map(outputs, "immutable reference", errors)
+
+
+def _generated_tokens(row: Optional[Mapping[str, Any]]) -> Optional[list[int]]:
+    tokens = row.get("generated_token_ids") if isinstance(row, Mapping) else None
+    if not isinstance(tokens, list) or any(
+        not _nonnegative_int(token) for token in tokens
+    ):
+        return None
+    return [int(token) for token in tokens]
+
+
+def _first_output_divergence(
+    actual: Sequence[int], expected: Sequence[int]
+) -> Optional[int]:
+    for position, (actual_token, expected_token) in enumerate(
+        zip(actual, expected)
+    ):
+        if actual_token != expected_token:
+            return position
+    return min(len(actual), len(expected)) if len(actual) != len(expected) else None
+
+
+def _output_divergences(
+    actual_by_id: Mapping[str, Mapping[str, Any]],
+    reference_by_id: Mapping[str, Mapping[str, Any]],
+) -> dict[str, int]:
+    result = {}
+    for request_id, reference in reference_by_id.items():
+        actual = _generated_tokens(actual_by_id.get(request_id))
+        expected = _generated_tokens(reference)
+        if actual is None or expected is None:
+            continue
+        position = _first_output_divergence(actual, expected)
+        if position is not None:
+            result[request_id] = position
+    return result
+
+
+def _rank_capture_map(value: Any) -> dict[int, Mapping[str, Any]]:
+    ranks = value.get("tp_ranks") if isinstance(value, Mapping) else None
+    if not isinstance(ranks, list):
+        return {}
+    result = {}
+    for row in ranks:
+        if not isinstance(row, Mapping) or not _nonnegative_int(row.get("tp_rank")):
+            continue
+        rank = int(row["tp_rank"])
+        if rank in result:
+            return {}
+        result[rank] = row
+    return result
+
+
+def _compare_selected_token_layer(
+    stock_rank: Mapping[str, Any],
+    resident_rank: Mapping[str, Any],
+    *,
+    layer_name: str,
+    layer_index: int,
+    layer_role: str,
+    prompt_length: int,
+) -> dict[str, Any]:
+    stock = _selected_layer(stock_rank, layer_name)
+    resident = _selected_layer(resident_rank, layer_name)
+    identity_valid = bool(
+        stock
+        and resident
+        and stock.get("layer_name") == resident.get("layer_name") == layer_name
+        and stock.get("layer_index") == resident.get("layer_index") == layer_index
+        and stock.get("layer_role") == resident.get("layer_role") == layer_role
+        and stock.get("kv_cache_group_id")
+        == resident.get("kv_cache_group_id")
+        == 0
+        and stock.get("dtype") == resident.get("dtype")
+        and stock.get("k_shape_per_logical_token")
+        == resident.get("k_shape_per_logical_token")
+        and stock.get("v_shape_per_logical_token")
+        == resident.get("v_shape_per_logical_token")
+    )
+    stock_tokens = _token_hash_map(stock)
+    resident_tokens = _token_hash_map(resident)
+    positions = sorted(set(stock_tokens) | set(resident_tokens))
+    k_differences = [
+        position
+        for position in positions
+        if stock_tokens.get(position, {}).get("k_raw_sha256")
+        != resident_tokens.get(position, {}).get("k_raw_sha256")
+    ]
+    v_differences = [
+        position
+        for position in positions
+        if stock_tokens.get(position, {}).get("v_raw_sha256")
+        != resident_tokens.get(position, {}).get("v_raw_sha256")
+    ]
+    all_differences = sorted(set(k_differences) | set(v_differences))
+    first = all_differences[0] if all_differences else None
+    window = []
+    if first is not None:
+        for position in range(max(0, first - 2), min(max(positions, default=-1), first + 2) + 1):
+            stock_token = stock_tokens.get(position, {})
+            resident_token = resident_tokens.get(position, {})
+            window.append(
+                {
+                    "logical_position": position,
+                    "k_equal": stock_token.get("k_raw_sha256")
+                    == resident_token.get("k_raw_sha256"),
+                    "v_equal": stock_token.get("v_raw_sha256")
+                    == resident_token.get("v_raw_sha256"),
+                    "stock_k_raw_sha256": stock_token.get("k_raw_sha256"),
+                    "resident_k_raw_sha256": resident_token.get("k_raw_sha256"),
+                    "stock_v_raw_sha256": stock_token.get("v_raw_sha256"),
+                    "resident_v_raw_sha256": resident_token.get("v_raw_sha256"),
+                }
+            )
+    return {
+        "layer_name": layer_name,
+        "layer_index": layer_index,
+        "layer_role": layer_role,
+        "kv_cache_group_id": 0,
+        "identity_valid": identity_valid,
+        "dtype": stock.get("dtype") if stock else None,
+        "k_shape_per_logical_token": (
+            stock.get("k_shape_per_logical_token") if stock else None
+        ),
+        "v_shape_per_logical_token": (
+            stock.get("v_shape_per_logical_token") if stock else None
+        ),
+        "aggregate_raw_bytes_equal": (
+            stock.get("aggregate_raw_sha256")
+            == resident.get("aggregate_raw_sha256")
+            if stock and resident
+            else None
+        ),
+        "all_k_token_hashes_equal": not k_differences and bool(positions),
+        "all_v_token_hashes_equal": not v_differences and bool(positions),
+        "differing_k_logical_position_count": len(k_differences),
+        "differing_v_logical_position_count": len(v_differences),
+        "first_differing_logical_position": first,
+        "phase": _logical_token_phase(first, prompt_length),
+        "k_equal_at_first_differing_position": (
+            first not in k_differences if first is not None else None
+        ),
+        "v_equal_at_first_differing_position": (
+            first not in v_differences if first is not None else None
+        ),
+        "first_differing_k_position": (
+            k_differences[0] if k_differences else None
+        ),
+        "first_differing_v_position": (
+            v_differences[0] if v_differences else None
+        ),
+        "last_differing_k_position": (
+            k_differences[-1] if k_differences else None
+        ),
+        "last_differing_v_position": (
+            v_differences[-1] if v_differences else None
+        ),
+        "local_window": window,
+    }
+
+
+def _selected_layer(
+    rank: Mapping[str, Any], layer_name: str
+) -> Mapping[str, Any]:
+    layers = rank.get("layers")
+    if not isinstance(layers, list):
+        return {}
+    matches = [
+        layer
+        for layer in layers
+        if isinstance(layer, Mapping) and layer.get("layer_name") == layer_name
+    ]
+    return matches[0] if len(matches) == 1 else {}
+
+
+def _token_hash_map(layer: Mapping[str, Any]) -> dict[int, Mapping[str, Any]]:
+    tokens = layer.get("tokens") if isinstance(layer, Mapping) else None
+    if not isinstance(tokens, list):
+        return {}
+    result = {}
+    for row in tokens:
+        if not isinstance(row, Mapping) or not _nonnegative_int(
+            row.get("logical_position")
+        ):
+            return {}
+        position = int(row["logical_position"])
+        if position in result:
+            return {}
+        result[position] = row
+    return result
+
+
+def _logical_token_phase(position: Optional[int], prompt_length: int) -> Optional[str]:
+    if position is None:
+        return None
+    if position < prompt_length:
+        return "PROMPT_PREFILL"
+    if position == prompt_length:
+        return "BOOTSTRAP"
+    return "DECODE_HISTORY"
+
+
+def _per_token_classification(phases: Sequence[str], errors: Sequence[str]) -> str:
+    if errors or not phases:
+        return "FAIL-CLOSED"
+    if "PROMPT_PREFILL" in phases:
+        return "PROMPT_PREFILL"
+    if "BOOTSTRAP" in phases:
+        return "BOOTSTRAP"
+    if set(phases) == {"DECODE_HISTORY"}:
+        return "DECODE_HISTORY"
+    return "FAIL-CLOSED"
+
+
 def _records_by_key(
     rows: Sequence[Mapping[str, Any]],
 ) -> dict[tuple[str, int], Mapping[str, Any]]:
@@ -1250,7 +2379,7 @@ def _outputs_by_id(
 
 def _output_token(row: Optional[Mapping[str, Any]], position: int) -> Optional[int]:
     tokens = row.get("generated_token_ids") if isinstance(row, Mapping) else None
-    if not isinstance(tokens, list) or position >= len(tokens):
+    if not isinstance(tokens, list) or position < 0 or position >= len(tokens):
         return None
     token = tokens[position]
     return int(token) if _nonnegative_int(token) else None

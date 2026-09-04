@@ -96,9 +96,12 @@ def test_failed_check_writes_immutable_diagnostic_manifest(tmp_path):
         )
 
 
-def test_apply_then_patched_check_and_restore_then_stock_check(
+def test_apply_then_e73_patched_check_and_restore_then_stock_check(
     tmp_path, monkeypatch
 ):
+    assert manager.PATCHED_SHA256 == (
+        "a8b56ee511ad04d4f6e56e802417e6b8fb8b723a9fef05de36148f4218e9e945"
+    )
     root = tmp_path / "site-packages"
     target = root / manager.TARGET_FILE
     scheduler = root / manager.SCHEDULER_FILE

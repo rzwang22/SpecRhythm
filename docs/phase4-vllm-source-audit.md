@@ -95,6 +95,28 @@ worker evidence but is not a bitwise theorem across those dimensions. The exact 
 one-shot localization design are in
 [phase4b1-gate3-numerical-diagnostics.md](phase4b1-gate3-numerical-diagnostics.md).
 
+### Async-token and per-logical-token KV authority
+
+The successful e73 observer run exposed why `InputBatch.token_ids_cpu` cannot be treated as a
+complete semantic prefix under async scheduling. At the pinned commit,
+`GPUModelRunner._bookkeeping_sync()` retains the real sampled tensor in GPU
+`prev_sampled_token_ids` and writes a CPU `[-1]` placeholder. `_prepare_input_ids()` explicitly
+scatters that GPU tensor into the next executed input. The corrected diagnostic therefore labels
+the CPU row as `async_cpu_placeholder_view` and makes completed stock/resident outputs plus the
+immutable stock reference the only semantic-prefix authority.
+
+Per-token KV mapping follows the pinned generic structures rather than speculative metadata.
+`MultiGroupBlockTable.block_tables[group]` owns the request's logical block row and kernel
+`block_size`; `kv_cache_config.kv_cache_groups[group].layer_names` owns layer membership; and
+FlashAttention defines cache semantics as
+`(num_blocks, 2, block_size, num_kv_heads, head_size)`, with axis 1 unbound into K and V. Logical
+position `i` therefore maps to `block_row[i // block_size]` and offset `i % block_size`, then to K
+or V at axis 1. The observer records physical IDs as provenance but compares hashes in logical
+position order. It supports only the validated Qwen3-32B one-group TP2 FlashAttention layout and
+fails on ambiguous ownership, truncation, layout change, or incomplete ranks. Exact source links
+and the bounded-transfer design are documented in
+[phase4b1-gate3-numerical-diagnostics.md](phase4b1-gate3-numerical-diagnostics.md).
+
 ## Phase 4B source audit decision
 
 At pinned commit `752a3a5`, `Scheduler.schedule()` consumes `request.spec_token_ids`, constructs

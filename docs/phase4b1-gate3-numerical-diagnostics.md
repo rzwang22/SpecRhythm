@@ -1,134 +1,139 @@
 # Phase 4B.1 Gate3 numerical localization
 
-This phase is diagnostic-only. Exact token equality against the immutable stock reference remains
-the correctness authority. No tie-equivalent-token rule, numerical tolerance, replacement stock
-reference, Serial, Dual, performance, TPOT or SLO result is authorized here.
+This work is diagnostic-only. Exact generated-token equality against the immutable stock-vLLM
+reference remains the correctness authority. It does not authorize a tolerance, a replacement
+reference, Serial, Dual, Dual-Eager, performance, TPOT, throughput, goodput, SLO, speedup, or
+Phase 4B.2 experiment.
 
-## Preserved evidence and question
+## Preserved evidence
 
-The first corrected-100 resident Target run at commit `32b09a6` passed chunked setup, all 100
-bootstrap observations, global decode readiness, first-forward contracts, TP2 placement,
-measurement boundaries and cleanup. It then failed exact output compatibility for four requests.
-The common pattern is a stock top-two log-probability margin of exactly `0.125` becoming equal
-resident values. Because pairwise log-softmax differences equal pairwise raw-logit differences,
-this is pre-log-softmax drift rather than evidence of a different log-softmax tie policy. The old
-directory remains immutable; this phase never edits or reclassifies it as a pass.
+The corrected-100 resident Target run at commit `32b09a6` passed chunked setup, all 100 bootstrap
+observations, global decode readiness, first-forward contracts, TP2 placement, measurement
+boundaries, and cleanup. It matched 96/100 immutable trajectories and diverged at exactly these
+zero-based generated positions:
 
-The first one-shot instrumentation run at commit `c142fa7` is also immutable, at:
+| Request | Position | Stock token | Resident token |
+| --- | ---: | ---: | ---: |
+| `r3-c7ee1a73ee79dd6dc21cb8dc` | 3 | 600 | 296 |
+| `r3-32ae44a69fffd76f0dd4b787` | 4 | 3435 | 15 |
+| `r3-646c340a0281105c1c20de27` | 12 | 448 | 323 |
+| `r3-e00f5312321ec537a9c716cd` | 2 | 23826 | 1674 |
+
+For every pair the immutable stock path preferred its selected token by exactly `0.125` in raw
+logit space, while resident execution made the two values equal. Each path's raw argmax matches
+its emitted token, so this is already upstream of sampling rather than a sampler tie-breaking
+bug.
+
+The first observer launch at `c142fa7` failed before a valid checkpoint because it read
+speculative-only common attention metadata on a stock run. It remains immutable
+`diagnostic-infrastructure-failed` provenance. The generic-ownership observer at `e73e884` then
+completed one stock-style and one resident corrected-100 run at:
 
 ```text
-/root/autodl-tmp/SpecRhythm-data/results/phase4/c142fa7adbbdf0d81cc02d9244a3be75d4b9d7e7/phase4b1-gate3-numerical-20260828T033035Z
+/root/autodl-tmp/SpecRhythm-data/results/phase4/e73e8848904eee7f18e7beba80d1ec2da94e8267/phase4b1-gate3-numerical-20260904T070021Z
 ```
 
-Its preparation and four-layer patch application passed, but both stock TP ranks crashed before
-producing a valid numerical checkpoint. Resident Target and the comparator were never run. This
-is `diagnostic-infrastructure-failed` provenance, not a Gate3 numerical result, and it does not
-consume the one authorized successful stock/resident comparison. The later EngineCore request
-`KeyError` and shared-memory warning followed the worker failure and are classified as shutdown
-aftermath unless independent evidence proves otherwise.
+That root is immutable. It proves equal actual pre-divergence generated history, computed-token
+boundary, logical KV ownership, and current-token embedding, followed by different KV bytes,
+hidden states, and raw logits. Read-only per-layer comparison found the same boundary on both TP
+ranks: layers 3/4 for `c7ee`, 20/21 for `646c`, 23/24 for `32ae`, and 55/56 for `e00f`. Every
+layer before the boundary was exact and every later layer differed. This strongly motivates
+per-logical-token localization but does not prove a numerical-drift hypothesis or close Gate3.
 
-## Exact pinned-vLLM batch-invariance audit
+## Async CPU placeholder correction
+
+The e73 stock records exposed an observer metadata error. In pinned vLLM async scheduling,
+`GPUModelRunner._bookkeeping_sync()` keeps the real sample in GPU
+`prev_sampled_token_ids` but writes `[-1]` into `InputBatch.token_ids_cpu`. On the next step,
+`_prepare_input_ids()` scatters those real GPU values into the model input. Therefore the e73
+stock `logical_committed_prefix_token_ids` field is an async CPU placeholder view, not a semantic
+history.
+
+The new record calls this field `async_cpu_placeholder_view`, permits its signed `-1` metadata,
+and marks `semantic_prefix_authority=false`. The comparator derives semantics only from each
+completed run's actual `generated_token_ids` and the immutable stock reference. At a planned
+position `p`, all three exact checks are mandatory:
+
+```text
+stock_generated[:p]    == immutable_generated[:p]
+resident_generated[:p] == immutable_generated[:p]
+stock_generated[:p]    == resident_generated[:p]
+```
+
+The report names this authority
+`final-run-output-vs-immutable-stock-reference`. Placeholder equality never drives a correctness
+decision.
+
+## Exact pinned-vLLM mapping audit
 
 The authority is vLLM `v0.25.1`, commit
-`752a3a504485790a2e8491cacbb35c137339ad34`.
+`752a3a504485790a2e8491cacbb35c137339ad34`:
 
-The audited pinned files are `docs/features/batch_invariance.md`,
-`vllm/model_executor/layers/batch_invariant.py`,
-`vllm/v1/attention/backends/flash_attn.py`,
-`vllm/model_executor/layers/linear.py`, `vllm/model_executor/layers/layernorm.py`,
-`vllm/model_executor/models/qwen3.py`, `vllm/model_executor/models/qwen2.py` and
-`tests/v1/determinism/test_batch_invariance.py` at that exact commit.
+- [`GPUModelRunner._bookkeeping_sync()`](https://github.com/vllm-project/vllm/blob/752a3a504485790a2e8491cacbb35c137339ad34/vllm/v1/worker/gpu_model_runner.py#L3627-L3745)
+  documents the real GPU sample and async CPU `-1` placeholder split;
+- [`GPUModelRunner._prepare_input_ids()`](https://github.com/vllm-project/vllm/blob/752a3a504485790a2e8491cacbb35c137339ad34/vllm/v1/worker/gpu_model_runner.py#L1738-L1858)
+  copies `prev_sampled_token_ids` into the executed GPU input;
+- [`BlockTable` and `MultiGroupBlockTable`](https://github.com/vllm-project/vllm/blob/752a3a504485790a2e8491cacbb35c137339ad34/vllm/v1/worker/block_table.py)
+  expose the per-request logical block row, kernel `block_size`, and group tables;
+- [`GPUModelRunner._get_slot_mappings()`](https://github.com/vllm-project/vllm/blob/752a3a504485790a2e8491cacbb35c137339ad34/vllm/v1/worker/gpu_model_runner.py#L3986-L4034)
+  obtains each group's current slot mapping from that same block table;
+- [`FlashAttentionBackend.get_kv_cache_shape()`](https://github.com/vllm-project/vllm/blob/752a3a504485790a2e8491cacbb35c137339ad34/vllm/v1/attention/backends/flash_attn.py#L123-L153)
+  defines semantic shape `(num_blocks, 2, block_size, num_kv_heads, head_size)`, and its forward
+  [unbinds dimension 1 into key and value](https://github.com/vllm-project/vllm/blob/752a3a504485790a2e8491cacbb35c137339ad34/vllm/v1/attention/backends/flash_attn.py#L815-L829).
 
-| Dimension | What the pinned source establishes | What it does not establish |
-| --- | --- | --- |
-| Batch size | The beta documentation promises independence from batch size. Needle and log-probability tests compare one request with larger batches. | The tests do not enumerate every Qwen3-32B TP2 execution shape. |
-| Request order | The documentation promises independence from request order; the needle tests vary placement in a batch. | This is not a proof for arbitrary scheduler histories. |
-| Mixed prefill/decode | FlashAttention declares batch-invariance support and fixes split count; AOT scheduling is disabled in invariant mode. | No pinned test proves every mixed prefill/decode composition used by resident global freeze. |
-| Chunked-prefill decomposition | No affirmative guarantee was found. | The pinned log-probability test contains an explicit TODO saying its prompts do not exercise chunking. |
-| Decode cohort after global freeze | Ordinary batch-size variation is intended to be invariant. | The exact early-bootstrap/frozen/late-prefill trajectory is not an upstream test case. |
-| Paged-KV block layout | FlashAttention uses the supplied block table with `num_splits=1`. | No source-level theorem or test proves bitwise equality across different physical block allocation histories. |
-| LM-head `M` dimension | On SM80 unquantized linear explicitly calls the persistent invariant matmul. It accumulates in FP32 in a fixed K order. | The kernel casts its final output back to the output dtype. The pinned suite does not prove every Qwen3-32B BF16 TP2 `M` shape produces identical final BF16 bins. |
+For a logical position `i`, the observer reads physical block
+`block_row[i // block_size]`, offset `i % block_size`, then hashes K and V separately from
+`cache[physical_block, 0 or 1, offset]`. Physical block numbers are provenance, not comparison
+keys. The exact Qwen3-32B TP2 run must prove one KV group and unique ownership of both selected
+layers on every rank; any other group/layout/ownership is unsupported and fails closed.
 
-On SM80, invariant mode overrides `mm`, `addmm`, `matmul`, `linear`, `bmm`, softmax,
-log-softmax and mean; Qwen RMSNorm explicitly selects the invariant implementation. It disables
-reduced-precision reduction and TF32, fixes NCCL settings, and the Phase-4 preflight separately
-requires custom all-reduce, cascade attention and DBO to be disabled. Qwen3's unquantized QKV,
-MLP, output projection and LM head route through the invariant linear method; final RMSNorm uses
-the invariant RMSNorm; FlashAttention reports support and fixes its split count.
+## Per-logical-token design and schemas
 
-Embedding lookup, elementwise activation/gating, rotary operations, KV writes and physical paged
-layout are not replaced by the listed ATen overrides. They may be deterministic for identical
-inputs, but the pinned source does not elevate that observation into a bitwise guarantee across
-chunk decomposition and allocation history. The feature is documented as beta, and Qwen3-32B is
-not one of the exact dense Qwen3 checkpoints listed in the pinned tested-model table. Therefore
-`batch_invariant_effective=true` is necessary worker evidence, not proof of all dimensions above.
+`configs/phase4b1_gate3_per_token_kv_diagnostic.json` is an immutable four-checkpoint plan. It
+pins the known request, divergence, token pair, exact control layer, exact first-different layer,
+the `32b09a6` correctness source, and the e73 coarse source. Loading resolves prompt tokens,
+prompt length, maximum output, workload SHA256, and layer names from the frozen corrected-100
+workload; changing any established checkpoint or source fails.
 
-## Diagnostic design
+At each checkpoint and TP rank, the observer retains the existing all-layer aggregate evidence,
+then reconstructs only the control and first-different layer for logical positions
+`[0,num_computed_tokens)`. It concatenates each selected layer on GPU, performs one bounded
+GPU-to-CPU transfer per selected layer, and hashes each CPU token slice separately for K and V.
+It never includes the pending Target input whose KV has not yet been materialized. The selected
+aggregate digest must equal that layer's digest in the existing per-rank aggregate record.
 
-The immutable full corrected-100 workload is retained because a four-request replay would change
-prefill/decode cohort size, chunking and LM-head `M`. Exactly one patched-observational
-stock-style run and one resident Target run are permitted. The stock-style run uses
-`speculative_config=None` and the stock scheduler; the patch is present only so the worker can
-observe tensors. It is explicitly ineligible for reference freezing. The resident run is expected
-to remain a correctness failure if the four token divergences reproduce.
+The record schema is `specrhythm.phase4b1-gate3-per-token-kv-record.v1`. It includes exact TP,
+group, FlashAttention layout, dtype, per-token K/V shapes, materialized interval, transfer count,
+separate token hashes, and the explicitly non-authoritative placeholder view. The comparator
+schema is `specrhythm.phase4b1-gate3-per-token-kv-comparison.v1`. Its JSON provides per request
+and rank:
 
-The plan in `configs/phase4b1_gate3_numerical_diagnostic.json` contains only the four established
-request/zero-based-position/token pairs. Before each relevant forward, every TP rank captures its
-local evidence through the TP CPU group; rank zero alone writes the combined record. It records:
+- exact final-output/reference prefix checks;
+- all-exact K/V status for the control layer;
+- aggregate equality and K/V mismatch counts for the first-different layer;
+- first and last K mismatch, first and last V mismatch, union-first position, and phase;
+- a checksum/equality-only window of at most two positions on either side.
 
-- committed-prefix tokens and SHA256, computed-token count, pending input token/position;
-- logical positions, block size, physical block IDs and current slot mapping;
-- raw-byte per-layer and aggregate checksums of every rank's pre-forward logical KV shard;
-- request cohort, sampled-row and LM-head `M` dimensions.
+The Markdown summary presents the request, output position, rank, control layer status,
+first-different layer, first logical mismatch, phase, and K/V mismatch counts. No raw tensors are
+written.
 
-### Generic KV ownership authority
+## Fail-closed rules and decision tree
 
-The pinned runner builds `slot_mappings_by_group` with `_get_slot_mappings()` before every model
-forward. Independently of speculative decoding, `runner.input_batch.block_table` is a
-`MultiGroupBlockTable`; each member `BlockTable` supplies the authoritative physical block row,
-`block_size`, row capacity and slot mapping. The observer combines those two generic sources with
-the pinned `kv_cache_config.kv_cache_groups` layer ownership. It does not read
-`spec_decode_common_attn_metadata`: that object is legally `None` when the stock-style run has
-`speculative_config=None`.
+Validation fails on incomplete TP evidence, non-one-group or wrong FlashAttention layout,
+ambiguous layer ownership, invalid/truncated block mapping, selected/aggregate checksum
+inconsistency, non-exact control, an aggregate first-layer difference with no per-token K/V
+difference, any reference/prefix mismatch, any changed known divergence, or any new divergence.
+No tolerance or tie-equivalence rule exists.
 
-The observer first identifies an active planned `(request_id, output_position)` using only safe
-request, token and schedule state. An irrelevant forward returns before resolving block tables or
-hashing KV tensors. For a planned checkpoint, it records every KV group explicitly, requires the
-block-table, slot-mapping and KV-cache group counts and IDs to agree, and fails closed on a
-truncated row, missing slot, invalid block size or unmapped layer. The exact Qwen3-32B Gate3 run
-must formally report one KV group on every TP rank; a different group count is retained in the
-schema but is unsupported by this exact comparison and fails validation rather than silently
-selecting group zero. Logical ownership comparison canonicalizes group-aware logical offsets and
-layer membership while keeping physical block IDs as recorded diagnostics.
+A structurally valid report classifies only the earliest observed location:
 
-Forward hooks retain only one selected hidden row, never a full tensor dump. They summarize:
+- `PROMPT_PREFILL`: at least one first mismatch is below its prompt length;
+- `BOOTSTRAP`: no prompt mismatch and at least one first mismatch equals prompt length;
+- `DECODE_HISTORY`: every first mismatch is greater than prompt length;
+- `FAIL-CLOSED`: any evidence or authority condition fails.
 
-- decoder input embedding;
-- last-layer branch output;
-- exact fused input to final RMSNorm;
-- final normalized hidden state;
-- LM-head input.
-
-Each summary records dtype, shape, raw-byte and FP32-cast SHA256, min/max/norm and deterministic
-coordinates. The post-logits hook records raw pre-softmax values for both competing tokens, the
-top candidates, argmax, LM-head/quant-method classes and input/output dtypes. All artifacts are
-Target-only and forbidden from Draft transport.
-
-The comparison is exact. It first compares logical prefix/KV ownership, then KV raw bytes,
-decoder input, pre-norm state, normalized state, LM-head input, competing raw logits and finally
-argmax versus the emitted token. It reports the first observed differing boundary but leaves the
-scientific classification fail-closed for human review. A structurally valid diagnostic does not
-make the resident correctness run valid.
-
-## Interpretation after the A800 pair
-
-- A logical prefix/position/ownership mismatch is a semantic correctness bug.
-- Equal logical ownership but differing KV or hidden bytes localizes numerical state drift; the
-  execution-shape metadata must support any later claim that shape caused it.
-- Equal normalized/LM-head input with different raw logits localizes the difference to the LM-head
-  projection/gather path.
-- Equal raw logits with a different emitted token is a sampler/tie-breaking bug.
-- Missing checkpoints, a changed divergence, or ambiguous evidence remains insufficient and
-  fails closed.
-
-No tolerance policy may be implemented from this evidence in the same change.
+Gate3 remains not closed after classification. A `PROMPT_PREFILL` result calls for the narrowest
+prefill execution-history audit; `BOOTSTRAP` localizes onset to bootstrap materialization;
+`DECODE_HISTORY` localizes it to later decode progression. A policy decision, Serial/Dual work,
+or performance experiment requires a separate reviewed phase.

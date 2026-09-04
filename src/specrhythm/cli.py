@@ -931,6 +931,27 @@ def build_parser() -> argparse.ArgumentParser:
     phase4_numerical_compare.add_argument("--output", required=True)
     phase4_numerical_compare.add_argument("--markdown-output", required=True)
 
+    phase4_token_kv_compare = subparsers.add_parser(
+        "phase4b1-gate3-per-token-kv-compare",
+        help="compare exact per-logical-token K/V bytes at four Gate3 checkpoints",
+        description=(
+            "Diagnostic-only exact comparison using final run outputs and the immutable "
+            "stock reference as semantic-prefix authority. It never applies tolerance."
+        ),
+    )
+    for name in (
+        "plan",
+        "workload",
+        "reference",
+        "stock-run",
+        "stock-numerical",
+        "resident-run",
+        "resident-numerical",
+        "output",
+        "markdown-output",
+    ):
+        phase4_token_kv_compare.add_argument(f"--{name}", required=True)
+
     phase4_resident_serial = subparsers.add_parser(
         "phase4-resident-serial-run",
         help="run the Phase-4B.0b real-KV decode-only Serial correctness gate",
@@ -1721,6 +1742,62 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             json.JSONDecodeError,
         ) as error:
             raise SystemExit(f"Gate3 numerical comparison failed: {error}") from error
+        return 0 if report["valid"] else 1
+    if args.command == "phase4b1-gate3-per-token-kv-compare":
+        from specrhythm.phase4.numerical_diagnostics import (
+            compare_per_token_kv_diagnostics,
+            load_numerical_plan,
+            per_token_comparison_markdown,
+        )
+        from specrhythm.phase4.transport import CheckpointJsonl
+
+        try:
+            workload = Path(args.workload).resolve()
+            output_path = Path(args.output).resolve()
+            markdown_path = Path(args.markdown_output).resolve()
+            for path in (output_path, markdown_path):
+                if path.exists():
+                    raise FileExistsError(
+                        f"refusing to overwrite per-token KV comparison {path}"
+                    )
+            stock_run = json.loads(
+                Path(args.stock_run).resolve().read_text(encoding="utf-8")
+            )
+            resident_run = json.loads(
+                Path(args.resident_run).resolve().read_text(encoding="utf-8")
+            )
+            reference = json.loads(
+                Path(args.reference).resolve().read_text(encoding="utf-8")
+            )
+            report = compare_per_token_kv_diagnostics(
+                plan=load_numerical_plan(Path(args.plan).resolve(), workload),
+                stock_rows=CheckpointJsonl(
+                    Path(args.stock_numerical).resolve()
+                ).read(),
+                resident_rows=CheckpointJsonl(
+                    Path(args.resident_numerical).resolve()
+                ).read(),
+                stock_outputs=stock_run["runs"][0],
+                resident_outputs=resident_run["outputs"],
+                immutable_reference=reference,
+            )
+            _write_json(report, output_path)
+            markdown_path.parent.mkdir(parents=True, exist_ok=True)
+            markdown_path.write_text(
+                per_token_comparison_markdown(report), encoding="utf-8"
+            )
+        except (
+            FileExistsError,
+            FileNotFoundError,
+            KeyError,
+            RuntimeError,
+            TypeError,
+            ValueError,
+            json.JSONDecodeError,
+        ) as error:
+            raise SystemExit(
+                f"Gate3 per-token KV comparison failed: {error}"
+            ) from error
         return 0 if report["valid"] else 1
     if args.command == "phase4-resident-target-run":
         from specrhythm.phase4.config import load_phase4_config
