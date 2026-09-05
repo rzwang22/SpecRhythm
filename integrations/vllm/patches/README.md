@@ -1,0 +1,76 @@
+# Pinned vLLM patch series
+
+Base: vLLM `v0.25.1`, commit
+`752a3a504485790a2e8491cacbb35c137339ad34`.
+
+Patch order is fixed and all patches are Python-only:
+
+1. `0001-custom-proposer-request-and-verify-hooks.patch` changes
+`vllm/v1/worker/gpu_model_runner.py`. It passes vLLM request IDs to the already supported
+`custom_class` proposer, supplies the post-forward Target-materialized token count, and invokes
+optional before/after Target verification hooks. The materialized count is derived from the
+worker's existing `num_computed_tokens_cpu + scheduler_output.num_scheduled_tokens`; it is needed
+to distinguish partial chunked prefill from a sampled bootstrap because the logical CPU token row
+may already contain the full prompt. The hooks are inactive when speculative decoding is disabled
+and do not alter Target sampling, rejection, KV, scheduler, attention, C++ or CUDA semantics.
+2. `0002-scheduler-request-admissibility-hook.patch` changes
+`vllm/v1/core/sched/scheduler.py`. It adds one default-off request predicate before the stock
+running-request allocation path. When absent, stock behavior is unchanged. The Phase-4B scheduler
+uses it to skip a request waiting for Draft without consuming token/KV budget or blocking later
+ready requests. It does not overload vLLM's `next_decode_eligible_step` cadence field.
+3. `0003-target-forward-timing-observer.patch` changes the already-`0001`-patched
+`gpu_model_runner.py`. It records host monotonic boundaries immediately around the existing model
+forward and passes them, plus existing input metadata, to the Target-only diagnostic hook. It is
+observational and does not synchronize, alter logits, or change execution semantics.
+4. `0004-gate3-numerical-observer.patch` changes the already-timing-patched runner. It invokes one
+diagnostic preparation function immediately before the existing Target forward. Unless an
+explicit four-request Gate3 plan and separate output path were configured before worker creation,
+the function returns without installing hooks or collecting data. The diagnostic reads selected
+hidden rows and pre-existing KV pages only; it passes the generic per-KV-group slot mappings
+already computed by the runner and never depends on speculative-only common attention metadata.
+It does not modify model inputs, scheduler state,
+sampling, proposals, KV ownership or outputs. A patched-observational stock-style run remains
+ineligible for stock-reference freezing.
+5. `0005-dual-sampled-row-context.patch` captures the bookkeeping output-copy IDs
+and index map together with the current physical InputBatch IDs/index map and
+scheduled/verification request sets. Only proposers declaring
+`requires_sampled_row_context` receive this additional structured argument. Dual
+validates and projects the rows before applying its unchanged logical EOS commit
+semantics. Capacity-sized token arrays are never treated as request-row counts.
+The synchronous call order, sampler/rejection parsing and physical writes are unchanged.
+
+The per-logical-token Gate3 localizer does not require another vLLM patch. The same default-off
+`0004` hook enters the out-of-tree Python observer before the forward. A new immutable plan asks
+that observer to reconstruct only two selected layers per checkpoint in logical block-table order
+and transfer each selected layer to CPU once for separate K/V token hashing. The active exact
+patched runner including the Dual row-context hook has SHA256
+`2905189397b1517659e6606f5bc36c7ca226330f42255c579207fe38f61f9e19`; scheduler SHA256 remains
+`ffaefd61869589f086e6acdf9a0c4f55f80d5dad145ca3f6fff2379f7a4e2455`. Restore from that exact
+state, stock check, reapply, and patched check are all still mandatory. No patch changes model,
+attention, KV ownership, scheduler, sampling, C++/CUDA, or Triton semantics.
+
+The patch is required because the public custom proposer signature at this commit does not expose
+stable request identity or exact Target-forward boundaries. The out-of-tree proposer uses the
+hooks only for stable IPC correlation and strict-serial correctness timestamps.
+
+Phase 4B reuses the worker hooks for per-rank verification evidence, adds the minimal default-off
+scheduler hook in `0002`, adds observational forward timestamps in `0003`, and keeps the
+diagnostic-only numerical observer in `0004` inert unless explicitly configured. The Dual-Batch
+policy and predicate remain outside vLLM source and are explicitly enabled only for the
+correctness run.
+
+Run `python integrations/vllm/manage_patch.py check --expect-state stock ...` before applying the
+stack and `check --expect-state patched ...` afterward. Omitting `--expect-state` preserves the
+legacy stock-check behavior. The two states are mutually exclusive exact runner/scheduler SHA256
+pairs; neither accepts partial or opposite-state installations. When `--manifest` is supplied,
+the check publishes a new immutable diagnostic containing the expected state, actual hashes,
+pinned source commit, active patch hashes and validity. The manager applies in order without fuzzy
+matching, records every patch plus original/patched source checksums, and restores in reverse
+order. A Phase-4A installation containing only the prior worker patch and the exact pre-Gate3
+patched state, including the exact pre-`0004` runner, can still be restored through strict known
+hashes. The manager also recognizes the exact retired `c142fa7` four-layer observer solely as a
+strict restore input; `check --expect-state patched` rejects it, and new applications use only the
+active five-patch stack. The previous four-patch runner
+`a8b56ee511ad04d4f6e56e802417e6b8fb8b723a9fef05de36148f4218e9e945` is accepted only
+for strict restore/migration, not as a current patched installation. Do not apply
+the stack to another vLLM commit.

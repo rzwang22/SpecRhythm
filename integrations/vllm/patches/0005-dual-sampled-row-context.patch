@@ -1,0 +1,68 @@
+--- a/vllm/v1/worker/gpu_model_runner.py
++++ b/vllm/v1/worker/gpu_model_runner.py
+@@ -4555,7 +4555,7 @@
+         self.valid_sampled_token_count_gpu = None
+         self.input_batch.prev_sampled_token_ids = None
+
+-        def propose_draft_token_ids(sampled_token_ids):
++        def propose_draft_token_ids(sampled_token_ids, sampled_row_context=None):
+             assert spec_decode_common_attn_metadata is not None
+             with record_function_or_nullcontext("gpu_model_runner: draft"):
+                 self._draft_token_ids = self.propose_draft_token_ids(
+@@ -4568,6 +4568,7 @@
+                     spec_decode_metadata,
+                     spec_decode_common_attn_metadata,
+                     slot_mappings,
++                    sampled_row_context=sampled_row_context,
+                 )
+                 self._copy_draft_token_ids_to_cpu(scheduler_output)
+
+@@ -4697,7 +4698,20 @@
+             # ngram and other speculative decoding methods use the sampled
+             # tokens on the CPU, so they are run after bookkeeping.
+             if input_fits_in_drafter:
+-                propose_draft_token_ids(valid_sampled_token_ids)
++                propose_draft_token_ids(
++                    valid_sampled_token_ids,
++                    sampled_row_context={
++                        "schema_version": "specrhythm.vllm-sampled-row-context.v1",
++                        "sampled_request_ids": req_ids_output_copy.copy(),
++                        "req_id_to_sampled_index": req_id_to_index_output_copy.copy(),
++                        "physical_request_ids": self.input_batch.req_ids.copy(),
++                        "req_id_to_physical_index": self.input_batch.req_id_to_index.copy(),
++                        "scheduled_request_ids": list(scheduler_output.num_scheduled_tokens),
++                        "scheduled_spec_request_ids": list(
++                            scheduler_output.scheduled_spec_decode_tokens
++                        ),
++                    },
++                )
+             elif (
+                 drafter_runs_model_forward
+                 and self.parallel_config.data_parallel_size > 1
+@@ -4981,6 +4995,8 @@
+         spec_decode_metadata: SpecDecodeMetadata | None,
+         common_attn_metadata: CommonAttentionMetadata,
+         slot_mappings: dict[str, torch.Tensor] | list[dict[str, torch.Tensor]] | None,
++        *,
++        sampled_row_context: dict[str, Any] | None = None,
+     ) -> list[list[int]] | torch.Tensor:
+         num_scheduled_tokens = scheduler_output.total_num_scheduled_tokens
+         spec_config = self.speculative_config
+@@ -5002,11 +5018,17 @@
+             )
+         elif spec_config.method == "custom_class":
+             assert isinstance(sampled_token_ids, list)
++            row_kwargs = {}
++            if getattr(self.drafter, "requires_sampled_row_context", False):
++                if sampled_row_context is None:
++                    raise RuntimeError("Dual proposer lacks bookkeeping sampled-row context")
++                row_kwargs["sampled_row_context"] = sampled_row_context
+             draft_token_ids = cast(Any, self.drafter).propose(
+                 sampled_token_ids,
+                 self.input_batch.num_tokens_no_spec,
+                 self.input_batch.token_ids_cpu,
+                 request_ids=self.input_batch.req_ids.copy(),
++                **row_kwargs,
+                 target_materialized_token_counts=[
+                     int(self.input_batch.num_computed_tokens_cpu[index])
+                     + int(scheduler_output.num_scheduled_tokens[request_id])

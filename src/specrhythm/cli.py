@@ -515,6 +515,650 @@ def build_parser() -> argparse.ArgumentParser:
     phase3c_learned.add_argument("--resume", action="store_true")
     phase3c_learned.add_argument("--output", required=True)
     phase3c_learned.add_argument("--markdown-output", required=True)
+
+    phase4_contract = subparsers.add_parser(
+        "phase4-contract-dry-run",
+        help="exercise fake Phase-4 adapter contracts without creating a GPU result",
+    )
+    phase4_contract.add_argument("--output", required=True)
+
+    phase4_dual_contract = subparsers.add_parser(
+        "phase4-dual-contract-dry-run",
+        help="exercise Phase-4B state/queue contracts without CUDA or vLLM",
+    )
+    phase4_dual_contract.add_argument("--output", required=True)
+
+    phase4_decode_ready_contract = subparsers.add_parser(
+        "phase4-decode-ready-contract-dry-run",
+        help="validate ResidentWarmStart contracts without CUDA or vLLM",
+    )
+    phase4_decode_ready_contract.add_argument("--output", required=True)
+
+    phase4_gate_a_validate = subparsers.add_parser(
+        "phase4-gate-a-validate",
+        help="validate A-waiting/B-prefill admissibility and owned-process cleanup",
+    )
+    phase4_gate_a_validate.add_argument("--scheduler-events", required=True)
+    phase4_gate_a_validate.add_argument("--lifecycle")
+    phase4_gate_a_validate.add_argument("--waiting-request-id", required=True)
+    phase4_gate_a_validate.add_argument("--prefill-request-id", required=True)
+    phase4_gate_a_validate.add_argument("--output", required=True)
+
+    phase4_probe = subparsers.add_parser(
+        "phase4-probe",
+        help="validate the frozen vLLM environment and three-GPU topology",
+        description=(
+            "Probe the independent Python 3.11/vLLM environment. This command exits "
+            "nonzero without CUDA and never substitutes synthetic GPU metadata."
+        ),
+    )
+    phase4_probe.add_argument("--config", required=True)
+    phase4_probe.add_argument("--vllm-source", required=True)
+    phase4_probe.add_argument("--environment-output", required=True)
+    phase4_probe.add_argument("--topology-output", required=True)
+    phase4_probe.add_argument("--validation-output", required=True)
+
+    phase4_smoke = subparsers.add_parser(
+        "phase4-stock-smoke",
+        help="run a real stock-vLLM draft TP1 or target TP2 bring-up",
+        description=(
+            "Run one independent stock vLLM engine twice on five corrected R3-real "
+            "requests. This is bring-up, not serving-performance evaluation."
+        ),
+    )
+    phase4_smoke.add_argument("--config", required=True)
+    phase4_smoke.add_argument("--role", choices=("draft", "target"), required=True)
+    phase4_smoke.add_argument("--workload", required=True)
+    phase4_smoke.add_argument("--environment", required=True)
+    phase4_smoke.add_argument("--topology", required=True)
+    phase4_smoke.add_argument("--runtime-manifest", required=True)
+    phase4_smoke.add_argument("--frozen-hf-target-dir")
+    phase4_smoke.add_argument(
+        "--correctness-mode",
+        choices=("default", "batch-invariant"),
+        default="default",
+    )
+    phase4_smoke.add_argument("--target-diagnostics")
+    phase4_smoke.add_argument("--request-count", type=int)
+    phase4_smoke.add_argument(
+        "--diagnostic-single-run",
+        action="store_true",
+        help=(
+            "run exactly once for diagnostic-only evidence; never eligible for "
+            "stock-reference freezing"
+        ),
+    )
+    phase4_smoke.add_argument("--numerical-diagnostic-plan")
+    phase4_smoke.add_argument("--numerical-diagnostic-output")
+    phase4_smoke.add_argument(
+        "--matched-bootstrap-async-off",
+        action="store_true",
+        help=(
+            "diagnostic-only ordinary Target control that passes "
+            "LLM(async_scheduling=False) while keeping speculative_config=None"
+        ),
+    )
+    phase4_smoke.add_argument("--output", required=True)
+
+    phase4_validate = subparsers.add_parser(
+        "phase4-validate",
+        help="validate Phase-4A.0 stock-vLLM bring-up artifacts",
+    )
+    phase4_validate.add_argument("--config", required=True)
+    phase4_validate.add_argument("--environment", required=True)
+    phase4_validate.add_argument("--topology", required=True)
+    phase4_validate.add_argument("--runtime-manifest", required=True)
+    phase4_validate.add_argument("--draft-smoke", required=True)
+    phase4_validate.add_argument("--target-smoke", required=True)
+    phase4_validate.add_argument("--output", required=True)
+    phase4_validate.add_argument("--markdown-output", required=True)
+
+    phase4_reference = subparsers.add_parser(
+        "phase4-stock-reference",
+        help="generate and immutably freeze the stock-vLLM Target-only reference",
+    )
+    phase4_reference.add_argument("--config", required=True)
+    phase4_reference.add_argument("--workload", required=True)
+    phase4_reference.add_argument("--environment", required=True)
+    phase4_reference.add_argument("--topology", required=True)
+    phase4_reference.add_argument("--runtime-manifest", required=True)
+    phase4_reference.add_argument("--legacy-hf-target-dir")
+    phase4_reference.add_argument(
+        "--correctness-mode",
+        choices=("default", "batch-invariant"),
+        default="default",
+    )
+    phase4_reference.add_argument("--target-diagnostics")
+    phase4_reference.add_argument("--request-count", type=int)
+    phase4_reference.add_argument("--output", required=True)
+
+    phase4_regression = subparsers.add_parser(
+        "phase4-target-regression",
+        help="prove patched vLLM target-only output equals the frozen stock reference",
+    )
+    phase4_regression.add_argument("--config", required=True)
+    phase4_regression.add_argument("--workload", required=True)
+    phase4_regression.add_argument("--environment", required=True)
+    phase4_regression.add_argument("--topology", required=True)
+    phase4_regression.add_argument("--runtime-manifest", required=True)
+    phase4_regression.add_argument("--reference", required=True)
+    phase4_regression.add_argument("--patch-manifest", required=True)
+    phase4_regression.add_argument("--legacy-hf-target-dir")
+    phase4_regression.add_argument(
+        "--correctness-mode",
+        choices=("default", "batch-invariant"),
+        default="default",
+    )
+    phase4_regression.add_argument("--target-diagnostics")
+    phase4_regression.add_argument("--output", required=True)
+
+    phase4_draft_service = subparsers.add_parser(
+        "phase4-draft-service",
+        help="run the persistent GPU-0 Draft proposer over a local Unix socket",
+    )
+    phase4_draft_service.add_argument("--config", required=True)
+    phase4_draft_service.add_argument("--socket", required=True)
+    phase4_draft_service.add_argument("--event-log", required=True)
+    phase4_draft_service.add_argument("--ready", required=True)
+
+    phase4_serial = subparsers.add_parser(
+        "phase4-serial-run",
+        help="run one 1D+2V strict-serial GPU correctness pass",
+    )
+    phase4_serial.add_argument("--config", required=True)
+    phase4_serial.add_argument("--workload", required=True)
+    phase4_serial.add_argument("--environment", required=True)
+    phase4_serial.add_argument("--topology", required=True)
+    phase4_serial.add_argument("--runtime-manifest", required=True)
+    phase4_serial.add_argument("--reference", required=True)
+    phase4_serial.add_argument("--patch-manifest", required=True)
+    phase4_serial.add_argument("--draft-socket", required=True)
+    phase4_serial.add_argument("--draft-ready", required=True)
+    phase4_serial.add_argument("--round-events", required=True)
+    phase4_serial.add_argument("--transport-events", required=True)
+    phase4_serial.add_argument("--plugin-report", required=True)
+    phase4_serial.add_argument(
+        "--correctness-mode",
+        choices=("default", "batch-invariant"),
+        default="default",
+    )
+    phase4_serial.add_argument("--target-diagnostics")
+    phase4_serial.add_argument("--output", required=True)
+
+    phase4_serial_validate = subparsers.add_parser(
+        "phase4-serial-validate",
+        help="validate patched Target regression and two strict-serial runs",
+    )
+    phase4_serial_validate.add_argument("--config", required=True)
+    phase4_serial_validate.add_argument("--reference", required=True)
+    phase4_serial_validate.add_argument("--patch-manifest", required=True)
+    phase4_serial_validate.add_argument("--target-regression", required=True)
+    phase4_serial_validate.add_argument("--run", action="append", required=True)
+    phase4_serial_validate.add_argument("--round-events", action="append", required=True)
+    phase4_serial_validate.add_argument(
+        "--transport-events", action="append", required=True
+    )
+    phase4_serial_validate.add_argument("--output", required=True)
+    phase4_serial_validate.add_argument("--markdown-output", required=True)
+
+    phase4_dual_service = subparsers.add_parser(
+        "phase4-dual-draft-service",
+        help="run the asynchronous persistent GPU-0 Phase-4B Draft service",
+    )
+    phase4_dual_service.add_argument("--config", required=True)
+    phase4_dual_service.add_argument("--socket", required=True)
+    phase4_dual_service.add_argument("--event-log", required=True)
+    phase4_dual_service.add_argument("--transport-events", required=True)
+    phase4_dual_service.add_argument("--ready", required=True)
+
+    phase4_dual_run = subparsers.add_parser(
+        "phase4-dual-batch-run",
+        help=(
+            "run 1D+2V Dual-Batch GPU correctness/overlap-existence collection; "
+            "does not report serving performance"
+        ),
+    )
+    phase4_dual_run.add_argument("--config", required=True)
+    phase4_dual_run.add_argument("--workload", required=True)
+    phase4_dual_run.add_argument("--request-count", type=int, required=True)
+    phase4_dual_run.add_argument("--environment", required=True)
+    phase4_dual_run.add_argument("--topology", required=True)
+    phase4_dual_run.add_argument("--runtime-manifest", required=True)
+    phase4_dual_run.add_argument("--reference", required=True)
+    phase4_dual_run.add_argument("--patch-manifest", required=True)
+    phase4_dual_run.add_argument("--draft-socket", required=True)
+    phase4_dual_run.add_argument("--draft-ready", required=True)
+    phase4_dual_run.add_argument("--scheduler-events", required=True)
+    phase4_dual_run.add_argument("--request-state-events", required=True)
+    phase4_dual_run.add_argument("--proposal-events", required=True)
+    phase4_dual_run.add_argument("--verification-events", required=True)
+    phase4_dual_run.add_argument("--draft-work-events", required=True)
+    phase4_dual_run.add_argument("--transport-events", required=True)
+    phase4_dual_run.add_argument("--target-diagnostics", required=True)
+    phase4_dual_run.add_argument("--plugin-report", required=True)
+    phase4_dual_run.add_argument("--output-checkpoint", required=True)
+    phase4_dual_run.add_argument("--cycle-events", required=True)
+    phase4_dual_run.add_argument("--overlap-events", required=True)
+    phase4_dual_run.add_argument("--microbatch-size", type=int, default=1)
+    phase4_dual_run.add_argument("--cohort-size", type=int)
+    phase4_dual_run.add_argument("--resume", action="store_true")
+    phase4_dual_run.add_argument("--output", required=True)
+
+    phase4_dual_validate = subparsers.add_parser(
+        "phase4-dual-batch-validate",
+        help="read-only validation of two Phase-4B Dual-Batch correctness runs",
+    )
+    phase4_dual_validate.add_argument(
+        "--stock-reference", action="append", required=True
+    )
+    phase4_dual_validate.add_argument("--target-regression", required=True)
+    phase4_dual_validate.add_argument("--run", action="append", required=True)
+    phase4_dual_validate.add_argument(
+        "--request-state-events", action="append", required=True
+    )
+    phase4_dual_validate.add_argument(
+        "--proposal-events", action="append", required=True
+    )
+    phase4_dual_validate.add_argument(
+        "--cycle-events", action="append", required=True
+    )
+    phase4_dual_validate.add_argument(
+        "--overlap-events", action="append", required=True
+    )
+    phase4_dual_validate.add_argument(
+        "--draft-work-events", action="append", required=True
+    )
+    phase4_dual_validate.add_argument(
+        "--target-diagnostics", action="append", required=True
+    )
+    phase4_dual_validate.add_argument("--output", required=True)
+    phase4_dual_validate.add_argument("--markdown-output", required=True)
+
+    phase4b1_dual_run = subparsers.add_parser(
+        "phase4b1-resident-dual-run",
+        help=(
+            "run real decode-only resident Dual-Batch exact-correctness collection; "
+            "never reports performance"
+        ),
+    )
+    for name in (
+        "config",
+        "workload",
+        "environment",
+        "topology",
+        "patch-manifest",
+        "draft-socket",
+        "draft-ready",
+        "context",
+        "decode-ready-manifest",
+        "timing-events",
+        "setup-control",
+        "setup-ready",
+        "scheduler-events",
+        "request-state-events",
+        "proposal-events",
+        "proposal-lifecycle-events",
+        "verification-events",
+        "draft-work-events",
+        "transport-events",
+        "target-diagnostics",
+        "plugin-report",
+        "output-checkpoint",
+        "cycle-events",
+        "overlap-events",
+        "runtime-manifest",
+        "output",
+    ):
+        phase4b1_dual_run.add_argument(f"--{name}", required=True)
+    phase4b1_dual_run.add_argument(
+        "--request-count", type=int, choices=(2, 5, 100), required=True
+    )
+    phase4b1_dual_run.add_argument("--microbatch-size", type=int, default=2)
+    phase4b1_dual_run.add_argument(
+        "--test-coordination",
+        choices=("none", "one-ready", "two-ready"),
+        default="none",
+    )
+    phase4b1_dual_run.add_argument(
+        "--overlap-requirement",
+        choices=("required", "separate-gate"),
+        default="required",
+        help="keep physical overlap mandatory or report it for a separate gate",
+    )
+    phase4b1_dual_run.add_argument(
+        "--phase4b2-performance",
+        action="store_true",
+        help="publish the post-setup Phase-4B.2 measurement boundary",
+    )
+
+    phase4b1_validate = subparsers.add_parser(
+        "phase4b1-dual-correctness-validate",
+        help="read-only exact Target/Serial/Dual decode-only triangle validation",
+    )
+    phase4b1_validate.add_argument("--target", required=True)
+    phase4b1_validate.add_argument("--serial", required=True)
+    phase4b1_validate.add_argument("--dual", action="append", required=True)
+    phase4b1_validate.add_argument("--target-manifest", required=True)
+    phase4b1_validate.add_argument("--serial-manifest", required=True)
+    phase4b1_validate.add_argument("--target-process-lifecycle", required=True)
+    phase4b1_validate.add_argument("--serial-process-lifecycle", required=True)
+    for name in (
+        "dual-manifest",
+        "request-state-events",
+        "proposal-events",
+        "proposal-lifecycle-events",
+        "scheduler-events",
+        "verification-events",
+        "draft-work-events",
+        "target-diagnostics",
+        "overlap-events",
+        "process-lifecycle",
+    ):
+        phase4b1_validate.add_argument(f"--{name}", action="append", required=True)
+    phase4b1_validate.add_argument("--output", required=True)
+    phase4b1_validate.add_argument("--markdown-output", required=True)
+    phase4b1_validate.add_argument(
+        "--overlap-requirement",
+        choices=("required", "separate-gate"),
+        default="required",
+    )
+    phase4b1_validate.add_argument(
+        "--legacy-source-commit",
+        help="explicit immutable source commit for supported read-only revalidation",
+    )
+
+    phase4b1_overlap_diagnose = subparsers.add_parser(
+        "phase4b1-overlap-diagnose",
+        help="read-only nearest Draft/Verify interval diagnosis",
+    )
+    phase4b1_overlap_diagnose.add_argument(
+        "--draft-work-events", action="append", required=True
+    )
+    phase4b1_overlap_diagnose.add_argument(
+        "--verification-events", action="append", required=True
+    )
+    phase4b1_overlap_diagnose.add_argument(
+        "--overlap-events", action="append", required=True
+    )
+    phase4b1_overlap_diagnose.add_argument("--output", required=True)
+
+    phase4b1_controlled = subparsers.add_parser(
+        "phase4b1-dual-controlled-validate",
+        help="validate controlled one-wait/two-ready/terminal Gate-1 evidence",
+    )
+    phase4b1_controlled.add_argument("--asynchronous-scheduler", required=True)
+    phase4b1_controlled.add_argument("--coordinated-scheduler", required=True)
+    phase4b1_controlled.add_argument("--request-state-events", required=True)
+    phase4b1_controlled.add_argument("--output", required=True)
+
+    phase4_resident_target = subparsers.add_parser(
+        "phase4-resident-target-run",
+        help="run the Phase-4B.0b real-KV decode-only Target correctness gate",
+    )
+    for name in (
+        "config",
+        "workload",
+        "environment",
+        "topology",
+        "reference",
+        "patch-manifest",
+        "draft-socket",
+        "draft-ready",
+        "context",
+        "decode-ready-manifest",
+        "timing-events",
+        "setup-control",
+        "setup-ready",
+        "admission-events",
+        "target-diagnostics",
+        "plugin-report",
+        "first-forward",
+        "output",
+    ):
+        phase4_resident_target.add_argument(f"--{name}", required=True)
+    phase4_resident_target.add_argument(
+        "--request-count", type=int, choices=(2, 5, 100), required=True
+    )
+    phase4_resident_target.add_argument(
+        "--correctness-mode",
+        choices=("default", "batch-invariant"),
+        default="batch-invariant",
+    )
+    phase4_resident_target.add_argument("--numerical-diagnostic-plan")
+    phase4_resident_target.add_argument("--numerical-diagnostic-output")
+    phase4_resident_target.add_argument(
+        "--phase4b2-performance",
+        action="store_true",
+        help="publish the post-setup Phase-4B.2 measurement boundary",
+    )
+
+    phase4_numerical_compare = subparsers.add_parser(
+        "phase4b1-gate3-numerical-compare",
+        help="compare one stock-style and one resident Gate3 numerical capture",
+        description=(
+            "Diagnostic-only exact comparison. It never accepts tolerant or "
+            "tie-equivalent tokens and never replaces the stock reference."
+        ),
+    )
+    phase4_numerical_compare.add_argument("--plan", required=True)
+    phase4_numerical_compare.add_argument("--workload", required=True)
+    phase4_numerical_compare.add_argument("--stock-run", required=True)
+    phase4_numerical_compare.add_argument("--stock-numerical", required=True)
+    phase4_numerical_compare.add_argument("--resident-run", required=True)
+    phase4_numerical_compare.add_argument("--resident-numerical", required=True)
+    phase4_numerical_compare.add_argument("--output", required=True)
+    phase4_numerical_compare.add_argument("--markdown-output", required=True)
+
+    phase4_token_kv_compare = subparsers.add_parser(
+        "phase4b1-gate3-per-token-kv-compare",
+        help="compare exact per-logical-token K/V bytes at four Gate3 checkpoints",
+        description=(
+            "Diagnostic-only exact comparison using final run outputs and the immutable "
+            "stock reference as semantic-prefix authority. It never applies tolerance."
+        ),
+    )
+    for name in (
+        "plan",
+        "workload",
+        "reference",
+        "stock-run",
+        "stock-numerical",
+        "resident-run",
+        "resident-numerical",
+        "output",
+        "markdown-output",
+    ):
+        phase4_token_kv_compare.add_argument(f"--{name}", required=True)
+
+    phase4_matched_bootstrap = subparsers.add_parser(
+        "phase4b1-gate3-matched-bootstrap-compare",
+        help="compare immutable async-ON/resident endpoints with one stock async-OFF control",
+        description=(
+            "Exact Target-only three-way bootstrap comparison. It never closes Gate3, "
+            "accepts tolerance, or reports serving performance."
+        ),
+    )
+    for name in (
+        "plan",
+        "workload",
+        "reference",
+        "stock-run",
+        "stock-numerical",
+        "control-run",
+        "control-numerical",
+        "resident-run",
+        "resident-numerical",
+        "endpoint-comparison",
+        "output",
+        "markdown-output",
+    ):
+        phase4_matched_bootstrap.add_argument(f"--{name}", required=True)
+
+    phase4_resident_serial = subparsers.add_parser(
+        "phase4-resident-serial-run",
+        help="run the Phase-4B.0b real-KV decode-only Serial correctness gate",
+    )
+    for name in (
+        "config",
+        "workload",
+        "environment",
+        "topology",
+        "runtime-manifest",
+        "reference",
+        "patch-manifest",
+        "draft-socket",
+        "draft-ready",
+        "round-events",
+        "transport-events",
+        "plugin-report",
+        "context",
+        "decode-ready-manifest",
+        "timing-events",
+        "setup-control",
+        "setup-ready",
+        "admission-events",
+        "initial-proposal-events",
+        "target-diagnostics",
+        "first-forward",
+        "output",
+    ):
+        phase4_resident_serial.add_argument(f"--{name}", required=True)
+    phase4_resident_serial.add_argument(
+        "--request-count", type=int, choices=(2, 5, 100), required=True
+    )
+    phase4_resident_serial.add_argument(
+        "--correctness-mode",
+        choices=("default", "batch-invariant"),
+        default="batch-invariant",
+    )
+    phase4_resident_serial.add_argument(
+        "--phase4b2-performance",
+        action="store_true",
+        help="defer the initial proposal until the Phase-4B.2 boundary",
+    )
+
+    phase4_resident_validate = subparsers.add_parser(
+        "phase4-resident-validate",
+        help="compare decode-only Target and Serial resident correctness artifacts",
+    )
+    phase4_resident_validate.add_argument("--target", required=True)
+    phase4_resident_validate.add_argument("--serial", required=True)
+    phase4_resident_validate.add_argument("--target-manifest", required=True)
+    phase4_resident_validate.add_argument("--serial-manifest", required=True)
+    phase4_resident_validate.add_argument("--output", required=True)
+
+    phase4b2_run = subparsers.add_parser(
+        "phase4b2-decode-run",
+        help="derive one immutable decode-only performance artifact from a resident run",
+    )
+    phase4b2_run.add_argument(
+        "--mode", choices=("target", "serial", "dual-batch"), required=True
+    )
+    for name in (
+        "run-root",
+        "workload",
+        "config",
+        "topology",
+        "patch-manifest",
+        "output",
+    ):
+        phase4b2_run.add_argument(f"--{name}", required=True)
+    phase4b2_run.add_argument("--terminal-revalidation")
+
+    phase4b2_recover = subparsers.add_parser(
+        "phase4b2-reconcile-dual-terminal",
+        help="offline revalidation of completed 04e9b61 Dual terminal-state evidence",
+    )
+    for name in ("run-root", "workload", "config", "topology", "patch-manifest", "output-dir"):
+        phase4b2_recover.add_argument(f"--{name}", required=True)
+
+    phase4b2_compare = subparsers.add_parser(
+        "phase4b2-decode-compare",
+        help="compare resident matched work and report exact sequence diagnostics separately",
+    )
+    phase4b2_compare.add_argument("--target", required=True)
+    phase4b2_compare.add_argument("--serial", required=True)
+    phase4b2_compare.add_argument("--dual")
+    phase4b2_compare.add_argument("--output", required=True)
+    phase4b2_compare.add_argument("--markdown-output", required=True)
+
+    phase4_bi_probe = subparsers.add_parser(
+        "phase4-batch-invariant-preflight",
+        help="fail-closed hardware preflight before creating any vLLM worker",
+    )
+    phase4_bi_probe.add_argument(
+        "--correctness-mode",
+        choices=("default", "batch-invariant"),
+        default="batch-invariant",
+    )
+    phase4_bi_probe.add_argument("--output", required=True)
+
+    phase4_bi_validate = subparsers.add_parser(
+        "phase4-batch-invariant-validate",
+        help="validate two independent C stock and D Serial correctness runs",
+    )
+    phase4_bi_validate.add_argument("--stock-reference", action="append", required=True)
+    phase4_bi_validate.add_argument(
+        "--target-regression", action="append", required=True
+    )
+    phase4_bi_validate.add_argument("--serial-run", action="append", required=True)
+    phase4_bi_validate.add_argument("--round-events", action="append", required=True)
+    phase4_bi_validate.add_argument(
+        "--target-diagnostics", action="append", required=True
+    )
+    phase4_bi_validate.add_argument(
+        "--serial-diagnostics", action="append", required=True
+    )
+    phase4_bi_validate.add_argument("--output", required=True)
+    phase4_bi_validate.add_argument("--markdown-output", required=True)
+
+    phase4_fixed_service = subparsers.add_parser(
+        "phase4-fixed-proposal-service",
+        help="serve the fixed diagnostic proposal over a local Unix socket",
+    )
+    phase4_fixed_service.add_argument("--socket", required=True)
+
+    phase4_fixed_run = subparsers.add_parser(
+        "phase4-fixed-control-run",
+        help="run one single-request K=1/2/4 local or remote fixed-proposal control",
+    )
+    phase4_fixed_run.add_argument("--config", required=True)
+    phase4_fixed_run.add_argument("--workload", required=True)
+    phase4_fixed_run.add_argument("--environment", required=True)
+    phase4_fixed_run.add_argument("--topology", required=True)
+    phase4_fixed_run.add_argument("--patch-manifest", required=True)
+    phase4_fixed_run.add_argument(
+        "--proposer", choices=("local-static", "remote-fixed"), required=True
+    )
+    phase4_fixed_run.add_argument(
+        "--proposal-budget", type=int, choices=(1, 2, 4), required=True
+    )
+    phase4_fixed_run.add_argument("--remote-socket")
+    phase4_fixed_run.add_argument("--target-diagnostics", required=True)
+    phase4_fixed_run.add_argument("--output", required=True)
+
+    phase4_fixed_validate = subparsers.add_parser(
+        "phase4-fixed-control-validate",
+        help="compare local-static and remote-fixed controls for K=1/2/4",
+    )
+    phase4_fixed_validate.add_argument("--local-run", action="append", required=True)
+    phase4_fixed_validate.add_argument("--remote-run", action="append", required=True)
+    phase4_fixed_validate.add_argument(
+        "--local-diagnostics", action="append", required=True
+    )
+    phase4_fixed_validate.add_argument(
+        "--remote-diagnostics", action="append", required=True
+    )
+    phase4_fixed_validate.add_argument("--output", required=True)
+
+    phase4_divergence = subparsers.add_parser(
+        "phase4-divergence-diagnose",
+        help="prove prefix/logits/position/KV mapping at the first C/D divergence",
+    )
+    phase4_divergence.add_argument("--stock-diagnostics", required=True)
+    phase4_divergence.add_argument("--serial-diagnostics", required=True)
+    phase4_divergence.add_argument("--serial-run", required=True)
+    phase4_divergence.add_argument("--output", required=True)
     return parser
 
 
@@ -563,6 +1207,1091 @@ def _final_tokens(trace_dir: Path) -> dict[str, tuple[int, ...]]:
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.command == "phase4-contract-dry-run":
+        from specrhythm.phase4.fake import run_fake_contract
+
+        _write_json(run_fake_contract(), args.output)
+        return 0
+    if args.command == "phase4-dual-contract-dry-run":
+        from specrhythm.phase4.dual import run_dual_contract_dry_run
+
+        _write_json(run_dual_contract_dry_run(), args.output)
+        return 0
+    if args.command == "phase4-decode-ready-contract-dry-run":
+        from specrhythm.phase4.decode_ready import run_decode_ready_contract_dry_run
+
+        _write_json(run_decode_ready_contract_dry_run(), args.output)
+        return 0
+    if args.command == "phase4-gate-a-validate":
+        from specrhythm.phase4.admissibility import validate_gate_a_construction
+        from specrhythm.phase4.transport import CheckpointJsonl
+
+        lifecycle = (
+            json.loads(Path(args.lifecycle).read_text(encoding="utf-8"))
+            if args.lifecycle
+            else None
+        )
+        report = validate_gate_a_construction(
+            CheckpointJsonl(Path(args.scheduler_events).resolve()).read(),
+            waiting_request_id=args.waiting_request_id,
+            prefill_request_id=args.prefill_request_id,
+            lifecycle=lifecycle,
+        )
+        _write_json(report, args.output)
+        return 0 if report["valid"] else 1
+    if args.command == "phase4-probe":
+        from specrhythm.phase4.config import load_phase4_config
+        from specrhythm.phase4.manifest import (
+            collect_environment,
+            collect_topology,
+            validate_environment,
+            validate_topology,
+        )
+
+        try:
+            config = load_phase4_config(args.config)
+            environment = collect_environment(Path(args.vllm_source).resolve())
+            topology = collect_topology()
+            environment_validation = validate_environment(environment, config)
+            topology_validation = validate_topology(topology, config)
+            validation = {
+                "schema_version": "specrhythm.phase4-probe-validation.v1",
+                "valid": environment_validation["valid"]
+                and topology_validation["valid"],
+                "environment": environment_validation,
+                "topology": topology_validation,
+                "serving_performance_result": False,
+            }
+        except (FileNotFoundError, ValueError) as error:
+            raise SystemExit(f"Phase-4 probe failed: {error}") from error
+        _write_json(environment, args.environment_output)
+        _write_json(topology, args.topology_output)
+        _write_json(validation, args.validation_output)
+        return 0 if validation["valid"] else 2
+    if args.command == "phase4-stock-smoke":
+        from specrhythm.phase4.config import load_phase4_config
+        from specrhythm.phase4.stock_vllm import run_stock_smoke
+
+        try:
+            report = run_stock_smoke(
+                load_phase4_config(args.config),
+                role=args.role,
+                workload_path=Path(args.workload).resolve(),
+                environment_path=Path(args.environment).resolve(),
+                topology_path=Path(args.topology).resolve(),
+                runtime_manifest_path=Path(args.runtime_manifest).resolve(),
+                git_commit=_current_git_commit() or "unknown",
+                frozen_target_dir=(
+                    Path(args.frozen_hf_target_dir).resolve()
+                    if args.frozen_hf_target_dir
+                    else None
+                ),
+                correctness_mode=args.correctness_mode,
+                diagnostics_path=(
+                    Path(args.target_diagnostics).resolve()
+                    if args.target_diagnostics
+                    else None
+                ),
+                request_count=args.request_count,
+                diagnostic_single_run=args.diagnostic_single_run,
+                numerical_plan_path=(
+                    Path(args.numerical_diagnostic_plan).resolve()
+                    if args.numerical_diagnostic_plan
+                    else None
+                ),
+                numerical_output_path=(
+                    Path(args.numerical_diagnostic_output).resolve()
+                    if args.numerical_diagnostic_output
+                    else None
+                ),
+                matched_bootstrap_async_off=args.matched_bootstrap_async_off,
+            )
+        except (
+            FileExistsError,
+            FileNotFoundError,
+            ImportError,
+            RuntimeError,
+            ValueError,
+        ) as error:
+            raise SystemExit(f"Phase-4 stock smoke failed: {error}") from error
+        _write_json(report, args.output)
+        return 0
+    if args.command == "phase4-validate":
+        from specrhythm.phase4.config import load_phase4_config
+        from specrhythm.phase4.validation import (
+            validate_artifacts,
+            validation_markdown,
+        )
+
+        try:
+            report = validate_artifacts(
+                load_phase4_config(args.config),
+                environment_path=Path(args.environment).resolve(),
+                topology_path=Path(args.topology).resolve(),
+                runtime_manifest_path=Path(args.runtime_manifest).resolve(),
+                draft_smoke_path=Path(args.draft_smoke).resolve(),
+                target_smoke_path=Path(args.target_smoke).resolve(),
+            )
+        except (FileNotFoundError, json.JSONDecodeError, ValueError) as error:
+            report = {
+                "schema_version": "specrhythm.phase4-validation.v1",
+                "valid": False,
+                "errors": [str(error)],
+                "warnings": [],
+                "serving_performance_result": False,
+            }
+        _write_json(report, args.output)
+        markdown = Path(args.markdown_output)
+        markdown.parent.mkdir(parents=True, exist_ok=True)
+        markdown.write_text(validation_markdown(report), encoding="utf-8")
+        return 0 if report["valid"] else 1
+    if args.command == "phase4b1-gate3-matched-bootstrap-compare":
+        from specrhythm.phase4.manifest import sha256_file
+        from specrhythm.phase4.matched_bootstrap import (
+            compare_matched_bootstrap,
+            comparison_markdown,
+        )
+        from specrhythm.phase4.numerical_diagnostics import load_numerical_plan
+        from specrhythm.phase4.transport import CheckpointJsonl
+
+        try:
+            paths = {
+                name: Path(getattr(args, name.replace("-", "_"))).resolve()
+                for name in (
+                    "workload",
+                    "reference",
+                    "stock-run",
+                    "stock-numerical",
+                    "control-run",
+                    "control-numerical",
+                    "resident-run",
+                    "resident-numerical",
+                    "endpoint-comparison",
+                )
+            }
+            output_path = Path(args.output).resolve()
+            markdown_path = Path(args.markdown_output).resolve()
+            for path in (output_path, markdown_path):
+                if path.exists():
+                    raise FileExistsError(
+                        f"refusing to overwrite matched-bootstrap comparison {path}"
+                    )
+            stock_run = json.loads(paths["stock-run"].read_text(encoding="utf-8"))
+            control_run = json.loads(paths["control-run"].read_text(encoding="utf-8"))
+            resident_run = json.loads(
+                paths["resident-run"].read_text(encoding="utf-8")
+            )
+            report = compare_matched_bootstrap(
+                plan=load_numerical_plan(
+                    Path(args.plan).resolve(), paths["workload"]
+                ),
+                stock_rows=CheckpointJsonl(paths["stock-numerical"]).read(),
+                control_rows=CheckpointJsonl(paths["control-numerical"]).read(),
+                resident_rows=CheckpointJsonl(paths["resident-numerical"]).read(),
+                stock_outputs=stock_run["runs"][0],
+                control_outputs=control_run["runs"][0],
+                resident_outputs=resident_run["outputs"],
+                immutable_reference=json.loads(
+                    paths["reference"].read_text(encoding="utf-8")
+                ),
+                endpoint_comparison=json.loads(
+                    paths["endpoint-comparison"].read_text(encoding="utf-8")
+                ),
+                control_runtime=control_run["matched_bootstrap_control"],
+            )
+            report["provenance"] = {
+                name.replace("-", "_") + "_sha256": sha256_file(path)
+                for name, path in paths.items()
+            }
+            _write_json(report, output_path)
+            markdown_path.parent.mkdir(parents=True, exist_ok=True)
+            markdown_path.write_text(comparison_markdown(report), encoding="utf-8")
+        except (
+            FileExistsError,
+            FileNotFoundError,
+            KeyError,
+            RuntimeError,
+            TypeError,
+            ValueError,
+            json.JSONDecodeError,
+        ) as error:
+            raise SystemExit(
+                f"Gate3 matched-bootstrap comparison failed: {error}"
+            ) from error
+        return 0 if report["valid"] else 1
+    if args.command == "phase4-stock-reference":
+        from specrhythm.phase4.config import load_phase4_config
+        from specrhythm.phase4.reference import freeze_stock_reference
+
+        try:
+            freeze_stock_reference(
+                Path(args.output).resolve(),
+                load_phase4_config(args.config),
+                workload_path=Path(args.workload).resolve(),
+                environment_path=Path(args.environment).resolve(),
+                topology_path=Path(args.topology).resolve(),
+                runtime_manifest_path=Path(args.runtime_manifest).resolve(),
+                git_commit=_current_git_commit() or "unknown",
+                legacy_hf_target_dir=(
+                    Path(args.legacy_hf_target_dir).resolve()
+                    if args.legacy_hf_target_dir
+                    else None
+                ),
+                correctness_mode=args.correctness_mode,
+                diagnostics_path=(
+                    Path(args.target_diagnostics).resolve()
+                    if args.target_diagnostics
+                    else None
+                ),
+                request_count=args.request_count,
+            )
+        except (
+            FileExistsError,
+            FileNotFoundError,
+            ImportError,
+            RuntimeError,
+            ValueError,
+        ) as error:
+            raise SystemExit(f"Phase-4 stock reference failed: {error}") from error
+        return 0
+    if args.command == "phase4-target-regression":
+        from specrhythm.phase4.config import load_phase4_config
+        from specrhythm.phase4.serial_runner import run_patched_target_regression
+
+        try:
+            report = run_patched_target_regression(
+                load_phase4_config(args.config),
+                workload_path=Path(args.workload).resolve(),
+                environment_path=Path(args.environment).resolve(),
+                topology_path=Path(args.topology).resolve(),
+                runtime_manifest_path=Path(args.runtime_manifest).resolve(),
+                reference_path=Path(args.reference).resolve(),
+                patch_manifest_path=Path(args.patch_manifest).resolve(),
+                git_commit=_current_git_commit() or "unknown",
+                legacy_hf_target_dir=(
+                    Path(args.legacy_hf_target_dir).resolve()
+                    if args.legacy_hf_target_dir
+                    else None
+                ),
+                correctness_mode=args.correctness_mode,
+                diagnostics_path=(
+                    Path(args.target_diagnostics).resolve()
+                    if args.target_diagnostics
+                    else None
+                ),
+            )
+        except (FileNotFoundError, ImportError, RuntimeError, ValueError) as error:
+            raise SystemExit(f"Phase-4 Target regression failed: {error}") from error
+        _write_json(report, args.output)
+        return 0 if report["valid"] else 1
+    if args.command == "phase4-draft-service":
+        from specrhythm.phase4.config import load_phase4_config
+        from specrhythm.phase4.draft_service import run_draft_service
+
+        try:
+            run_draft_service(
+                load_phase4_config(args.config),
+                socket_path=Path(args.socket).resolve(),
+                event_log_path=Path(args.event_log).resolve(),
+                ready_path=Path(args.ready).resolve(),
+            )
+        except (
+            FileExistsError,
+            FileNotFoundError,
+            ImportError,
+            RuntimeError,
+            ValueError,
+        ) as error:
+            raise SystemExit(f"Phase-4 Draft service failed: {error}") from error
+        return 0
+    if args.command == "phase4-serial-run":
+        from specrhythm.phase4.config import load_phase4_config
+        from specrhythm.phase4.serial_runner import run_serial_disaggregated
+        output_path = Path(args.output).resolve()
+        if output_path.exists():
+            raise SystemExit(f"refusing to overwrite Serial run artifact {output_path}")
+        try:
+            report = run_serial_disaggregated(
+                load_phase4_config(args.config),
+                workload_path=Path(args.workload).resolve(),
+                environment_path=Path(args.environment).resolve(),
+                topology_path=Path(args.topology).resolve(),
+                runtime_manifest_path=Path(args.runtime_manifest).resolve(),
+                reference_path=Path(args.reference).resolve(),
+                patch_manifest_path=Path(args.patch_manifest).resolve(),
+                draft_socket_path=Path(args.draft_socket).resolve(),
+                draft_ready_path=Path(args.draft_ready).resolve(),
+                round_events_path=Path(args.round_events).resolve(),
+                transport_events_path=Path(args.transport_events).resolve(),
+                plugin_report_path=Path(args.plugin_report).resolve(),
+                git_commit=_current_git_commit() or "unknown",
+                correctness_mode=args.correctness_mode,
+                diagnostics_path=(
+                    Path(args.target_diagnostics).resolve()
+                    if args.target_diagnostics
+                    else None
+                ),
+            )
+        except (
+            FileExistsError,
+            FileNotFoundError,
+            ImportError,
+            RuntimeError,
+            ValueError,
+        ) as error:
+            raise SystemExit(f"Phase-4 Serial run failed: {error}") from error
+        _write_json(report, output_path)
+        return 0 if report["valid"] else 1
+    if args.command == "phase4-serial-validate":
+        from specrhythm.phase4.config import load_phase4_config
+        from specrhythm.phase4.serial_validation import (
+            serial_summary_markdown,
+            validate_serial_artifacts,
+        )
+
+        try:
+            run_paths = [Path(path).resolve() for path in args.run]
+            report = validate_serial_artifacts(
+                load_phase4_config(args.config),
+                reference_path=Path(args.reference).resolve(),
+                patch_manifest_path=Path(args.patch_manifest).resolve(),
+                target_regression_path=Path(args.target_regression).resolve(),
+                run_paths=run_paths,
+                round_event_paths=[Path(path).resolve() for path in args.round_events],
+                transport_event_paths=[
+                    Path(path).resolve() for path in args.transport_events
+                ],
+            )
+            runs = [json.loads(path.read_text(encoding="utf-8")) for path in run_paths]
+        except (FileNotFoundError, json.JSONDecodeError, RuntimeError, ValueError) as error:
+            report = {
+                "schema_version": "specrhythm.phase4a1-validation.v1",
+                "valid": False,
+                "errors": [str(error)],
+                "warnings": [],
+                "gpu_correctness_result": True,
+                "gpu_performance_result": False,
+            }
+            runs = []
+        _write_json(report, args.output)
+        markdown = Path(args.markdown_output).resolve()
+        markdown.parent.mkdir(parents=True, exist_ok=True)
+        markdown.write_text(serial_summary_markdown(report, runs), encoding="utf-8")
+        return 0 if report["valid"] else 1
+    if args.command == "phase4-dual-draft-service":
+        from specrhythm.phase4.config import load_phase4_config
+        from specrhythm.phase4.dual_service import run_dual_draft_service
+
+        try:
+            run_dual_draft_service(
+                load_phase4_config(args.config),
+                socket_path=Path(args.socket).resolve(),
+                event_log_path=Path(args.event_log).resolve(),
+                transport_log_path=Path(args.transport_events).resolve(),
+                ready_path=Path(args.ready).resolve(),
+            )
+        except (
+            FileExistsError,
+            FileNotFoundError,
+            ImportError,
+            RuntimeError,
+            ValueError,
+        ) as error:
+            raise SystemExit(f"Phase-4B Draft service failed: {error}") from error
+        return 0
+    if args.command == "phase4-dual-batch-run":
+        from specrhythm.phase4.config import load_phase4_config
+        from specrhythm.phase4.dual_runner import run_dual_batch
+
+        try:
+            report = run_dual_batch(
+                load_phase4_config(args.config),
+                workload_path=Path(args.workload).resolve(),
+                request_count=args.request_count,
+                environment_path=Path(args.environment).resolve(),
+                topology_path=Path(args.topology).resolve(),
+                runtime_manifest_path=Path(args.runtime_manifest).resolve(),
+                reference_path=Path(args.reference).resolve(),
+                patch_manifest_path=Path(args.patch_manifest).resolve(),
+                draft_socket_path=Path(args.draft_socket).resolve(),
+                draft_ready_path=Path(args.draft_ready).resolve(),
+                scheduler_events_path=Path(args.scheduler_events).resolve(),
+                request_state_events_path=Path(args.request_state_events).resolve(),
+                proposal_events_path=Path(args.proposal_events).resolve(),
+                verification_events_path=Path(args.verification_events).resolve(),
+                draft_work_events_path=Path(args.draft_work_events).resolve(),
+                transport_events_path=Path(args.transport_events).resolve(),
+                target_diagnostics_path=Path(args.target_diagnostics).resolve(),
+                plugin_report_path=Path(args.plugin_report).resolve(),
+                output_checkpoint_path=Path(args.output_checkpoint).resolve(),
+                cycle_events_path=Path(args.cycle_events).resolve(),
+                overlap_events_path=Path(args.overlap_events).resolve(),
+                output_path=Path(args.output).resolve(),
+                git_commit=_current_git_commit() or "unknown",
+                microbatch_size=args.microbatch_size,
+                cohort_size=args.cohort_size,
+                resume=args.resume,
+            )
+        except (
+            FileExistsError,
+            FileNotFoundError,
+            ImportError,
+            RuntimeError,
+            ValueError,
+        ) as error:
+            raise SystemExit(f"Phase-4B Dual-Batch run failed: {error}") from error
+        return 0 if report.get("exact_sequence_match") is True else 1
+    if args.command == "phase4-dual-batch-validate":
+        from specrhythm.phase4.dual_validation import validate_dual_batch_runs
+
+        try:
+            report = validate_dual_batch_runs(
+                stock_references=[Path(path).resolve() for path in args.stock_reference],
+                target_regression_path=Path(args.target_regression).resolve(),
+                run_paths=[Path(path).resolve() for path in args.run],
+                state_event_paths=[
+                    Path(path).resolve() for path in args.request_state_events
+                ],
+                proposal_event_paths=[
+                    Path(path).resolve() for path in args.proposal_events
+                ],
+                cycle_event_paths=[Path(path).resolve() for path in args.cycle_events],
+                overlap_event_paths=[
+                    Path(path).resolve() for path in args.overlap_events
+                ],
+                draft_work_event_paths=[
+                    Path(path).resolve() for path in args.draft_work_events
+                ],
+                target_diagnostic_paths=[
+                    Path(path).resolve() for path in args.target_diagnostics
+                ],
+                output_path=Path(args.output).resolve(),
+                markdown_path=Path(args.markdown_output).resolve(),
+            )
+        except (FileNotFoundError, json.JSONDecodeError, RuntimeError, ValueError) as error:
+            report = {
+                "schema_version": "specrhythm.phase4b-dual-batch-validation.v1",
+                "valid": False,
+                "outcome": "invalid-artifacts",
+                "errors": [str(error)],
+            }
+            _write_json(report, args.output)
+            return 1
+        return 0 if report["valid"] else 1
+    if args.command == "phase4b1-resident-dual-run":
+        from specrhythm.phase4.config import load_phase4_config
+        from specrhythm.phase4.dual_runner import run_resident_dual_batch
+
+        try:
+            report = run_resident_dual_batch(
+                load_phase4_config(args.config),
+                workload_path=Path(args.workload).resolve(),
+                request_count=args.request_count,
+                environment_path=Path(args.environment).resolve(),
+                topology_path=Path(args.topology).resolve(),
+                patch_manifest_path=Path(args.patch_manifest).resolve(),
+                draft_socket_path=Path(args.draft_socket).resolve(),
+                draft_ready_path=Path(args.draft_ready).resolve(),
+                context_path=Path(args.context).resolve(),
+                decode_ready_manifest_path=Path(args.decode_ready_manifest).resolve(),
+                timing_events_path=Path(args.timing_events).resolve(),
+                setup_control_path=Path(args.setup_control).resolve(),
+                setup_ready_path=Path(args.setup_ready).resolve(),
+                scheduler_events_path=Path(args.scheduler_events).resolve(),
+                request_state_events_path=Path(args.request_state_events).resolve(),
+                proposal_events_path=Path(args.proposal_events).resolve(),
+                proposal_lifecycle_path=Path(
+                    args.proposal_lifecycle_events
+                ).resolve(),
+                verification_events_path=Path(args.verification_events).resolve(),
+                draft_work_events_path=Path(args.draft_work_events).resolve(),
+                transport_events_path=Path(args.transport_events).resolve(),
+                target_diagnostics_path=Path(args.target_diagnostics).resolve(),
+                plugin_report_path=Path(args.plugin_report).resolve(),
+                output_checkpoint_path=Path(args.output_checkpoint).resolve(),
+                cycle_events_path=Path(args.cycle_events).resolve(),
+                overlap_events_path=Path(args.overlap_events).resolve(),
+                runtime_manifest_path=Path(args.runtime_manifest).resolve(),
+                output_path=Path(args.output).resolve(),
+                git_commit=_current_git_commit() or "unknown",
+                microbatch_size=args.microbatch_size,
+                test_coordination=args.test_coordination,
+                overlap_requirement=args.overlap_requirement,
+                phase4b2_performance=args.phase4b2_performance,
+            )
+        except (
+            FileExistsError,
+            FileNotFoundError,
+            ImportError,
+            RuntimeError,
+            ValueError,
+        ) as error:
+            raise SystemExit(f"Phase-4B.1 resident Dual run failed: {error}") from error
+        return 0 if report["valid"] else 1
+    if args.command == "phase4b1-dual-correctness-validate":
+        from specrhythm.phase4.dual_correctness import (
+            VALIDATION_SCHEMA,
+            validate_phase4b1_dual_correctness,
+        )
+
+        try:
+            report = validate_phase4b1_dual_correctness(
+                target_path=Path(args.target).resolve(),
+                serial_path=Path(args.serial).resolve(),
+                dual_paths=[Path(path).resolve() for path in args.dual],
+                target_manifest_path=Path(args.target_manifest).resolve(),
+                serial_manifest_path=Path(args.serial_manifest).resolve(),
+                target_process_lifecycle_path=Path(
+                    args.target_process_lifecycle
+                ).resolve(),
+                serial_process_lifecycle_path=Path(
+                    args.serial_process_lifecycle
+                ).resolve(),
+                dual_manifest_paths=[
+                    Path(path).resolve() for path in args.dual_manifest
+                ],
+                state_event_paths=[
+                    Path(path).resolve() for path in args.request_state_events
+                ],
+                proposal_event_paths=[
+                    Path(path).resolve() for path in args.proposal_events
+                ],
+                proposal_lifecycle_paths=[
+                    Path(path).resolve() for path in args.proposal_lifecycle_events
+                ],
+                scheduler_event_paths=[
+                    Path(path).resolve() for path in args.scheduler_events
+                ],
+                verification_event_paths=[
+                    Path(path).resolve() for path in args.verification_events
+                ],
+                draft_work_event_paths=[
+                    Path(path).resolve() for path in args.draft_work_events
+                ],
+                target_diagnostic_paths=[
+                    Path(path).resolve() for path in args.target_diagnostics
+                ],
+                overlap_event_paths=[
+                    Path(path).resolve() for path in args.overlap_events
+                ],
+                process_lifecycle_paths=[
+                    Path(path).resolve() for path in args.process_lifecycle
+                ],
+                output_path=Path(args.output).resolve(),
+                markdown_path=Path(args.markdown_output).resolve(),
+                overlap_requirement=args.overlap_requirement,
+                legacy_source_commit=args.legacy_source_commit,
+            )
+        except (
+            FileNotFoundError,
+            json.JSONDecodeError,
+            RuntimeError,
+            ValueError,
+        ) as error:
+            report = {
+                "schema_version": VALIDATION_SCHEMA,
+                "valid": False,
+                "outcome": "FAIL",
+                "errors": [str(error)],
+                "performance_result": False,
+            }
+            _write_json(report, args.output)
+            return 1
+        return 0 if report["valid"] else 1
+    if args.command == "phase4b1-overlap-diagnose":
+        from specrhythm.phase4.dual_correctness import (
+            OVERLAP_DIAGNOSTIC_SCHEMA,
+            diagnose_overlap_artifacts,
+        )
+
+        try:
+            report = diagnose_overlap_artifacts(
+                draft_work_paths=[
+                    Path(path).resolve() for path in args.draft_work_events
+                ],
+                verification_paths=[
+                    Path(path).resolve() for path in args.verification_events
+                ],
+                overlap_paths=[
+                    Path(path).resolve() for path in args.overlap_events
+                ],
+                output_path=Path(args.output).resolve(),
+            )
+        except (FileNotFoundError, json.JSONDecodeError, RuntimeError, ValueError) as error:
+            report = {
+                "schema_version": OVERLAP_DIAGNOSTIC_SCHEMA,
+                "valid": False,
+                "errors": [str(error)],
+                "performance_result": False,
+            }
+            _write_json(report, args.output)
+            return 1
+        return 0 if report["valid"] else 1
+    if args.command == "phase4b1-dual-controlled-validate":
+        from specrhythm.phase4.dual_correctness import (
+            CONTROLLED_SCHEMA,
+            validate_controlled_gate,
+        )
+
+        try:
+            report = validate_controlled_gate(
+                asynchronous_scheduler_path=Path(
+                    args.asynchronous_scheduler
+                ).resolve(),
+                coordinated_scheduler_path=Path(
+                    args.coordinated_scheduler
+                ).resolve(),
+                state_event_path=Path(args.request_state_events).resolve(),
+                output_path=Path(args.output).resolve(),
+            )
+        except (FileNotFoundError, json.JSONDecodeError, RuntimeError, ValueError) as error:
+            report = {
+                "schema_version": CONTROLLED_SCHEMA,
+                "valid": False,
+                "outcome": "FAIL",
+                "errors": [str(error)],
+                "performance_result": False,
+            }
+            _write_json(report, args.output)
+            return 1
+        return 0 if report["valid"] else 1
+    if args.command == "phase4b1-gate3-numerical-compare":
+        from specrhythm.phase4.numerical_diagnostics import (
+            compare_numerical_diagnostics,
+            comparison_markdown,
+            load_numerical_plan,
+        )
+        from specrhythm.phase4.transport import CheckpointJsonl
+
+        try:
+            workload = Path(args.workload).resolve()
+            output_path = Path(args.output).resolve()
+            markdown_path = Path(args.markdown_output).resolve()
+            for path in (output_path, markdown_path):
+                if path.exists():
+                    raise FileExistsError(
+                        f"refusing to overwrite numerical comparison {path}"
+                    )
+            report = compare_numerical_diagnostics(
+                plan=load_numerical_plan(Path(args.plan).resolve(), workload),
+                stock_rows=CheckpointJsonl(
+                    Path(args.stock_numerical).resolve()
+                ).read(),
+                resident_rows=CheckpointJsonl(
+                    Path(args.resident_numerical).resolve()
+                ).read(),
+                stock_outputs=json.loads(
+                    Path(args.stock_run).resolve().read_text(encoding="utf-8")
+                )["runs"][0],
+                resident_outputs=json.loads(
+                    Path(args.resident_run).resolve().read_text(encoding="utf-8")
+                )["outputs"],
+            )
+            _write_json(report, output_path)
+            markdown_path.parent.mkdir(parents=True, exist_ok=True)
+            markdown_path.write_text(comparison_markdown(report), encoding="utf-8")
+        except (
+            FileExistsError,
+            FileNotFoundError,
+            KeyError,
+            RuntimeError,
+            TypeError,
+            ValueError,
+            json.JSONDecodeError,
+        ) as error:
+            raise SystemExit(f"Gate3 numerical comparison failed: {error}") from error
+        return 0 if report["valid"] else 1
+    if args.command == "phase4b1-gate3-per-token-kv-compare":
+        from specrhythm.phase4.numerical_diagnostics import (
+            compare_per_token_kv_diagnostics,
+            load_numerical_plan,
+            per_token_comparison_markdown,
+        )
+        from specrhythm.phase4.transport import CheckpointJsonl
+
+        try:
+            workload = Path(args.workload).resolve()
+            output_path = Path(args.output).resolve()
+            markdown_path = Path(args.markdown_output).resolve()
+            for path in (output_path, markdown_path):
+                if path.exists():
+                    raise FileExistsError(
+                        f"refusing to overwrite per-token KV comparison {path}"
+                    )
+            stock_run = json.loads(
+                Path(args.stock_run).resolve().read_text(encoding="utf-8")
+            )
+            resident_run = json.loads(
+                Path(args.resident_run).resolve().read_text(encoding="utf-8")
+            )
+            reference = json.loads(
+                Path(args.reference).resolve().read_text(encoding="utf-8")
+            )
+            report = compare_per_token_kv_diagnostics(
+                plan=load_numerical_plan(Path(args.plan).resolve(), workload),
+                stock_rows=CheckpointJsonl(
+                    Path(args.stock_numerical).resolve()
+                ).read(),
+                resident_rows=CheckpointJsonl(
+                    Path(args.resident_numerical).resolve()
+                ).read(),
+                stock_outputs=stock_run["runs"][0],
+                resident_outputs=resident_run["outputs"],
+                immutable_reference=reference,
+            )
+            _write_json(report, output_path)
+            markdown_path.parent.mkdir(parents=True, exist_ok=True)
+            markdown_path.write_text(
+                per_token_comparison_markdown(report), encoding="utf-8"
+            )
+        except (
+            FileExistsError,
+            FileNotFoundError,
+            KeyError,
+            RuntimeError,
+            TypeError,
+            ValueError,
+            json.JSONDecodeError,
+        ) as error:
+            raise SystemExit(
+                f"Gate3 per-token KV comparison failed: {error}"
+            ) from error
+        return 0 if report["valid"] else 1
+    if args.command == "phase4-resident-target-run":
+        from specrhythm.phase4.config import load_phase4_config
+        from specrhythm.phase4.resident_runner import run_resident_target
+
+        try:
+            report = run_resident_target(
+                load_phase4_config(args.config),
+                workload_path=Path(args.workload).resolve(),
+                request_count=args.request_count,
+                environment_path=Path(args.environment).resolve(),
+                topology_path=Path(args.topology).resolve(),
+                reference_path=Path(args.reference).resolve(),
+                patch_manifest_path=Path(args.patch_manifest).resolve(),
+                draft_socket_path=Path(args.draft_socket).resolve(),
+                draft_ready_path=Path(args.draft_ready).resolve(),
+                context_path=Path(args.context).resolve(),
+                decode_ready_manifest_path=Path(args.decode_ready_manifest).resolve(),
+                timing_events_path=Path(args.timing_events).resolve(),
+                setup_control_path=Path(args.setup_control).resolve(),
+                setup_ready_path=Path(args.setup_ready).resolve(),
+                admission_events_path=Path(args.admission_events).resolve(),
+                target_diagnostics_path=Path(args.target_diagnostics).resolve(),
+                plugin_report_path=Path(args.plugin_report).resolve(),
+                first_forward_path=Path(args.first_forward).resolve(),
+                output_path=Path(args.output).resolve(),
+                git_commit=_current_git_commit() or "unknown",
+                correctness_mode=args.correctness_mode,
+                numerical_plan_path=(
+                    Path(args.numerical_diagnostic_plan).resolve()
+                    if args.numerical_diagnostic_plan
+                    else None
+                ),
+                numerical_output_path=(
+                    Path(args.numerical_diagnostic_output).resolve()
+                    if args.numerical_diagnostic_output
+                    else None
+                ),
+                phase4b2_performance=args.phase4b2_performance,
+            )
+        except (
+            FileExistsError,
+            FileNotFoundError,
+            ImportError,
+            RuntimeError,
+            ValueError,
+        ) as error:
+            raise SystemExit(f"Phase-4 resident Target failed: {error}") from error
+        return 0 if report["valid"] else 1
+    if args.command == "phase4-resident-serial-run":
+        from specrhythm.phase4.config import load_phase4_config
+        from specrhythm.phase4.manifest import atomic_write_json
+        from specrhythm.phase4.resident_runner import build_decode_ready_context
+        from specrhythm.phase4.serial_runner import (
+            load_patch_manifest,
+            run_serial_disaggregated,
+        )
+
+        try:
+            config = load_phase4_config(args.config)
+            patch_manifest_path = Path(args.patch_manifest).resolve()
+            patch_manifest = load_patch_manifest(patch_manifest_path, config)
+            context_path = Path(args.context).resolve()
+            if context_path.exists():
+                raise FileExistsError(f"refusing to overwrite resident context {context_path}")
+            atomic_write_json(
+                context_path,
+                build_decode_ready_context(
+                    config,
+                    patch_manifest=patch_manifest,
+                    workload_path=Path(args.workload).resolve(),
+                    git_commit=_current_git_commit() or "unknown",
+                    correctness_mode=args.correctness_mode,
+                ),
+            )
+            report = run_serial_disaggregated(
+                config,
+                workload_path=Path(args.workload).resolve(),
+                environment_path=Path(args.environment).resolve(),
+                topology_path=Path(args.topology).resolve(),
+                runtime_manifest_path=Path(args.runtime_manifest).resolve(),
+                reference_path=Path(args.reference).resolve(),
+                patch_manifest_path=patch_manifest_path,
+                draft_socket_path=Path(args.draft_socket).resolve(),
+                draft_ready_path=Path(args.draft_ready).resolve(),
+                round_events_path=Path(args.round_events).resolve(),
+                transport_events_path=Path(args.transport_events).resolve(),
+                plugin_report_path=Path(args.plugin_report).resolve(),
+                git_commit=_current_git_commit() or "unknown",
+                correctness_mode=args.correctness_mode,
+                diagnostics_path=Path(args.target_diagnostics).resolve(),
+                request_count=args.request_count,
+                decode_ready_context_path=context_path,
+                decode_ready_manifest_path=Path(
+                    args.decode_ready_manifest
+                ).resolve(),
+                decode_ready_timing_path=Path(args.timing_events).resolve(),
+                first_forward_path=Path(args.first_forward).resolve(),
+                resident_setup_control_path=Path(args.setup_control).resolve(),
+                resident_setup_ready_path=Path(args.setup_ready).resolve(),
+                resident_admission_events_path=Path(
+                    args.admission_events
+                ).resolve(),
+                resident_initial_proposal_events_path=Path(
+                    args.initial_proposal_events
+                ).resolve(),
+                phase4b2_performance=args.phase4b2_performance,
+            )
+            _write_json(report, args.output)
+        except (
+            FileExistsError,
+            FileNotFoundError,
+            ImportError,
+            RuntimeError,
+            ValueError,
+        ) as error:
+            raise SystemExit(f"Phase-4 resident Serial failed: {error}") from error
+        return 0 if report["valid"] else 1
+    if args.command == "phase4-resident-validate":
+        from specrhythm.phase4.resident_runner import validate_resident_pair
+
+        try:
+            report = validate_resident_pair(
+                target_path=Path(args.target).resolve(),
+                serial_path=Path(args.serial).resolve(),
+                target_manifest_path=Path(args.target_manifest).resolve(),
+                serial_manifest_path=Path(args.serial_manifest).resolve(),
+            )
+        except (FileNotFoundError, json.JSONDecodeError, ValueError) as error:
+            report = {
+                "schema_version": "specrhythm.phase4b-resident-pair-validation.v1",
+                "valid": False,
+                "errors": [str(error)],
+                "performance_result": False,
+            }
+        _write_json(report, args.output)
+        return 0 if report["valid"] else 1
+    if args.command == "phase4b2-reconcile-dual-terminal":
+        from specrhythm.phase4.dual_terminal_recovery import recover_terminal_state
+
+        try:
+            report = recover_terminal_state(
+                run_root=Path(args.run_root).resolve(),
+                workload_path=Path(args.workload).resolve(),
+                config_path=Path(args.config).resolve(),
+                topology_path=Path(args.topology).resolve(),
+                patch_manifest_path=Path(args.patch_manifest).resolve(),
+                output_dir=Path(args.output_dir).resolve(),
+            )
+        except (OSError, KeyError, RuntimeError, TypeError, ValueError) as error:
+            raise SystemExit(f"Dual terminal-state recovery refused: {error}") from error
+        print(json.dumps(report["terminal_state_reconciliation"], indent=2))
+        return 0
+    if args.command == "phase4b2-decode-run":
+        from specrhythm.phase4.performance import build_decode_performance_result
+
+        try:
+            report = build_decode_performance_result(
+                mode=args.mode,
+                run_root=Path(args.run_root).resolve(),
+                workload_path=Path(args.workload).resolve(),
+                config_path=Path(args.config).resolve(),
+                topology_path=Path(args.topology).resolve(),
+                patch_manifest_path=Path(args.patch_manifest).resolve(),
+                output_path=Path(args.output).resolve(),
+                terminal_revalidation_path=(
+                    Path(args.terminal_revalidation).resolve()
+                    if args.terminal_revalidation else None
+                ),
+            )
+        except (
+            FileExistsError,
+            FileNotFoundError,
+            KeyError,
+            RuntimeError,
+            TypeError,
+            ValueError,
+            json.JSONDecodeError,
+        ) as error:
+            raise SystemExit(f"Phase-4B.2 decode measurement failed: {error}") from error
+        return 0 if report["valid"] else 1
+    if args.command == "phase4b2-decode-compare":
+        from specrhythm.phase4.performance import compare_decode_performance_results
+
+        try:
+            report = compare_decode_performance_results(
+                target_path=Path(args.target).resolve(),
+                serial_path=Path(args.serial).resolve(),
+                dual_path=Path(args.dual).resolve() if args.dual else None,
+                output_path=Path(args.output).resolve(),
+                markdown_path=Path(args.markdown_output).resolve(),
+            )
+        except (
+            FileExistsError,
+            FileNotFoundError,
+            KeyError,
+            TypeError,
+            ValueError,
+            json.JSONDecodeError,
+        ) as error:
+            raise SystemExit(f"Phase-4B.2 comparison failed: {error}") from error
+        return 0 if report["valid"] else 1
+    if args.command == "phase4-batch-invariant-preflight":
+        from specrhythm.phase4.batch_invariant import (
+            probe_batch_invariant_hardware,
+        )
+
+        try:
+            report = probe_batch_invariant_hardware(args.correctness_mode)
+        except (RuntimeError, ValueError) as error:
+            report = {
+                "schema_version": "specrhythm.phase4-batch-invariant-preflight.v1",
+                "valid": False,
+                "batch_invariant_effective": False,
+                "errors": [str(error)],
+            }
+        _write_json(report, args.output)
+        return 0 if report["valid"] else 2
+    if args.command == "phase4-batch-invariant-validate":
+        from specrhythm.phase4.correctness_validation import (
+            correctness_markdown,
+            validate_batch_invariant_experiment,
+        )
+
+        try:
+            report = validate_batch_invariant_experiment(
+                stock_reference_paths=[
+                    Path(path).resolve() for path in args.stock_reference
+                ],
+                target_regression_paths=[
+                    Path(path).resolve() for path in args.target_regression
+                ],
+                serial_run_paths=[Path(path).resolve() for path in args.serial_run],
+                round_event_paths=[Path(path).resolve() for path in args.round_events],
+                target_diagnostic_paths=[
+                    Path(path).resolve() for path in args.target_diagnostics
+                ],
+                serial_diagnostic_paths=[
+                    Path(path).resolve() for path in args.serial_diagnostics
+                ],
+            )
+        except (FileNotFoundError, json.JSONDecodeError, RuntimeError, ValueError) as error:
+            report = {
+                "schema_version": "specrhythm.phase4a1.1-batch-invariant-validation.v1",
+                "valid": False,
+                "outcome": "invalid-artifacts",
+                "errors": [str(error)],
+            }
+        _write_json(report, args.output)
+        markdown = Path(args.markdown_output).resolve()
+        markdown.parent.mkdir(parents=True, exist_ok=True)
+        markdown.write_text(correctness_markdown(report), encoding="utf-8")
+        return 0 if report["valid"] else 1
+    if args.command == "phase4-fixed-proposal-service":
+        from specrhythm.phase4.fixed_control import run_fixed_proposal_service
+
+        try:
+            run_fixed_proposal_service(Path(args.socket).resolve())
+        except (FileExistsError, RuntimeError, ValueError) as error:
+            raise SystemExit(f"fixed-proposal service failed: {error}") from error
+        return 0
+    if args.command == "phase4-fixed-control-run":
+        from specrhythm.phase4.config import load_phase4_config
+        from specrhythm.phase4.serial_runner import run_fixed_proposal_control
+
+        output_path = Path(args.output).resolve()
+        if output_path.exists():
+            raise SystemExit(f"refusing to overwrite fixed control {output_path}")
+        try:
+            report = run_fixed_proposal_control(
+                load_phase4_config(args.config),
+                workload_path=Path(args.workload).resolve(),
+                environment_path=Path(args.environment).resolve(),
+                topology_path=Path(args.topology).resolve(),
+                patch_manifest_path=Path(args.patch_manifest).resolve(),
+                diagnostics_path=Path(args.target_diagnostics).resolve(),
+                git_commit=_current_git_commit() or "unknown",
+                proposer=args.proposer,
+                proposal_budget=args.proposal_budget,
+                remote_socket_path=(
+                    Path(args.remote_socket).resolve() if args.remote_socket else None
+                ),
+            )
+        except (
+            FileExistsError,
+            FileNotFoundError,
+            ImportError,
+            RuntimeError,
+            ValueError,
+        ) as error:
+            raise SystemExit(f"fixed-proposal control failed: {error}") from error
+        _write_json(report, output_path)
+        return 0
+    if args.command == "phase4-fixed-control-validate":
+        from specrhythm.phase4.correctness_validation import (
+            validate_fixed_control_matrix,
+        )
+
+        try:
+            report = validate_fixed_control_matrix(
+                local_run_paths=[Path(path).resolve() for path in args.local_run],
+                remote_run_paths=[Path(path).resolve() for path in args.remote_run],
+                local_diagnostic_paths=[
+                    Path(path).resolve() for path in args.local_diagnostics
+                ],
+                remote_diagnostic_paths=[
+                    Path(path).resolve() for path in args.remote_diagnostics
+                ],
+            )
+        except (FileNotFoundError, json.JSONDecodeError, RuntimeError, ValueError) as error:
+            report = {
+                "schema_version": "specrhythm.phase4-fixed-control-matrix.v1",
+                "valid": False,
+                "errors": [str(error)],
+            }
+        _write_json(report, args.output)
+        return 0 if report["valid"] else 1
+    if args.command == "phase4-divergence-diagnose":
+        from specrhythm.phase4.correctness_validation import (
+            diagnose_first_divergence,
+        )
+
+        try:
+            report = diagnose_first_divergence(
+                stock_diagnostics_path=Path(args.stock_diagnostics).resolve(),
+                serial_diagnostics_path=Path(args.serial_diagnostics).resolve(),
+                serial_run_path=Path(args.serial_run).resolve(),
+            )
+        except (FileNotFoundError, json.JSONDecodeError, RuntimeError, ValueError) as error:
+            report = {
+                "schema_version": "specrhythm.phase4-first-divergence.v1",
+                "valid": False,
+                "errors": [str(error)],
+            }
+        _write_json(report, args.output)
+        return 0 if report["valid"] else 1
     if args.command == "gpu-probe":
         from specrhythm.phase3.probe import probe_gpu_environment
 

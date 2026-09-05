@@ -1,0 +1,589 @@
+"""Immutable stock-vLLM serving-correctness references for Phase 4."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+from pathlib import Path
+from typing import Any, Mapping, Optional, Sequence
+
+from specrhythm.phase4.batch_invariant import (
+    normalize_correctness_mode,
+    require_matching_reference_mode,
+)
+from specrhythm.phase4.config import VLLM_COMMIT, VLLM_VERSION, Phase4Config
+from specrhythm.phase4.manifest import model_revision_manifest, sha256_file
+from specrhythm.phase4.stock_vllm import run_stock_smoke
+from specrhythm.phase4.transport import payload_sha256
+from specrhythm.phase4.vllm_installation import locate_installed_vllm_file
+
+REFERENCE_SCHEMA = "specrhythm.phase4-stock-target-reference.v1"
+VLLM_RUNNER_RELATIVE_PATH = Path("vllm/v1/worker/gpu_model_runner.py")
+STOCK_VLLM_RUNNER_SHA256 = (
+    "6c92ded8468f44d6df863a617ce588f132fa6df7031feecc0cc421702a41610e"
+)
+
+
+def output_token_hash(token_ids: Sequence[int]) -> str:
+    payload = json.dumps(list(token_ids), separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _exclusive_freeze(path: Path, value: Mapping[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    descriptor = os.open(path, flags, 0o444)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(json.dumps(value, indent=2, sort_keys=True).encode("utf-8"))
+            handle.write(b"\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+    except Exception:
+        path.unlink(missing_ok=True)
+        raise
+
+
+def build_stock_reference(
+    smoke: Mapping[str, Any],
+    config: Phase4Config,
+    *,
+    workload_path: Path,
+    git_commit: str,
+    installed_runner_sha256: str = STOCK_VLLM_RUNNER_SHA256,
+) -> dict[str, Any]:
+    workload_rows = _load_jsonl(workload_path)
+    runs = smoke.get("runs")
+    if not isinstance(runs, list) or len(runs) != 2:
+        raise ValueError("stock reference requires exactly two target-only runs")
+    first, second = runs
+    if not isinstance(first, list) or not isinstance(second, list):
+        raise ValueError("stock target-only run output is invalid")
+    if len(first) != len(second) or len(first) != len(workload_rows):
+        raise ValueError("stock runs and frozen workload have different request counts")
+    if smoke.get("role") != "target" or smoke.get("repeated_run_deterministic") is not True:
+        raise ValueError("stock target-only reference is not deterministic")
+    outputs = []
+    for one, two, workload_row in zip(first, second, workload_rows):
+        if one.get("request_id") != two.get("request_id"):
+            raise ValueError("stock repeated runs have different request order")
+        if one.get("request_id") != workload_row.get("request_id"):
+            raise ValueError("stock output order does not match the frozen workload")
+        tokens = list(one.get("generated_token_ids", ()))
+        if tokens != list(two.get("generated_token_ids", ())):
+            raise ValueError("stock repeated runs have different token IDs")
+        if one.get("finish_reason") != two.get("finish_reason") or one.get(
+            "stop_reason"
+        ) != two.get("stop_reason"):
+            raise ValueError("stock repeated runs have different termination")
+        outputs.append(
+            {
+                "request_id": one["request_id"],
+                "generated_token_ids": tokens,
+                "generated_tokens": len(tokens),
+                "finish_reason": one.get("finish_reason"),
+                "stop_reason": one.get("stop_reason"),
+                "eos_reached": one.get("finish_reason") == "stop",
+                "output_sha256": output_token_hash(tokens),
+                "top_logprobs": one.get("top_logprobs", []),
+            }
+        )
+    correctness_mode = normalize_correctness_mode(
+        str(smoke.get("correctness_mode", "default"))
+    )
+    batch_validation = smoke.get("batch_invariant_validation")
+    if correctness_mode == "batch-invariant" and (
+        smoke.get("batch_invariant_effective") is not True
+        or not isinstance(batch_validation, Mapping)
+        or batch_validation.get("valid") is not True
+    ):
+        raise ValueError("stock reference cannot freeze unproven batch-invariant mode")
+    value: dict[str, Any] = {
+        "schema_version": REFERENCE_SCHEMA,
+        "serving_correctness_reference": "stock-vllm-target-only",
+        "created_before_serial": True,
+        "immutable": True,
+        "gpu_correctness_result": True,
+        "gpu_performance_result": False,
+        "reports_goodput": False,
+        "reports_slo_attainment": False,
+        "reports_speedup": False,
+        "vllm": {
+            "version": config.expected_vllm_version,
+            "source_commit": config.expected_vllm_commit,
+            "patched": False,
+            "model_runner": config.target_model_runner,
+            "gpu_model_runner_sha256": installed_runner_sha256,
+        },
+        "specrhythm_commit": git_commit,
+        "model": model_revision_manifest(
+            config.target.resolved_model_path, config.target.revision
+        ),
+        "tokenizer": model_revision_manifest(
+            config.target.resolved_tokenizer_path, config.target.tokenizer_revision
+        ),
+        "workload": {
+            "file": workload_path.name,
+            "sha256": sha256_file(workload_path),
+            "request_ids": [row["request_id"] for row in outputs],
+            "prompt_token_ids": [
+                list(row.get("prompt_token_ids", ())) for row in workload_rows
+            ],
+            "requests": [
+                {
+                    "request_id": row["request_id"],
+                    "prompt_token_ids": list(row.get("prompt_token_ids", ())),
+                    "maximum_new_tokens": int(row["maximum_new_tokens"]),
+                    "sampling_seed": int(row["sampling_seed"]),
+                }
+                for row in workload_rows
+            ],
+        },
+        "sampling_configuration": smoke.get("sampling"),
+        "target_runtime_configuration": {
+            "correctness_mode": correctness_mode,
+            "VLLM_BATCH_INVARIANT": (
+                "1" if correctness_mode == "batch-invariant" else "0"
+            ),
+            "batch_invariant_requested": correctness_mode == "batch-invariant",
+            "batch_invariant_effective": smoke.get(
+                "batch_invariant_effective", False
+            ),
+            "batch_invariant_validation": batch_validation,
+            "physical_gpu_ids": list(config.target.physical_gpu_ids),
+            "tensor_parallel_size": config.target.tensor_parallel_size,
+            "dtype": config.target.dtype,
+            "max_model_len": config.max_model_len,
+            "enforce_eager": config.enforce_eager,
+            "enable_prefix_caching": config.enable_prefix_caching,
+            "vllm_dbo_enabled": False,
+            "built_in_speculative_decoding": False,
+            "enable_thinking": config.enable_thinking,
+            "worker_ranks": smoke.get("worker_ranks"),
+            "attention_backends": sorted(
+                {
+                    str(backend)
+                    for row in smoke.get("worker_ranks", ())
+                    if isinstance(row, Mapping)
+                    for backend in row.get("attention_backends", ())
+                }
+            ),
+            "all_reduce_backends": sorted(
+                {
+                    str(backend)
+                    for row in smoke.get("worker_ranks", ())
+                    if isinstance(row, Mapping)
+                    for backend in row.get("all_reduce_backends", ())
+                }
+            ),
+        },
+        "outputs": outputs,
+        "repeated_run_determinism": True,
+        "legacy_hf_trajectory": {
+            "role": "provenance-and-divergence-diagnosis-only",
+            "comparison": smoke.get("frozen_hf_target_comparison"),
+            "can_fail_serving_correctness": False,
+        },
+        "artifact_sha256_definition": (
+            "sha256 of canonical JSON payload before artifact_sha256 is inserted"
+        ),
+    }
+    value["artifact_sha256"] = payload_sha256(value)
+    return value
+
+
+def freeze_stock_reference(
+    output_path: Path,
+    config: Phase4Config,
+    *,
+    workload_path: Path,
+    environment_path: Path,
+    topology_path: Path,
+    runtime_manifest_path: Path,
+    git_commit: str,
+    legacy_hf_target_dir: Optional[Path] = None,
+    correctness_mode: str = "default",
+    diagnostics_path: Optional[Path] = None,
+    request_count: Optional[int] = None,
+) -> dict[str, Any]:
+    if output_path.exists():
+        raise FileExistsError("stock target reference already exists and is immutable")
+    if config.target_model_runner == "v1" and os.environ.get("VLLM_USE_V2_MODEL_RUNNER") != "0":
+        raise RuntimeError(
+            "Phase 4A.1 stock reference requires VLLM_USE_V2_MODEL_RUNNER=0"
+        )
+    installed_runner_sha256 = require_stock_vllm_runner()
+    smoke = run_stock_smoke(
+        config,
+        role="target",
+        workload_path=workload_path,
+        environment_path=environment_path,
+        topology_path=topology_path,
+        runtime_manifest_path=runtime_manifest_path,
+        git_commit=git_commit,
+        frozen_target_dir=legacy_hf_target_dir,
+        correctness_mode=correctness_mode,
+        diagnostics_path=diagnostics_path,
+        request_count=request_count,
+    )
+    reference = build_stock_reference(
+        smoke,
+        config,
+        workload_path=workload_path,
+        git_commit=git_commit,
+        installed_runner_sha256=installed_runner_sha256,
+    )
+    _exclusive_freeze(output_path, reference)
+    return reference
+
+
+def validate_stock_reference(value: Mapping[str, Any]) -> list[str]:
+    errors = []
+    if value.get("schema_version") != REFERENCE_SCHEMA:
+        errors.append("unsupported stock target reference schema")
+    if value.get("serving_correctness_reference") != "stock-vllm-target-only":
+        errors.append("serving correctness reference is not stock vLLM Target-only")
+    vllm = value.get("vllm")
+    if (
+        not isinstance(vllm, Mapping)
+        or vllm.get("version") != VLLM_VERSION
+        or vllm.get("source_commit") != VLLM_COMMIT
+        or vllm.get("patched") is not False
+        or vllm.get("gpu_model_runner_sha256") != STOCK_VLLM_RUNNER_SHA256
+    ):
+        errors.append("stock reference does not prove an unmodified pinned vLLM runner")
+    if not value.get("specrhythm_commit"):
+        errors.append("stock reference SpecRhythm commit is missing")
+    for key in ("model", "tokenizer", "sampling_configuration", "target_runtime_configuration"):
+        if not isinstance(value.get(key), Mapping):
+            errors.append(f"stock reference {key} is missing")
+    runtime = value.get("target_runtime_configuration")
+    if isinstance(runtime, Mapping):
+        try:
+            mode = normalize_correctness_mode(
+                str(runtime.get("correctness_mode", "default"))
+            )
+        except ValueError as error:
+            errors.append(str(error))
+            mode = "default"
+        if mode == "batch-invariant":
+            validation = runtime.get("batch_invariant_validation")
+            if runtime.get("batch_invariant_effective") is not True:
+                errors.append("batch-invariant stock reference is not proven effective")
+            if not isinstance(validation, Mapping) or validation.get("valid") is not True:
+                errors.append("batch-invariant stock reference validation is missing")
+            ranks = runtime.get("worker_ranks")
+            if not isinstance(ranks, list) or len(ranks) != 2:
+                errors.append("batch-invariant stock reference TP-rank evidence is missing")
+            if not runtime.get("attention_backends"):
+                errors.append("batch-invariant stock reference attention backend is missing")
+            elif not any(
+                "FLASH" in str(backend).upper()
+                for backend in runtime.get("attention_backends", ())
+            ):
+                errors.append("batch-invariant stock reference did not use FlashAttention")
+            if not runtime.get("all_reduce_backends"):
+                errors.append("batch-invariant stock reference all-reduce backend is missing")
+    if value.get("created_before_serial") is not True or value.get("immutable") is not True:
+        errors.append("stock target reference is not frozen before Serial")
+    if value.get("repeated_run_determinism") is not True:
+        errors.append("stock target repeated run was not deterministic")
+    expected = value.get("artifact_sha256")
+    payload = dict(value)
+    payload.pop("artifact_sha256", None)
+    if expected != payload_sha256(payload):
+        errors.append("stock target reference canonical payload checksum mismatch")
+    outputs = value.get("outputs")
+    if not isinstance(outputs, list) or not outputs:
+        errors.append("stock target reference outputs are missing")
+        outputs = []
+    request_ids = set()
+    for row in outputs:
+        if not isinstance(row, Mapping) or not row.get("request_id"):
+            errors.append("stock target reference contains an invalid request")
+            continue
+        request_ids.add(row["request_id"])
+        tokens = row.get("generated_token_ids")
+        if not isinstance(tokens, list) or not tokens:
+            errors.append("stock target reference output token IDs are missing")
+        elif row.get("output_sha256") != output_token_hash(tokens):
+            errors.append("stock target reference output checksum mismatch")
+    if len(request_ids) != len(outputs):
+        errors.append("stock target reference request IDs are not unique")
+    workload = value.get("workload")
+    requests = workload.get("requests") if isinstance(workload, Mapping) else None
+    if not isinstance(requests, list) or len(requests) != len(outputs):
+        errors.append("stock target reference frozen request inputs are incomplete")
+    elif [row.get("request_id") for row in requests] != [
+        row.get("request_id") for row in outputs
+    ]:
+        errors.append("stock target reference input/output request order differs")
+    elif any(
+        not isinstance(row.get("prompt_token_ids"), list)
+        or not row["prompt_token_ids"]
+        or not isinstance(row.get("maximum_new_tokens"), int)
+        or row["maximum_new_tokens"] < 1
+        or not isinstance(row.get("sampling_seed"), int)
+        for row in requests
+    ):
+        errors.append("stock target reference frozen request fields are invalid")
+    legacy = value.get("legacy_hf_trajectory")
+    if not isinstance(legacy, Mapping) or legacy.get("can_fail_serving_correctness") is not False:
+        errors.append("legacy HF trajectory is not explicitly advisory")
+    return errors
+
+
+def require_stock_vllm_runner() -> str:
+    """Verify the stock runner without importing vLLM before mode setup."""
+
+    runner_path = locate_installed_vllm_file(VLLM_RUNNER_RELATIVE_PATH)
+    actual = sha256_file(runner_path)
+    if actual != STOCK_VLLM_RUNNER_SHA256:
+        raise RuntimeError(
+            "stock reference requires the unmodified pinned gpu_model_runner.py; "
+            f"found SHA256 {actual}"
+        )
+    return actual
+
+
+def compare_outputs_to_reference(
+    outputs: Sequence[Mapping[str, Any]], reference: Mapping[str, Any]
+) -> dict[str, Any]:
+    reference_errors = validate_stock_reference(reference)
+    expected = {
+        str(row["request_id"]): row
+        for row in reference.get("outputs", ())
+        if isinstance(row, Mapping) and row.get("request_id")
+    }
+    comparisons = []
+    all_equal = not reference_errors
+    for output in outputs:
+        request_id = str(output.get("request_id", ""))
+        row = expected.get(request_id)
+        actual = list(output.get("generated_token_ids", ()))
+        wanted = list(row.get("generated_token_ids", ())) if row else []
+        common = min(len(actual), len(wanted))
+        divergence = next(
+            (index for index in range(common) if actual[index] != wanted[index]), None
+        )
+        if divergence is None and len(actual) != len(wanted):
+            divergence = common
+        termination_equal = (
+            bool(row)
+            and output.get("finish_reason") == row.get("finish_reason")
+            and output.get("stop_reason") == row.get("stop_reason")
+        )
+        equal = divergence is None and termination_equal
+        all_equal = all_equal and equal
+        comparisons.append(
+            {
+                "request_id": request_id,
+                "equal": equal,
+                "first_divergence_position": divergence,
+                "stock_token_id": (
+                    wanted[divergence]
+                    if divergence is not None and divergence < len(wanted)
+                    else None
+                ),
+                "actual_token_id": (
+                    actual[divergence]
+                    if divergence is not None and divergence < len(actual)
+                    else None
+                ),
+                "termination_equal": termination_equal,
+                "actual_topk_at_divergence": (
+                    output.get("top_logprobs", [])[divergence]
+                    if divergence is not None and divergence < len(output.get("top_logprobs", []))
+                    else None
+                ),
+            }
+        )
+    if set(expected) != {str(row.get("request_id", "")) for row in outputs}:
+        all_equal = False
+    return {
+        "serving_correctness_reference": "stock-vllm-target-only",
+        "all_sequences_equal": all_equal,
+        "reference_errors": reference_errors,
+        "requests": comparisons,
+    }
+
+
+def require_reference_for_mode(reference: Mapping[str, Any], mode: str) -> None:
+    """Reject accidental A/B reference reuse in a fresh C/D experiment."""
+
+    require_matching_reference_mode(reference, mode)
+
+
+def require_exact_resident_reference_reuse(
+    reference: Mapping[str, Any], config: Phase4Config, workload_path: Path
+) -> None:
+    """Allow an older stock reference only when every semantic input matches.
+
+    The SpecRhythm commit that orchestrates a consumer may differ because the
+    reference was intentionally frozen before applying integration patches.
+    Model/tokenizer metadata, workload, sampling, pinned stock vLLM, placement,
+    and correctness mode may not differ.
+    """
+
+    errors = []
+    vllm = reference.get("vllm")
+    if not isinstance(vllm, Mapping) or (
+        vllm.get("version") != config.expected_vllm_version
+        or vllm.get("source_commit") != config.expected_vllm_commit
+        or vllm.get("patched") is not False
+        or vllm.get("gpu_model_runner_sha256") != STOCK_VLLM_RUNNER_SHA256
+    ):
+        errors.append("stock vLLM identity differs")
+    if reference.get("model") != model_revision_manifest(
+        config.target.resolved_model_path, config.target.revision
+    ):
+        errors.append("Target model metadata differs")
+    if reference.get("tokenizer") != model_revision_manifest(
+        config.target.resolved_tokenizer_path, config.target.tokenizer_revision
+    ):
+        errors.append("Target tokenizer metadata differs")
+    workload = reference.get("workload")
+    if not isinstance(workload, Mapping) or workload.get("sha256") != sha256_file(
+        workload_path
+    ):
+        errors.append("frozen workload checksum differs")
+    if reference.get("sampling_configuration") != config.sampling.to_dict():
+        errors.append("sampling configuration differs")
+    runtime = reference.get("target_runtime_configuration")
+    expected_runtime = {
+        "physical_gpu_ids": list(config.target.physical_gpu_ids),
+        "tensor_parallel_size": config.target.tensor_parallel_size,
+        "dtype": config.target.dtype,
+        "max_model_len": config.max_model_len,
+        "enforce_eager": config.enforce_eager,
+        "enable_prefix_caching": config.enable_prefix_caching,
+        "vllm_dbo_enabled": False,
+        "built_in_speculative_decoding": False,
+        "enable_thinking": config.enable_thinking,
+    }
+    if not isinstance(runtime, Mapping) or any(
+        runtime.get(key) != value for key, value in expected_runtime.items()
+    ):
+        errors.append("Target runtime configuration differs")
+    if errors:
+        raise ValueError("stock reference cannot be reused: " + "; ".join(errors))
+
+
+def build_target_regression(
+    smoke: Mapping[str, Any], reference: Mapping[str, Any], *, patch_manifest: Mapping[str, Any]
+) -> dict[str, Any]:
+    runs = smoke.get("runs", ())
+    outputs = runs[0] if isinstance(runs, list) and runs else []
+    comparison = compare_outputs_to_reference(outputs, reference)
+    return {
+        "schema_version": "specrhythm.phase4-patched-target-regression.v1",
+        "patched_target_only": True,
+        "speculative_decoding_enabled": False,
+        "comparison": comparison,
+        "repeated_run_deterministic": smoke.get("repeated_run_deterministic") is True,
+        "valid": comparison["all_sequences_equal"]
+        and smoke.get("repeated_run_deterministic") is True,
+        "patch_manifest_sha256": payload_sha256(patch_manifest),
+        "gpu_correctness_result": True,
+        "gpu_performance_result": False,
+        "reports_goodput": False,
+        "reports_slo_attainment": False,
+        "reports_speedup": False,
+        "smoke": smoke,
+    }
+
+
+def load_reference(path: Path) -> dict[str, Any]:
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise ValueError("stock target reference root must be an object")
+    errors = validate_stock_reference(value)
+    if errors:
+        raise ValueError("invalid stock target reference: " + "; ".join(errors))
+    return value
+
+
+def reference_file_evidence(path: Path) -> dict[str, Any]:
+    return {
+        "file": path.name,
+        "file_sha256": sha256_file(path),
+        "writable": os.access(path, os.W_OK),
+    }
+
+
+def reuse_immutable_stock_reference(
+    source_path: Path,
+    destination_path: Path,
+    provenance_path: Path,
+    *,
+    workload_path: Path,
+    recovery_git_commit: str,
+) -> dict[str, Any]:
+    """Copy one proven stock pair without measuring or silently re-rolling it."""
+
+    source = source_path.resolve()
+    destination = destination_path.resolve()
+    provenance = provenance_path.resolve()
+    reference = load_reference(source)
+    workload = reference.get("workload")
+    workload_sha256 = sha256_file(workload_path)
+    if not isinstance(workload, Mapping) or workload.get("sha256") != workload_sha256:
+        raise ValueError("stock reference reuse workload checksum differs")
+    if destination.exists() or provenance.exists():
+        raise FileExistsError("stock reference reuse destination already exists")
+    source_sha256 = sha256_file(source)
+    _exclusive_copy(source, destination)
+    destination_sha256 = sha256_file(destination)
+    if destination_sha256 != source_sha256:
+        raise RuntimeError("reused stock reference bytes differ from their source")
+    payload = {
+        "schema_version": "specrhythm.phase4-stock-reference-reuse.v1",
+        "reuse_only": True,
+        "stock_pair_remeasured": False,
+        "source_reference_path": str(source),
+        "source_reference_file": source.name,
+        "source_reference_sha256": source_sha256,
+        "destination_reference_file": destination.name,
+        "destination_reference_sha256": destination_sha256,
+        "reference_artifact_sha256": reference.get("artifact_sha256"),
+        "reference_specrhythm_commit": reference.get("specrhythm_commit"),
+        "recovery_specrhythm_commit": str(recovery_git_commit),
+        "workload_file": workload_path.name,
+        "workload_sha256": workload_sha256,
+        "semantic_contract": (
+            "same frozen workload/model/tokenizer/sampling/stock-vLLM/runtime; "
+            "consumer integration commit may differ"
+        ),
+    }
+    payload["artifact_sha256"] = payload_sha256(payload)
+    _exclusive_freeze(provenance, payload)
+    return payload
+
+
+def _exclusive_copy(source: Path, destination: Path) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    descriptor = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o444)
+    try:
+        with source.open("rb") as input_handle, os.fdopen(
+            descriptor, "wb"
+        ) as output_handle:
+            for chunk in iter(lambda: input_handle.read(1024 * 1024), b""):
+                output_handle.write(chunk)
+            output_handle.flush()
+            os.fsync(output_handle.fileno())
+    except Exception:
+        destination.unlink(missing_ok=True)
+        raise
+
+
+def _load_jsonl(path: Path) -> list[dict[str, Any]]:
+    rows = []
+    with path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            if line.strip():
+                value = json.loads(line)
+                if not isinstance(value, dict):
+                    raise ValueError("workload JSONL row must be an object")
+                rows.append(value)
+    return rows

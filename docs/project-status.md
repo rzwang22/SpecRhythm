@@ -1,6 +1,6 @@
 # SpecRhythm project status
 
-Last updated: 2026-08-15
+Last updated: 2026-09-05
 
 Maintenance rule: every code-changing PR updates this file with its scope, status, evidence,
 known limitations, and next gate before that PR is considered complete.
@@ -34,6 +34,301 @@ claims.
 | [#1 workload-v0.1](https://github.com/rzwang22/SpecRhythm/pull/1) | merged | strict Mooncake replay, R3 proxy config, validator, manifest, fixture tests and docs | workload plumbing only; proxy payload and illustrative acceptance |
 | [#2 simulator-semantics-v0.2](https://github.com/rzwang22/SpecRhythm/pull/2) | frozen draft; Phase 2 complete, not merged | proposal lifecycle, deterministic tree oracle, tree-aware allocators, base-preserving residual controls, Phase-2 nested search pools and common-snapshot oracle replay, path-aware eager and accounting | pure-Python proxy and oracle upper bounds only; no deployable oracle, measured search cost, GPU integration, or performance claim |
 | [#3 gpu-integration-v0.1](https://github.com/rzwang22/SpecRhythm/pull/3) | draft; Phase 3B.1 and corrected-20 Phase 3C.2 complete; Phase 3C.3 corrected-100 awaiting server run | hardened multi-rank primitives, corrected R3-real traces, common-prefix replay, request-bootstrap statistics, 2x shell decomposition and diagnostic learned ranker | user-run 3×A800 correctness artifacts plus Mac CPU tests; no packed-tree/serving engine, Dual-Batch, SLO, calibrated latency or speedup claim |
+| [#4 vllm-serving-v0.1](https://github.com/rzwang22/SpecRhythm/pull/4) | draft; Gate1/Gate2 Outcome A; Gate3 numerical qualification complete; Phase 4B.2 infrastructure implemented, A800 run pending | resident Target/Serial/Dual correctness, frozen Gate3 localization, post-setup performance boundary, exact commit accounting and cross-mode metric gate | no GPU performance result yet; no tolerance, packed tree, eager, KVConnector, SLO or goodput claim |
+
+## Phase 4A.0–4A.1: vLLM freeze and Serial Disaggregated correctness
+
+Phase 4 is stacked on the exact frozen PR #3 head
+`34c7ea9836c2595c8a8aeaeb5680709520edd3d8` and does not modify Phase 3 algorithms or results.
+The serving integration freezes vLLM `v0.25.1` at commit
+`752a3a504485790a2e8491cacbb35c137339ad34` in a separate Python 3.11/PyTorch 2.11.0 environment;
+vLLM is not a dependency of the Python 3.9 simulator package.
+
+Phase 4A.0 brings up Qwen3-0.6B TP=1 on physical GPU 0 and Qwen3-32B TP=2 on physical GPUs
+1–2 as separate stock V1 offline engines. It validates exact source/install provenance, physical
+placement, every TP rank's local parameters and memory, selected attention backend, repeated
+greedy output and token-level comparison with the frozen HF trajectory on five corrected R3-real
+requests. Startup/prefill/decode/wall timestamps are recorded only for bring-up observability.
+
+The Phase 4A.0 adapters freeze future candidate/verification/request-state semantics without
+importing simulator policies or proxy latency. vLLM built-in colocated speculative decoding is
+not `serial-disaggregated` or SpecRhythm `dual-batch`; vLLM DBO is an intra-model-executor
+microbatch overlap and is explicitly disabled. No GPU experiment was run by the Mac coding agent.
+Phase 4A.1 changes the serving correctness reference to immutable stock vLLM Target-only greedy
+output. The Phase 3 HF trajectory remains advisory provenance only. Before any patch is applied,
+the reference command runs the same five corrected R3-real requests twice, verifies token and
+termination determinism, records model/tokenizer/runtime pins, and freezes
+`stock-target-reference.json` without overwrite. Patched Target-only and two independent Serial
+runs must match this reference exactly.
+
+The Serial path uses one persistent Qwen3-0.6B Draft process on GPU 0 with per-request mutable KV,
+and the stock vLLM speculative scheduler, batched Target verification, rejection sampler and KV
+accounting on Target TP=2. A local Unix-domain-socket custom proposer carries only committed-token
+deltas and proposals. The fixed vLLM custom proposer API lacks request identity and exact verify
+boundaries, so one zero-fuzz Python patch adds those observer hooks to
+`gpu_model_runner.py`. It changes no scheduler/sampler/KV/attention/C++/CUDA code and is inactive
+for Target-only generation. Exact base, patch and installed-file hashes are validated.
+
+Every round proves Draft → transfer → Target verify → state sync → next Draft ordering. Draft KV
+is cropped after rejection and appends the Target correction/bonus; full-context replay per round
+is forbidden. Proposal, accepted/rejected, correction/bonus, bootstrap/tail and final output
+accounting are checked independently. The Mac agent ran CPU tests and applied/restored the patch
+against the exact vLLM source but did not run CUDA or produce GPU results.
+
+The user-run default-mode A/B gate completed most lifecycle checks, but one of five Serial
+sequences diverged from stock Target-only at generated position 1 after an exact BF16
+log-probability tie changed under speculative batch expansion. Exact correctness therefore has
+not passed. Phase 4A.1.1 adds a symmetric C/D batch-invariant mode, per-rank effective-mode
+evidence, actual proposal/logits/position mappings, rejected-KV rollback validation, and
+single-request local/remote fixed-proposal controls. Existing A/B artifacts remain immutable
+default-mode provenance.
+
+At the exact pinned vLLM commit, the batch-invariance documentation and FlashAttention backend
+set the minimum NVIDIA compute capability to 8.0. A800 therefore passes the hardware preflight,
+but that preflight intentionally leaves `batch_invariant_effective=false`. The first C attempt on
+`a7fe058d` stopped before engine creation because stock runner verification imported vLLM before
+mode configuration; the runner verifier now uses package metadata without importing vLLM. The
+subsequent C1/C2/D1/D2 artifacts and corrected immutable-artifact validator completed with
+`outcome=A`, `valid=true`, exact Target-only repeats, exact Serial repeats, D==C, valid
+diagnostics, and identical semantics for all 24 keyed rounds. Their raw cross-request event order
+differs, which is scheduler interleaving rather than a semantic change. This Phase 4A.1.1
+conclusion is frozen and is not reinterpreted by Phase 4B. See
+[phase4-vllm-integration.md](phase4-vllm-integration.md),
+[phase4-vllm-source-audit.md](phase4-vllm-source-audit.md), and
+[phase4-vllm-server-runbook.md](phase4-vllm-server-runbook.md).
+
+## Phase 4B.0–4B.1: Dual-Batch contracts and GPU correctness readiness
+
+Phase 4B adds a linear, non-eager serving control plane without changing vLLM rejection,
+attention, paged-KV, model, TP or default scheduling semantics. The user's A800 artifact at
+`96842c8a1e6ffd70c5c1321eecd7384ad74cf542` proved stable/internal identity mapping, but it also
+proved two failures: the cadence-based readiness workaround allowed an unproposed Target decode,
+and the shell wrapper did not prove that EngineCore/TP descendants had exited. That artifact is
+integration-failure provenance, not a GPU correctness result.
+
+Phase 4B.0a replaces cadence mutation with an explicit request-level predicate in independent
+patch `0002`. Waiting/Drafting decode is forbidden; a matching prefix-version/hash/round proposal
+or legal Target tail is allowed; setup prefill is separate. A blocked request consumes no stock
+token/KV budget and does not prevent later work. Scheduler artifacts record the decision for every
+request/cycle. Target launch now owns one session/PGID, propagates the coordinator exit code,
+records descendants and TERM/KILL actions, verifies Draft/socket cleanup, and blocks the next run
+after invalid cleanup.
+
+Phase 4B.0b establishes `DecodeReadyProvider -> DecodeReadyManifest -> consumer` and implements
+only `ResidentWarmStartProvider`. Untimed real-KV setup performs Target prompt prefill plus exactly
+one bootstrap, then initializes Draft through the same committed prefix. Manifest validation and
+a TP barrier precede `measurement_start_ns`; initial proposal generation is forbidden before it.
+The first Target forward must consume `[bootstrap]` for Target-only or
+`[bootstrap]+proposal` for Serial at exact contiguous positions. A third observer patch records
+actual forward boundaries and inputs.
+
+Phase 4 main evaluation is decode-only. Resident warm start is real-KV decode-stage isolation,
+not an end-to-end PD deployment. KVConnector handoff remains a future provider and is not
+implemented. CPU contract tests pass locally; the coding agent has not run CUDA.
+
+The real-A800 Gate A.1/A.2/A.3 run passed. Gate B then proved that pinned vLLM may legally deliver
+only one frozen request in an initial proposer callback; both resident proposers incorrectly
+required the whole workload in that callback. The failed `d6c7aa8` directory is preserved.
+
+The corrected contract accumulates immutable stable-ID observations across callbacks. A dedicated
+EngineCore scheduler admits prompt/bootstrap work, freezes requests after their first output token,
+and releases them only after full-set validation, one TP barrier, manifest creation, measurement
+start, and atomic setup-ready publication. The real-A800 `98ec816` run reached the second
+incremental request and `_complete_global_setup`, proving the earlier whole-batch assumption was
+removed, but failed because the JSON-compatible observation list was reconstructed without tuple
+normalization. `ResidentSetupObservation.to_dict/from_dict` is now the only serialized boundary;
+Target and Serial both use it and reject malformed token types. The resulting L2 Target run passed
+on A800 and is preserved read-only.
+
+The resident Serial attempt at `5db8657` is diagnostic-only because Draft was accidentally
+started twice and its live PID provenance was overwritten. Its manifest/proposal hashes and
+timing/admission logs nevertheless showed correct round-zero publication and first scheduling,
+followed by an erroneous second installation pass after the live prefix advanced. Resident Serial
+now owns each initial proposal through `published -> installed -> consumed`, uses pinned vLLM's
+`scheduled_spec_decode_tokens` as consumption evidence, preserves detailed fail-closed diagnostics,
+and leaves consumed requests exclusively to normal proposer rounds. The subsequent real-A800
+resident Target/Serial reruns passed; Phase 4B.0 correctness infrastructure is frozen and is not
+reinterpreted by the new Dual path.
+
+GPU 0 runs one persistent Draft service. Heavy Draft model work is serialized on its background
+worker queue; Unix-socket calls only enqueue work or poll completed proposals. The Target
+scheduler on GPUs 1–2 injects only ready proposals and delegates actual scheduling to the stock
+vLLM scheduler. Every proposal carries a canonical ID, round, prefix version/count/SHA256, Draft
+KV lengths and token list. A mismatch fails before verification; one request cannot own two
+proposals or be drafted through an unverified prefix.
+
+Phase 4B.1 now starts Dual from the same logical decode-ready state. Draft initialization produces
+no proposal; rank-zero manifest validation and the Target TP barrier precede measurement; first
+proposals are asynchronous and post-boundary. The scheduler emits per-request decisions and a
+separate proposal lifecycle, while the unified validator compares Target, Serial and one or more
+Dual runs exactly, checks keyed repeats and all logical invariants, and proves that it did not
+mutate its inputs. Local CPU tests pass. A complete two-request run at `3ee1c3e` passed Target,
+Serial, both Dual executions, controlled Cases A/B/C, the exact output triangle, keyed
+repeatability and all underlying semantic components. Read-only replay resolved the remaining
+instrumentation issues. A legal Target tail may retain historical proposal metadata only when a
+prior `CONSUMED` lifecycle event proves there is no live proposal; Draft readiness and the ordered
+one-token terminal transitions remain mandatory. Dual-1 contains a real 57.989848 ms
+cross-request temporal overlap; Dual-2 intentionally has none under two-ready coordination. The
+historical per-verify rows alias both TP ranks to GPU1 because they used process rank/device zero,
+while authoritative worker snapshots already prove Target placement on GPUs 1 and 2. Current
+instrumentation uses the actual active CUDA device and cross-validates rank, physical GPU and UUID.
+The preserved result remains a correctness artifact only and carries no performance claim. See
+[phase4b-decode-ready.md](phase4b-decode-ready.md) and
+[phase4b-dual-batch.md](phase4b-dual-batch.md). The active server procedure is
+[phase4b1-dual-correctness-runbook.md](phase4b1-dual-correctness-runbook.md).
+
+The first Gate-1-only preparation at `b9a0d6d` froze a deterministic controlled-2 stock reference
+and applied all three pinned patches to their exact final hashes, then stopped before any serving
+run because its helper incorrectly reused the stock-only checker for the patched installation.
+This was not a Dual correctness failure. Patch-state validation now has mutually exclusive exact
+`stock` and `patched` modes, immutable success/failure manifests, and explicit helper calls. A
+fresh Gate-1-only A800 rerun is required; the earlier root remains immutable provenance.
+
+That rerun at `7e4f871` validated both explicit state checks on A800 and completed resident Target.
+Resident Serial then failed only when the common Target-forward observer accessed the Dual-only
+`proposal_id` attribute on the legacy Serial `Proposal`; its scheduler had already submitted both
+requests for speculative verification. Dual-1/Dual-2 did not run, so Gate1 remains not evaluated.
+The observer is now proposal-protocol-aware: it preserves a real canonical Dual ID and records
+`null` for Serial or no pending proposal. The Serial schema, execution semantics and all Dual
+scheduler/state/lifecycle logic remain unchanged.
+
+Gate semantics are now separated without weakening evidence. Gate1 is controlled two-request
+semantic correctness and reports per-run temporal/hardware-qualified overlap independently.
+Gate1.5/Gate2 keeps at least one hardware-qualified positive overlap mandatory on at least five
+requests through the unchanged asynchronous path. Default validation remains overlap-required;
+only controlled Gate1 opts into `separate-gate`. An explicit legacy read-only authority mode
+accepts only the exact `3ee1c3e` source, recomputes semantic plus runner-only invariants, and
+supersedes only structurally proven historical errors. The helper continues to preserve run and
+validator exit codes while always checking cleanup. Subsequent user-run A800 evidence established
+Outcome A for controlled Gate1 and default-asynchronous corrected-5 Gate2, including exact
+Target/Serial/Dual output equality, correct GPU1/GPU2 TP identity and hardware-qualified overlap
+in both Gate2 Dual runs. At that historical checkpoint, Gate3 recovery was the only authorized
+next GPU action and Phase 4B.2 remained blocked. The later numerical qualification and explicit
+human progression decision documented below supersede that project-level block without changing
+the immutable historical artifacts.
+
+The first corrected-100 Gate3 attempt at commit `eba0df4` completed preparation, froze its one
+allowed deterministic stock pair and applied the patch stack, then failed in resident Target
+setup before global readiness. With 100 requests, pinned vLLM enabled chunked prefill under the
+16,384-token budget and delivered one proposer callback containing requests at different setup
+stages. Target, Serial and Dual had all assumed every row contained exactly one bootstrap token;
+that assumption happened to hold for 2/5 requests. Serial and Dual were not run and Gate3 was not
+evaluated. The failed directory remains immutable infrastructure-failure provenance, not stock,
+Target-token, Serial, Dual or overlap failure evidence.
+
+All three resident consumers now use one dependency-free row classifier. The authoritative
+sampled-token row distinguishes bootstrap from no-bootstrap, while a minimal pinned worker hook
+supplies the actual post-forward materialized position count. Partial prefill never binds opaque
+identity or initializes Draft; full prompt without a sample remains pending; exactly one sampled
+bootstrap records/initializes once; more than one output before global readiness fails closed.
+Each wave is logged so an early-bootstrap request can be shown frozen while later requests keep
+prefilling. Exception cleanup now snapshots an owned Unix-socket inode, proves the Draft PID dead
+before removing the unchanged stale socket, and keeps the lifecycle guard on any live process,
+socket identity change or leaked Target descendant. The earlier deterministic stock-100 reference
+is reusable byte-for-byte because its stock/model/tokenizer/sampling/runtime/workload contract is
+unchanged; reuse records both file hashes and commits and does not measure another stock pair.
+
+The user-run `32b09a6` recovery proved that scale-safe setup and cleanup work for corrected-100:
+all bootstrap observations, global decode readiness, the first Target forward, measurement
+boundary and TP2 placement passed. Exact output compatibility still failed for four requests at
+generated positions 3, 4, 12 and 2; the other 96 were exact. In every divergence the immutable
+stock artifact has a `0.125` top-two log-probability margin while resident execution collapses the
+same token pair to equal values. This is not accepted as a harmless tie because the stock
+preference is nonzero.
+
+The first attempted pair at `c142fa7` failed in both stock TP workers before any numerical
+checkpoint because the observer incorrectly treated speculative-only common attention metadata
+as the generic block-table authority. Resident and comparator were not run. Its exact directory
+is immutable `diagnostic-infrastructure-failed` provenance. The generic observer at `e73e884`
+then completed exactly one stock-style and one resident corrected-100 run. Read-only comparison
+proved equal actual pre-divergence output history, computed-token boundaries, logical ownership,
+and current-token embeddings. Both TP ranks found request-dependent first-different KV layers
+4, 21, 24, and 56; earlier layers were exact and later layers differed. Raw logits already differ
+and each sampler follows its own argmax, excluding a sampler tie-breaking explanation.
+
+The e73 stock `InputBatch.token_ids_cpu` rows contain pinned-vLLM async `-1` placeholders, so that
+field is explicitly non-authoritative metadata. Semantic comparison uses complete run outputs
+against the immutable stock reference. The subsequent immutable 8773 per-logical-token run
+classified all four requests as `BOOTSTRAP`: every prompt K/V position is bitwise exact on both
+TP ranks, and the first difference is the bootstrap token at `prompt_length` in layers 4, 21, 24,
+and 56 respectively. The preceding control layers remain exact. The stock endpoint uses ordinary
+Target-only async scheduling; the resident endpoint disables async through custom-class resident
+execution. This is a causal hypothesis, not proof.
+
+The immutable matched-bootstrap control under commit `efea5c8` subsequently classified
+`ASYNC_OFF_MATCHES_STOCK`: ordinary stock Target with async scheduling disabled reproduced the
+stock async-ON K/V, raw logits and output for all four divergent requests, not the resident
+endpoint. Async scheduling is therefore ruled out as the root cause and no more async, layer,
+token-KV, mantissa, class-only, freeze-only or cohort-only micro-diagnostics are authorized. See
+[phase4b1-gate3-numerical-diagnostics.md](phase4b1-gate3-numerical-diagnostics.md) and
+[phase4b1-gate3-matched-bootstrap.md](phase4b1-gate3-matched-bootstrap.md).
+
+The explicit human engineering decision is now:
+
+- Gate3 structural, semantic-prefix, prompt-KV and logical-KV-ownership correctness: **PASS**.
+- Gate3 exact stock trajectory: **NOT ACHIEVED (96/100)**; no tolerance is introduced and the
+  four divergent tokens remain visible in immutable artifacts.
+- The residual classification is `cross-execution-regime bootstrap numerical divergence`.
+- Gate3 numerical qualification: **COMPLETE**; further micro-diagnostics: **DEFERRED**.
+- `gate3_exact_stock_equivalence=false` and `phase4b2_progression_permitted=true` coexist by
+  design. Historical artifacts retaining `phase4b2_blocked=true` are not rewritten.
+
+## Phase 4B.2: decode-only performance infrastructure
+
+Phase 4B.2 is a measurement layer around the existing resident Target, Serial and Dual-Batch
+paths; it is not a second serving implementation. The historical decode-ready manifest boundary
+remains unchanged. Performance mode first atomically publishes setup-ready, performs one final
+Target-TP barrier and per-rank CUDA synchronization, broadcasts a later monotonic
+`performance_measurement_start_ns`, and only then permits the Serial round-zero proposal or Dual
+initial enqueue. Target performs no measured Draft proposals. There is no per-token CUDA
+synchronization; after generation, one collective RPC synchronizes every Target rank and records
+the final completion evidence.
+
+Rank-zero resident callbacks emit explicit semantic token-commit events. Serial proposal commits
+use the existing `state_sync_end_ns`, Dual proposal commits use existing `commit_end_ns`, and
+proposal-free Target tails use the new explicit commit event. The measurement layer reconstructs
+every request as exactly one setup bootstrap plus measured commits and fails if that identity does
+not equal the final generated sequence. Per-request latency is final commit minus the shared
+boundary. TPOT is `(last_commit-first_commit)/(measured_tokens-1)` and is null for a one-token
+request. Makespan is the latest final commit minus the boundary; aggregate throughput is measured
+committed tokens divided by makespan.
+
+Standalone mode artifacts cannot produce a speedup. Comparison v2 gates pair and three-mode
+speedups on matched work: equal request sets/counts, prompt hashes/counts, bootstrap, maximum
+output and measured counts; valid within-mode token accounting and cleanup; equivalent
+measurement boundaries, workload/config/model/patch/execution/topology provenance. Exact
+generated sequences remain independent diagnostics. Finish/termination differences at the frozen
+output length are diagnostic provenance. A matched-work failure suppresses speedup; sequence
+differences do not. Timestamped process output is used only to report
+post-boundary JIT warnings and `warmup_clean`; it is never a latency authority. The initial
+corrected-100 run is functional bring-up, not a final paper workload or result. The Mac coding
+agent implemented and CPU-tested this infrastructure without running CUDA. See
+[phase4b2-decode-performance-runbook.md](phase4b2-decode-performance-runbook.md).
+
+The first A800 bring-up under `56bd0a5` completed Target and Serial GPU execution. Target derived
+successfully; Serial execution returned zero but its derived artifact failed because two
+Phase-4B.2 fields were written only to `runtime-manifest.json["phase4a1"]`, not the top-level raw
+Serial result. Future Serial runs now publish one canonical evidence block to both locations. A
+strict offline compatibility path can reuse only that exact historical execution commit, only
+when both raw fields are absent, and only after exact raw/runtime/decode-ready provenance and
+two-rank GPU1/GPU2 synchronization validation. It records execution and measurement-code commits
+separately and never rewrites the raw GPU artifacts. Target and Dual have no fallback. The
+Serial artifact has now recovered successfully: 100 requests, 1487 measured tokens,
+50394.65011 ms makespan, 29.50710039169275 tok/s and mean TPOT 2345.39918652 ms;
+`warmup_clean=false`, one post-boundary JIT event. Target has 100 requests, 1487 measured tokens,
+5813.059543 ms makespan, 255.8033319632212 tok/s and mean TPOT 382.881551485 ms;
+`warmup_clean=true`, zero post-boundary JIT events. These are operator-reported GPU results.
+Nine Target/Serial trajectories differ after identical bootstrap states; that evidence is retained
+without further per-token investigation. The offline comparator verifies per-request counts from
+the immutable artifacts before approving the pair. Dual is next, at the same `56bd0a50...`
+execution commit; measurement/comparison uses the new commit. PR #4 stays Draft and unmerged.
+The resulting claim is preliminary matched-work decode-only bring-up, with no exact-sequence,
+output-quality, steady-state or final paper benchmark equivalence claim. Phase 4B.3 sweeps
+follow, then Phase 4C Dual-Eager.
+
+After a successful Phase 4B.2 bring-up, Phase 4B.3 adds fixed-output batch/output/context sweeps;
+Phase 4C then adds real-GPU Dual-Eager. Arrival-rate, throughput/goodput/SLO and capacity-knee
+evaluation remain later work.
 
 ## Phase 3.0: GPU readiness and real-trace runner
 
@@ -345,7 +640,10 @@ compute-waste ratios.
 - `D(B,K,C)`, `V(B,K,C)`, acceptance, confidence, and candidate roof are proxy inputs until GPU
   calibration.
 - R3 proxy lengths are sampled and are not HumanEval, Alpaca, or CNN/DailyMail payloads.
-- No vLLM, SGLang, MineDraft, packed-tree verification kernel, or Dual-Batch GPU runtime is
-  integrated. The optional Transformers path is a Phase-3 correctness/calibration backend only.
+- Phase 4B.1 has a decode-only asynchronous linear Dual runner, complete Gate1/Gate2 A800
+  correctness evidence, and completed Gate3 numerical qualification. Phase 4B.2 performance
+  infrastructure is implemented but has no A800 result yet. It has no SGLang, packed-tree
+  verification, Dual-Eager, KVConnector, arrival scheduling, load/SLO or final-paper evaluation.
+  The persistent Draft HF adapter is still a narrow serving prototype.
 - No current result may be cited as evidence of real GPU speedup or full AdaServe/SpecRhythm
   reproduction.

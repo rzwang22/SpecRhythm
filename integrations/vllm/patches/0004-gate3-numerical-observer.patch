@@ -1,0 +1,23 @@
+diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
+index 4dabef9a2..5c2907c6b 100644
+--- a/vllm/v1/worker/gpu_model_runner.py
++++ b/vllm/v1/worker/gpu_model_runner.py
+@@ -4347,6 +4347,18 @@ class GPUModelRunner(
+                         scheduler_output.scheduled_spec_decode_tokens.copy()
+                     ),
+                 )
++        from specrhythm.phase4.numerical_diagnostics import (
++            prepare_target_numerical_diagnostic,
++        )
++
++        prepare_target_numerical_diagnostic(
++            self,
++            scheduler_output=scheduler_output,
++            logits_indices=logits_indices,
++            positions=positions,
++            num_scheduled_tokens=num_scheduled_tokens_np.tolist(),
++            slot_mappings_by_group=slot_mappings_by_group,
++        )
+         target_forward_start_ns = time.monotonic_ns()
+         with (
+             set_forward_context(

@@ -18,3 +18,14 @@ jobs:
       - run: python -m pip install '.[dev]'
       - run: ruff check .
       - run: pytest
+
+  phase4-python311-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - run: python -m pip install '.[dev]'
+      - run: specrhythm phase4-contract-dry-run --output /tmp/phase4-contract.json
+      - run: python -m pytest -q tests/test_phase4.py
