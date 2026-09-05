@@ -108,3 +108,32 @@ def resolve_stable_ready_request(
     if str(getattr(request, "request_id", "")) != internal_id:
         raise RuntimeError("vLLM request table key disagrees with internal request identity")
     return internal_id, request
+
+
+def resolve_historical_ready_request(
+    stable_request_id: str,
+    identity: FrozenPromptIdentityMap,
+    internal_requests: Mapping[str, Any],
+) -> tuple[str, Any]:
+    """Resolve an async result, returning None only for a valid retired binding.
+
+    Bindings outlive stock vLLM requests. Absence from the live table is therefore
+    expected for late Dual results, but an unknown or inconsistent binding is not.
+    The generic live-only resolver deliberately retains its strict semantics.
+    """
+
+    if not isinstance(stable_request_id, str) or not stable_request_id.strip():
+        raise RuntimeError("ready result stable request ID must be a non-empty string")
+    internal_id = identity.internal_id(stable_request_id)
+    if (
+        stable_request_id not in identity.stable_prompts
+        or not isinstance(internal_id, str)
+        or not internal_id
+        or identity.internal_to_stable.get(internal_id) != stable_request_id
+        or sum(value == internal_id for value in identity.stable_to_internal.values()) != 1
+        or sum(value == stable_request_id for value in identity.internal_to_stable.values()) != 1
+    ):
+        raise RuntimeError("ready result historical identity binding is inconsistent")
+    if internal_id not in internal_requests:
+        return internal_id, None
+    return resolve_stable_ready_request(stable_request_id, identity, internal_requests)

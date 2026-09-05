@@ -8,6 +8,7 @@ and the stock scheduling algorithm remain owned by vLLM.
 from __future__ import annotations
 
 import os
+import re
 import time
 from pathlib import Path
 from typing import Any, Mapping, Optional
@@ -26,7 +27,7 @@ from specrhythm.phase4.dual import DualProposal
 from specrhythm.phase4.dual_service import DualDraftClient
 from specrhythm.phase4.request_identity import (
     FrozenPromptIdentityMap,
-    resolve_stable_ready_request,
+    resolve_historical_ready_request,
 )
 from specrhythm.phase4.resident_setup import load_setup_ready
 from specrhythm.phase4.serial import token_prefix_hash
@@ -90,6 +91,9 @@ class DualBatchScheduler(Scheduler):
         self._dual_proposals: dict[str, DualProposal] = {}
         self._dual_consumed_proposals: set[str] = set()
         self._dual_drafting: set[str] = set()
+        self._dual_retired_ready_events: list[dict[str, Any]] = []
+        self._dual_retired_results: dict[tuple[Any, ...], Optional[DualProposal]] = {}
+        self._dual_dropped_proposals: dict[str, DualProposal] = {}
         self._dual_decisions: dict[str, tuple[AdmissibilitySnapshot, AdmissibilityDecision]] = {}
         ttl_seconds = float(os.environ.get("SR_PHASE4_PROPOSAL_TTL_SECONDS", "0"))
         if ttl_seconds < 0:
@@ -161,7 +165,15 @@ class DualBatchScheduler(Scheduler):
             self._dual_test_coordination_satisfied = True
         if available:
             pending = response.get("pending_request_ids", ())
-            self._dual_drafting = {str(item) for item in pending}
+            # A poll snapshot can still mention work for a request retired by
+            # stock vLLM. Do not reintroduce it after ready-result cleanup.
+            self._dual_drafting = {
+                item
+                for item in pending
+                if (request := resolve_historical_ready_request(
+                    item, self._dual_identity, self.requests
+                )[1]) is not None and not request.is_finished()
+            }
         self._dual_decisions = {
             str(request.request_id): self._decision_for(request)
             for request in self.requests.values()
@@ -238,6 +250,7 @@ class DualBatchScheduler(Scheduler):
                     if item in self._dual_proposals
                 ],
                 "request_admissibility": decision_rows,
+                "retired_ready_results": list(self._dual_retired_ready_events),
                 "admissibility_hook": "explicit-request-predicate",
                 "cadence_field_used_for_draft_readiness": False,
                 "scheduler_class": type(self).__name__,
@@ -246,6 +259,7 @@ class DualBatchScheduler(Scheduler):
                 "test_only_readiness_coordination": self._dual_test_coordination,
             }
         )
+        self._dual_retired_ready_events.clear()
         self._dual_cycle_id += 1
         return output
 
@@ -343,35 +357,59 @@ class DualBatchScheduler(Scheduler):
         return snapshot, decision
 
     def _accept_ready_result(self, result: Mapping[str, Any]) -> None:
-        request_id = str(result.get("request_id", ""))
-        internal_request_id, request = resolve_stable_ready_request(
+        if not isinstance(result, Mapping):
+            raise RuntimeError("ready Draft result is not an object")
+        request_id = result.get("request_id")
+        internal_request_id, request = resolve_historical_ready_request(
             request_id, self._dual_identity, self.requests
         )
         proposal_value = result.get("proposal")
-        if request.is_finished():
-            if isinstance(proposal_value, Mapping):
-                proposal = DualProposal.from_dict(proposal_value)
-                self._emit_new_proposal(proposal, internal_request_id)
-                self._emit_proposal_lifecycle(
-                    proposal,
-                    "DROPPED_STALE",
-                    internal_request_id=internal_request_id,
-                    reason="terminal-request",
-                )
-            return
+        if result.get("terminal", False) is not False:
+            raise RuntimeError("ready Draft result must contain nonterminal work")
+        proposal = None
+        ready_ns = None
         if proposal_value is None:
             if result.get("target_tail") is not True:
                 raise RuntimeError("ready Draft result contains neither proposal nor tail")
             ready_ns = result.get("target_tail_ready_ns")
-            if not isinstance(ready_ns, int) or ready_ns <= 0:
+            if type(ready_ns) is not int or ready_ns <= 0:
                 raise RuntimeError("ready Draft target tail lacks a readiness timestamp")
+        else:
+            if not isinstance(proposal_value, Mapping):
+                raise RuntimeError("ready proposal payload is not an object")
+            for field in ("request_id", "proposal_id", "prefix_token_sha256"):
+                if not isinstance(proposal_value.get(field), str):
+                    raise ValueError(f"ready proposal {field} must be a string")
+            if re.fullmatch(r"[0-9a-f]{64}", proposal_value["prefix_token_sha256"]) is None:
+                raise ValueError("ready proposal prefix_token_sha256 is malformed")
+            proposal = DualProposal.from_dict(proposal_value)
+            if "proposal_length" in proposal_value and (
+                type(proposal_value["proposal_length"]) is not int
+                or proposal_value["proposal_length"] != proposal.proposal_length
+            ):
+                raise ValueError("ready proposal_length disagrees with proposal tokens")
+            if proposal.request_id != request_id:
+                raise RuntimeError("ready proposal request_id disagrees with ready result")
+            if result.get("target_tail", False) is not False:
+                raise RuntimeError("ready proposal also claims a target tail")
+            if proposal.proposal_id in self._dual_consumed_proposals:
+                raise RuntimeError("one Dual proposal was consumed more than once")
+        if request is None or request.is_finished():
+            self._drop_retired_ready_result(
+                request_id,
+                internal_request_id,
+                proposal=proposal,
+                ready_ns=ready_ns,
+                reason=(
+                    "request-retired-before-ready" if request is None else "terminal-request"
+                ),
+            )
+            return
+        if proposal is None:
             self._dual_tail_ready.add(request_id)
             self._dual_tail_ready_ns[request_id] = ready_ns
             self._dual_drafting.discard(request_id)
             return
-        if not isinstance(proposal_value, Mapping):
-            raise RuntimeError("ready proposal payload is not an object")
-        proposal = DualProposal.from_dict(proposal_value)
         self._emit_new_proposal(proposal, internal_request_id)
         prefix = tuple(int(item) for item in request.all_token_ids)
         errors = []
@@ -418,6 +456,89 @@ class DualBatchScheduler(Scheduler):
             internal_request_id=internal_request_id,
             reason="vllm-spec-token-ids-installed",
         )
+
+    def _drop_retired_ready_result(
+        self,
+        request_id: str,
+        internal_request_id: str,
+        *,
+        proposal: Optional[DualProposal],
+        ready_ns: Optional[int],
+        reason: str,
+    ) -> None:
+        """Discard validated late work without touching any vLLM request."""
+
+        key = (
+            ("proposal", proposal.proposal_id)
+            if proposal is not None
+            else ("target-tail", request_id, ready_ns)
+        )
+        if key in self._dual_retired_results:
+            if self._dual_retired_results[key] != proposal:
+                raise RuntimeError("replayed retired proposal changed its payload")
+            return
+        previous = self._dual_proposals.get(request_id)
+        if proposal is not None:
+            for dropped in self._dual_dropped_proposals.values():
+                if dropped.proposal_id == proposal.proposal_id and dropped != proposal:
+                    raise RuntimeError("replayed retired proposal changed its payload")
+                if (
+                    dropped.request_id == request_id
+                    and dropped.round_id == proposal.round_id
+                    and dropped.proposal_id != proposal.proposal_id
+                ):
+                    raise RuntimeError("multiple Dual proposals claim one request round")
+        if previous is not None and proposal is not None:
+            if previous.proposal_id == proposal.proposal_id and previous != proposal:
+                raise RuntimeError("retired proposal changed its installed payload")
+            if (
+                previous.round_id == proposal.round_id
+                and previous.proposal_id != proposal.proposal_id
+            ):
+                raise RuntimeError("multiple Dual proposals claim one request round")
+        # Consumed proposals already have a complete lifecycle. An installed but
+        # unconsumed proposal instead needs a single terminal DROP before cleanup.
+        if previous is not None and previous.proposal_id not in self._dual_consumed_proposals:
+            self._drop_retired_proposal(previous, internal_request_id, reason=reason)
+        if proposal is not None:
+            if (
+                proposal.proposal_id not in self._dual_dropped_proposals
+                and (previous is None or previous.proposal_id != proposal.proposal_id)
+            ):
+                self._emit_new_proposal(proposal, internal_request_id)
+            self._drop_retired_proposal(proposal, internal_request_id, reason=reason)
+        self._dual_drafting.discard(request_id)
+        self._dual_tail_ready.discard(request_id)
+        self._dual_tail_ready_ns.pop(request_id, None)
+        self._dual_proposals.pop(request_id, None)
+        self._dual_retired_results[key] = proposal
+        self._dual_retired_ready_events.append(
+            {
+                "schema_version": "specrhythm.phase4b2-retired-ready-result.v1",
+                "request_id": request_id,
+                "internal_request_id": internal_request_id,
+                "result_kind": "proposal" if proposal is not None else "target-tail",
+                "proposal_id": proposal.proposal_id if proposal is not None else None,
+                "target_tail_ready_ns": ready_ns,
+                "timestamp_ns": time.monotonic_ns(),
+                "reason": reason,
+                "discarded": True,
+                "installed": False,
+                "verified": False,
+            }
+        )
+
+    def _drop_retired_proposal(
+        self, proposal: DualProposal, internal_request_id: str, *, reason: str
+    ) -> None:
+        if proposal.proposal_id not in self._dual_dropped_proposals:
+            self._emit_proposal_lifecycle(
+                proposal,
+                "DROPPED_STALE",
+                internal_request_id=internal_request_id,
+                reason=reason,
+            )
+            self._dual_dropped_proposals[proposal.proposal_id] = proposal
 
     def _emit_new_proposal(
         self, proposal: DualProposal, internal_request_id: str

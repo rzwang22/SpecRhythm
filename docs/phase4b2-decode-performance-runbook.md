@@ -1,5 +1,11 @@
 # Phase 4B.2 matched-work decode-only bring-up
 
+**Historical runbook, superseded after the first real Dual execution failure.**
+Use the [fresh three-mode runbook](phase4b2-fresh-three-mode-runbook.md) for all future
+server commands. It preserves the failed Dual root, uses one new execution commit
+for Target/Serial/Dual, and captures return codes without terminating interactive Bash.
+The continuation blocks below are historical context and must not be executed.
+
 This is the continuation for the existing corrected-100 Target and recovered Serial runs.
 Reuse both `decode-performance.json` files without remeasurement or GPU reruns. The next GPU
 work is exactly one Dual-Batch execution. PR #4 stays Draft and unmerged. The coding agent

@@ -662,6 +662,7 @@ def run_resident_dual_batch(
             "valid": not overlap_errors,
             "errors": overlap_errors,
         },
+        "retired_ready_results": summarize_retired_ready_results(scheduler_rows),
         "evidence_counts": {
             "state_events": len(state_rows),
             "proposal_rounds": len(proposal_rows),
@@ -680,6 +681,20 @@ def run_resident_dual_batch(
     }
     atomic_write_json(output_path, result)
     return result
+
+
+def summarize_retired_ready_results(
+    scheduler_rows: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Expose late-result evidence without changing performance or validity gates."""
+
+    events = [event for row in scheduler_rows for event in row.get("retired_ready_results", ())]
+    return {
+        "retired_ready_result_drop_count": len(events),
+        "retired_proposal_drop_count": sum(row["result_kind"] == "proposal" for row in events),
+        "retired_tail_drop_count": sum(row["result_kind"] == "target-tail" for row in events),
+        "events": events,
+    }
 
 
 def build_cycle_and_overlap_events(
