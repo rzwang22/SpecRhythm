@@ -11,6 +11,7 @@ from typing import Any, Mapping, Optional, Sequence
 
 from specrhythm.phase4.decode_ready import load_decode_ready_manifest
 from specrhythm.phase4.manifest import atomic_write_json, sha256_file
+from specrhythm.phase4.matched_work import compare_matched_work, exact_sequence_diagnostic
 from specrhythm.phase4.performance_boundary import (
     PERFORMANCE_COMMIT_SCHEMA,
     extract_performance_boundary,
@@ -20,7 +21,7 @@ from specrhythm.phase4.resident_setup import load_deferred_initial_proposals_rea
 from specrhythm.phase4.transport import CheckpointJsonl
 
 PERFORMANCE_SCHEMA = "specrhythm.phase4b2-decode-performance.v1"
-COMPARISON_SCHEMA = "specrhythm.phase4b2-decode-performance-comparison.v1"
+COMPARISON_SCHEMA = "specrhythm.phase4b2-decode-performance-comparison.v2"
 MODES = ("target", "serial", "dual-batch")
 CONSUMERS = {
     "target": "target-only",
@@ -151,9 +152,7 @@ def build_decode_performance_result(
     plugin = _read_object(plugin_path)
     timing_rows = CheckpointJsonl(timing_path).read()
     CheckpointJsonl(diagnostic_path).read()
-    boundary, errors = extract_performance_boundary(
-        timing_rows, consumer=CONSUMERS[mode]
-    )
+    boundary, errors = extract_performance_boundary(timing_rows, consumer=CONSUMERS[mode])
     errors = list(errors)
     (
         performance_candidate,
@@ -245,7 +244,8 @@ def build_decode_performance_result(
         "errors": errors,
         "performance_result": valid,
         "reports_speedup": False,
-        "requires_exact_cross_mode_comparison": True,
+        "requires_exact_cross_mode_comparison": False,
+        "requires_matched_work_comparison": True,
         "stage": "phase4b2-decode-only-performance-bringup",
         "git_commit": manifest.specrhythm_git_commit,
         "execution_git_commit": manifest.specrhythm_git_commit,
@@ -308,18 +308,12 @@ def build_decode_performance_result(
             "patch_manifest": sha256_file(patch_manifest_path),
             **(
                 {"runtime_manifest": sha256_file(run_root / "runtime-manifest.json")}
-                if mode == "serial"
-                and (run_root / "runtime-manifest.json").is_file()
+                if mode == "serial" and (run_root / "runtime-manifest.json").is_file()
                 else {}
             ),
             **(
-                {
-                    "initial_proposals_ready": sha256_file(
-                        run_root / "initial-proposals-ready.json"
-                    )
-                }
-                if mode == "serial"
-                and (run_root / "initial-proposals-ready.json").is_file()
+                {"initial_proposals_ready": sha256_file(run_root / "initial-proposals-ready.json")}
+                if mode == "serial" and (run_root / "initial-proposals-ready.json").is_file()
                 else {}
             ),
         },
@@ -336,7 +330,7 @@ def compare_decode_performance_results(
     markdown_path: Path,
     dual_path: Optional[Path] = None,
 ) -> dict[str, Any]:
-    """Fail closed on resident cross-mode inequality before exposing speedups."""
+    """Gate speedups on matched work while retaining exact sequence diagnostics."""
 
     for path in (output_path, markdown_path):
         if path.exists():
@@ -347,42 +341,64 @@ def compare_decode_performance_results(
     }
     if dual_path is not None:
         values["dual-batch"] = _read_object(dual_path)
-    errors = []
-    for mode, value in values.items():
-        if value.get("schema_version") != PERFORMANCE_SCHEMA:
-            errors.append(f"{mode} performance schema differs")
-        if value.get("mode") != mode:
-            errors.append(f"{mode} artifact has the wrong mode")
-        if value.get("valid") is not True:
-            errors.append(f"{mode} performance artifact is invalid")
+    matched_work = compare_matched_work(values)
+    errors = matched_work["errors"]
     equality = _cross_mode_equality(values)
-    errors.extend(equality["errors"])
+    sequence_diagnostic = exact_sequence_diagnostic(values)
     complete = "dual-batch" in values
     performance_valid = complete and not errors
     speedups = None
-    if performance_valid:
+    if not errors:
         target = values["target"]["metrics"]
         serial = values["serial"]["metrics"]
-        dual = values["dual-batch"]["metrics"]
         speedups = {
             "primary_denominator": "decode_makespan_ms",
             "target_vs_serial": _speedup(target, serial),
-            "target_vs_dual_batch": _speedup(target, dual),
-            "serial_vs_dual_batch": _speedup(serial, dual),
         }
+        if complete:
+            dual = values["dual-batch"]["metrics"]
+            speedups.update(
+                {
+                    "target_vs_dual_batch": _speedup(target, dual),
+                    "serial_vs_dual_batch": _speedup(serial, dual),
+                }
+            )
     report = {
         "schema_version": COMPARISON_SCHEMA,
         "valid": not errors,
         "errors": errors,
         "comparison_complete": complete,
         "performance_valid": performance_valid,
+        "performance_valid_for_pair": not errors if not complete else None,
         "metrics": {mode: value.get("metrics") for mode, value in values.items()},
+        "warmup": {
+            mode: {
+                "warmup_clean": value.get("warmup_clean"),
+                "post_measurement_jit_event_count": value.get("jit_observation", {}).get(
+                    "post_measurement_jit_event_count"
+                ),
+            }
+            for mode, value in values.items()
+        },
+        "execution_provenance": {
+            mode: {
+                "execution_git_commit": value.get("execution_git_commit", value.get("git_commit")),
+                "measurement_code_git_commit": value.get("measurement_code_git_commit"),
+            }
+            for mode, value in values.items()
+        },
+        "matched_work_comparability": matched_work,
+        "exact_sequence_diagnostic": sequence_diagnostic,
         "exact_correctness_triangle": equality,
+        "exact_correctness_triangle_role": "legacy exact diagnostic only; not a performance gate",
         "speedups": speedups,
         "gate3_qualification": dict(GATE3_QUALIFICATION),
         "claim_boundary": (
-            "preliminary Phase-4B.2 corrected-100 decode-only bring-up"
-            if performance_valid
+            "preliminary Phase 4B.2 matched-work decode-only bring-up; "
+            "performance-only matched-work comparison; exact generated-token equivalence "
+            "and output quality equivalence are not claimed; not a final paper benchmark "
+            "or steady-state result"
+            if not errors
             else "no performance or speedup claim"
         ),
         "input_sha256": {
@@ -1150,20 +1166,72 @@ def _comparison_markdown(report: Mapping[str, Any]) -> str:
     lines = [
         "# Phase 4B.2 decode-only performance comparison",
         "",
-        f"- Exact resident correctness: `{report['exact_correctness_triangle']['valid']}`",
+        f"- Matched-work comparable: `{report['matched_work_comparability']['valid']}`",
+        "- Exact sequence equal (diagnostic): "
+        f"`{report['exact_sequence_diagnostic']['all_equal']}`",
+        f"- Divergent requests: {report['exact_sequence_diagnostic']['divergent_request_count']}",
         f"- Comparison complete: `{report['comparison_complete']}`",
         f"- Performance valid: `{report['performance_valid']}`",
+        f"- Pair performance valid: `{report['performance_valid_for_pair']}`",
         f"- Claim boundary: {report['claim_boundary']}",
     ]
+    lines.extend(
+        [
+            "",
+            "## Per-mode metrics",
+            "",
+            "| Mode | Requests | Measured tokens | Makespan ms | Throughput tok/s | "
+            "Latency p50/p90/p99 ms | TPOT mean/p50/p90/p99 ms | Warmup clean | JIT count |",
+            "|---|---:|---:|---:|---:|---|---|---|---:|",
+        ]
+    )
+    for mode, metrics in report["metrics"].items():
+        if not isinstance(metrics, Mapping):
+            continue
+        latency = metrics.get("decode_latency_ms", {})
+        tpot = metrics.get("tpot_ms", {})
+        warmup = report["warmup"][mode]
+        latency_text = "/".join(str(latency.get(key)) for key in ("p50", "p90", "p99"))
+        tpot_text = "/".join(str(tpot.get(key)) for key in ("mean", "p50", "p90", "p99"))
+        lines.append(
+            f"| {mode} | {metrics.get('completed_requests')} | "
+            f"{metrics.get('total_measured_committed_output_tokens')} | "
+            f"{metrics.get('decode_makespan_ms')} | "
+            f"{metrics.get('aggregate_throughput_tokens_per_second')} | "
+            f"{latency_text} | {tpot_text} | {warmup['warmup_clean']} | "
+            f"{warmup['post_measurement_jit_event_count']} |"
+        )
     speedups = report.get("speedups")
     if isinstance(speedups, Mapping):
         lines.extend(["", "## Speedups", ""])
         for name in ("target_vs_serial", "target_vs_dual_batch", "serial_vs_dual_batch"):
+            if name not in speedups:
+                continue
             row = speedups[name]
             lines.append(
-                f"- {name}: makespan `{row['makespan_speedup']:.6f}x`, "
+                f"- {name}: makespan speedup (baseline/mode) `{row['makespan_speedup']:.6f}x`, "
                 f"throughput `{row['throughput_ratio']:.6f}x`"
             )
     else:
-        lines.extend(["", "No speedup is reported because the full exact gate has not passed."])
+        lines.extend(["", "No speedup is reported because matched-work comparability failed."])
+    lines.extend(
+        [
+            "",
+            "## Diagnostics and gate errors",
+            "",
+            "```json",
+            json.dumps(
+                {
+                    "errors": report["errors"],
+                    "exact_sequence_diagnostic": report["exact_sequence_diagnostic"],
+                    "termination_differences": report["matched_work_comparability"][
+                        "termination_differences"
+                    ],
+                },
+                indent=2,
+                sort_keys=True,
+            ),
+            "```",
+        ]
+    )
     return "\n".join(lines) + "\n"

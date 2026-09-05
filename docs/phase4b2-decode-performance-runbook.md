@@ -1,174 +1,168 @@
-# Phase 4B.2 decode-only performance acceptance runbook
+# Phase 4B.2 matched-work decode-only bring-up
 
-This is the first functional performance bring-up for resident Target, resident Serial and
-resident Dual-Batch on 3×A800. It does not rerun Gate3 diagnostics, does not introduce tolerance,
-and does not implement Dual-Eager, packed-tree verification, load/SLO evaluation or a paper
-workload. The corrected-100 input is used only to validate the measurement infrastructure.
+This is the continuation for the existing corrected-100 Target and recovered Serial runs.
+Reuse both `decode-performance.json` files without remeasurement or GPU reruns. The next GPU
+work is exactly one Dual-Batch execution. PR #4 stays Draft and unmerged. The coding agent
+performs CPU/offline work only; the operator runs Stage B on the A800 server.
 
-The historical Gate3 conclusion is deliberately split: exact stock equivalence is not achieved
-(96/100), while structural/logical and numerical qualification is complete. Phase 4B.2 compares
-the three modes inside the same resident execution regime. Any resident cross-mode token or
-termination difference remains a hard failure.
+## Acceptance policy and schema
 
-## Measurement contract
+Comparison v2 (`specrhythm.phase4b2-decode-performance-comparison.v2`) reads immutable v1
+per-mode artifacts. `matched_work_comparability.valid` controls performance acceptance.
+`exact_sequence_diagnostic` reports exact token comparisons without tolerance, including all
+divergent request IDs, matching/divergent counts and the first ten mismatches. The unchanged
+`exact_correctness_triangle` is retained as legacy diagnostic evidence; neither diagnostic is
+a performance gate or a correctness PASS. Old v1 `requires_exact_cross_mode_comparison=true`
+records the historical policy and does not override comparison v2.
 
-The Phase 4B.1 decode-ready manifest timestamp remains historical correctness evidence. In
-performance mode, setup-ready is published first. All Target TP ranks then enter one barrier,
-synchronize outstanding Target CUDA setup work, and receive one rank-zero
-`time.monotonic_ns()` performance boundary. Serial creates its round-zero proposal only after
-that boundary; Dual enqueues its initial proposal only after it; Target never proposes. No
-per-token CUDA synchronization is introduced. At completion, one collective RPC synchronizes
-each Target TP rank and timestamps it.
+Matched work requires a nonempty unique request set, equal request/completion counts and a
+canonical request-ID mapping (artifact row order may differ). It checks per-request prompt
+count/SHA, bootstrap ID, maximum output length, measured output count, and each mode's
+`bootstrap + measured == final` token accounting. Aggregate counts must equal their per-request
+sums and each other. Workload/config SHAs, model paths/revisions, vLLM source commit/version,
+patch stack and patch-manifest SHA, GPU topology and placement must match. Draft uses GPU0;
+Target uses GPU1,2 with TP2. Cleanup and all per-mode artifacts must be valid, every request
+must have completed, and measurement-boundary contracts must be equivalent. Dual must retain
+its physical overlap witness and have no per-round global CUDA synchronization.
 
-The setup bootstrap is excluded. The token produced by the first Target forward that consumes
-the pending bootstrap is the first measured token. Explicit commit events are the timing
-authority: Target sampled commits and proposal-free tails use resident commit events, Serial
-proposal commits use `state_sync_end_ns`, and Dual proposal commits use `commit_end_ns`. Log
-timestamps are used only to identify possible post-boundary JIT messages.
+Execution compatibility currently requires the identical execution commit. Historical v1
+`git_commit` is the fallback when `execution_git_commit` is absent; contradictory values fail.
+`measurement_code_git_commit` may differ (or be unavailable in the original Target artifact).
+Requested workload semantics are bound by the equal workload/config digests, correctness mode
+and per-request output limits. No equivalence between different execution commits is assumed.
 
-For request `i`:
+Different post-bootstrap token IDs do not fail matched work. Finish/stop differences are
+recorded under `termination_differences` and do not fail when both modes fill their frozen output
+limit. `maximum_new_tokens` includes the one setup bootstrap, so the full measured count is
+`maximum_new_tokens - 1`. A reason difference before that fixed length, incomplete/failed
+requests, or any measured-count difference fails. `warmup_clean=false` and post-boundary JIT
+are reported without rejecting this preliminary bring-up.
 
-```text
-decode_latency_i = final_measured_commit_ns - measurement_start_ns
-TPOT_i = (last_commit_ns - first_commit_ns) / (measured_tokens_i - 1)
-```
+A valid pair exposes `performance_valid_for_pair=true` and Target/Serial speedup while keeping
+`comparison_complete=false` and `performance_valid=false` (the latter reserves the complete
+three-mode result). A valid final comparison exposes `performance_valid=true`. Speedups are
+null on any matched-work failure. The claim is **preliminary Phase 4B.2 matched-work decode-only
+bring-up**: performance-only comparison, without claims of exact generated-token or output
+quality equivalence, a final paper benchmark, or steady-state performance.
 
-TPOT is null when a request has exactly one measured token. Batch makespan is the latest final
-commit minus the boundary. Throughput is total measured committed tokens divided by makespan.
+## Measurement contract (unchanged)
 
-## Recover the successful `56bd0a5` Serial execution without rerunning GPU work
+The performance boundary follows global setup-ready publication, one Target TP barrier and
+Target setup CUDA synchronization. Setup and bootstrap are excluded. The first post-bootstrap
+output is counted; there is no per-token CUDA synchronization. Serial round-zero proposals and
+Dual initial enqueue start after the boundary. Final synchronization covers every Target rank.
 
-Commit `56bd0a50e3b5f33cf30e32564532b1483ea7e34d` wrote its Phase-4B.2 Serial
-candidate flag and two-rank final synchronization into `runtime-manifest.json["phase4a1"]`, but
-omitted the same fields from `resident-serial.json`. The GPU execution is usable; only the
-derived measurement failed. The offline compatibility loader is deliberately limited to that
-execution commit, Serial mode, and the case where both raw fields are absent. It requires exact
-raw/runtime/decode-ready provenance and never edits either source artifact.
+Explicit commit events remain authoritative: Target and proposal-free tails use resident
+commits; Serial proposals use `state_sync_end_ns`; Dual proposals use `commit_end_ns`.
+Log timestamps are used only for JIT provenance. Latency is final measured commit minus the
+boundary. TPOT is `(last_commit - first_commit) / (measured_count - 1)`, null for one measured
+token. Decode makespan is the latest final commit minus the boundary; throughput is total
+measured tokens divided by makespan. This change does not alter any metric calculation.
 
-After checking out the current PR head and reinstalling it, identify the one existing result root
-explicitly and run only the following recovery. Do not invoke `phase4b2_run_mode`, Target, Serial,
-or Dual. If more than one old root exists, set `SR_PHASE4B2_ROOT` to the intended exact path by
-hand instead of selecting one by recency.
+## Stage A — reuse and approve the existing Target/Serial pair (offline)
+
+Run the blocks in the same Bash shell; stop on any nonzero command. The checkout must be clean.
+`SR_PHASE4B_MEASUREMENT_COMMIT` pins the new comparison commit before switching to execution
+code. Use the full SHA returned with this change if the branch has advanced since delivery.
+The automatic root selection below succeeds only when exactly one old result root exists.
+If there are several, explicitly export `SR_PHASE4B2_ROOT` to the intended existing root first.
 
 ```bash
-cd /root/autodl-tmp/src/SpecRhythm || exit 1
-git fetch origin codex/vllm-serving-v0.1 || exit 1
-git switch --detach origin/codex/vllm-serving-v0.1 || exit 1
+set -euo pipefail
+cd /root/autodl-tmp/src/SpecRhythm
+git fetch origin codex/vllm-serving-v0.1
+test -z "$(git status --porcelain)"
+git switch --detach origin/codex/vllm-serving-v0.1
 export SR_PHASE4B_MEASUREMENT_COMMIT="$(git rev-parse HEAD)"
-test "$SR_PHASE4B_MEASUREMENT_COMMIT" != \
-  "56bd0a50e3b5f33cf30e32564532b1483ea7e34d" || exit 1
-test -z "$(git status --porcelain)" || exit 1
+export SR_PHASE4B_EXECUTION_COMMIT="56bd0a50e3b5f33cf30e32564532b1483ea7e34d"
+test "$SR_PHASE4B_MEASUREMENT_COMMIT" != "$SR_PHASE4B_EXECUTION_COMMIT"
 
-conda activate /root/autodl-tmp/envs/specrhythm-phase4-vllm-0.25.1 || exit 1
-python -m pip install -e '.[dev]' --no-deps --no-build-isolation || exit 1
+conda activate /root/autodl-tmp/envs/specrhythm-phase4-vllm-0.25.1
+python -m pip install -e '.[dev]' --no-deps --no-build-isolation
 
-mapfile -t SR_PHASE4B2_OLD_ROOTS < <(
-  find "/root/autodl-tmp/SpecRhythm-data/results/phase4/56bd0a50e3b5f33cf30e32564532b1483ea7e34d" \
-    -mindepth 1 -maxdepth 1 -type d -name 'phase4b2-decode-performance-*' -print
-)
-test "${#SR_PHASE4B2_OLD_ROOTS[@]}" -eq 1 || {
-  printf 'expected exactly one old Phase-4B.2 root; found %s\n' \
-    "${#SR_PHASE4B2_OLD_ROOTS[@]}" >&2
-  printf '%s\n' "${SR_PHASE4B2_OLD_ROOTS[@]}" >&2
-  exit 1
-}
-export SR_PHASE4B2_ROOT="${SR_PHASE4B2_OLD_ROOTS[0]}"
+if test -z "${SR_PHASE4B2_ROOT:-}"; then
+  mapfile -t SR_PHASE4B2_OLD_ROOTS < <(
+    find "/root/autodl-tmp/SpecRhythm-data/results/phase4/$SR_PHASE4B_EXECUTION_COMMIT" \
+      -mindepth 1 -maxdepth 1 -type d -name 'phase4b2-decode-performance-*' -print
+  )
+  test "${#SR_PHASE4B2_OLD_ROOTS[@]}" -eq 1 || {
+    printf 'Set SR_PHASE4B2_ROOT explicitly; found %s roots\n' \
+      "${#SR_PHASE4B2_OLD_ROOTS[@]}" >&2
+    printf '%s\n' "${SR_PHASE4B2_OLD_ROOTS[@]}" >&2
+    exit 1
+  }
+  export SR_PHASE4B2_ROOT="${SR_PHASE4B2_OLD_ROOTS[0]}"
+fi
+test -d "$SR_PHASE4B2_ROOT"
 
 export SR_INPUT_ROOT="/root/autodl-tmp/SpecRhythm-data/results/phase4/eba0df493a7fd350ef3c8776e06d30e6196b6749/phase4b1-gate2-corrected5-20260827T040244Z"
 export SR_PHASE4B_WORKLOAD="$SR_INPUT_ROOT/workloads/corrected-100.jsonl"
+export SR_PHASE4B_REFERENCE="$SR_INPUT_ROOT/Gate-3-corrected-100/reference/stock-target-reference.json"
 export SR_PHASE4B_CONFIG="$PWD/configs/phase4b_dual_batch_1d2v.yaml"
+export SR_PHASE4B_ENVIRONMENT="$SR_PHASE4B2_ROOT/environment.json"
 export SR_PHASE4B_TOPOLOGY="$SR_PHASE4B2_ROOT/topology.json"
 export SR_PHASE4B_PATCH_MANIFEST="$SR_PHASE4B2_ROOT/patch-stage/vllm-patch-stack.json"
 
-test -f "$SR_PHASE4B_WORKLOAD" || exit 1
-test -f "$SR_PHASE4B_CONFIG" || exit 1
-test -f "$SR_PHASE4B_TOPOLOGY" || exit 1
-test -f "$SR_PHASE4B_PATCH_MANIFEST" || exit 1
-test -f "$SR_PHASE4B2_ROOT/target/decode-performance.json" || exit 1
-test -f "$SR_PHASE4B2_ROOT/serial/resident-serial.json" || exit 1
-test -f "$SR_PHASE4B2_ROOT/serial/runtime-manifest.json" || exit 1
-test -f "$SR_PHASE4B2_ROOT/serial/decode-performance.json" || exit 1
-test ! -e "$SR_PHASE4B2_ROOT/serial/decode-performance.invalid-pre-fix.json" || exit 1
-
-sha256sum \
-  "$SR_PHASE4B2_ROOT/serial/resident-serial.json" \
-  "$SR_PHASE4B2_ROOT/serial/runtime-manifest.json" \
-  > "$SR_PHASE4B2_ROOT/serial/recovery-source-before.sha256"
-sha256sum "$SR_PHASE4B2_ROOT/serial/decode-performance.json" \
-  > "$SR_PHASE4B2_ROOT/serial/decode-performance.invalid-pre-fix.sha256"
-mv "$SR_PHASE4B2_ROOT/serial/decode-performance.json" \
-  "$SR_PHASE4B2_ROOT/serial/decode-performance.invalid-pre-fix.json"
-
-source integrations/vllm/phase4b2_run_helpers.sh || exit 1
-phase4b2_measure_mode serial "$SR_PHASE4B2_ROOT/serial" \
-  "$SR_PHASE4B_WORKLOAD" || exit 1
-
-sha256sum \
-  "$SR_PHASE4B2_ROOT/serial/resident-serial.json" \
-  "$SR_PHASE4B2_ROOT/serial/runtime-manifest.json" \
-  > "$SR_PHASE4B2_ROOT/serial/recovery-source-after.sha256"
-diff -u "$SR_PHASE4B2_ROOT/serial/recovery-source-before.sha256" \
-  "$SR_PHASE4B2_ROOT/serial/recovery-source-after.sha256" || exit 1
-
-python - "$SR_PHASE4B2_ROOT/serial/decode-performance.json" \
-  "$SR_PHASE4B_MEASUREMENT_COMMIT" <<'PY'
-import json, sys
-
-value = json.load(open(sys.argv[1], encoding="utf-8"))
-metadata = value["phase4b2_metadata_provenance"]
-assert value["mode"] == "serial"
-assert value["valid"] is True
-assert value["errors"] == []
-assert value["performance_result"] is True
-assert value["execution_git_commit"] == \
-    "56bd0a50e3b5f33cf30e32564532b1483ea7e34d"
-assert value["measurement_code_git_commit"] == sys.argv[2]
-assert metadata["legacy_serial_metadata_recovered"] is True
-assert metadata["performance_candidate_source"] == "runtime-manifest.phase4a1"
-assert metadata["final_sync_source"] == "runtime-manifest.phase4a1"
-assert metadata["recovery_validation_errors"] == []
-assert value["cleanup_valid"] is True
-assert all(row["token_accounting_valid"] for row in value["requests"])
-print("SERIAL VALID")
+# Bind unchanged input files and execution provenance before approving the pair.
+python - "$SR_PHASE4B2_ROOT" "$SR_PHASE4B_EXECUTION_COMMIT" \
+  "$SR_PHASE4B_WORKLOAD" "$SR_PHASE4B_CONFIG" \
+  "$SR_PHASE4B_TOPOLOGY" "$SR_PHASE4B_PATCH_MANIFEST" <<'PY'
+import hashlib, json, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+for mode in ("target", "serial"):
+    value = json.loads((root / mode / "decode-performance.json").read_text())
+    assert value.get("execution_git_commit", value["git_commit"]) == sys.argv[2]
+    for key, name in zip(("workload", "config", "topology", "patch_manifest"), sys.argv[3:]):
+        assert hashlib.sha256(pathlib.Path(name).read_bytes()).hexdigest() == value["artifact_sha256"][key]
+assert sum(bool(line.strip()) for line in pathlib.Path(sys.argv[3]).read_text().splitlines()) == 100
 PY
 
-test ! -e "$SR_PHASE4B2_ROOT/target-serial-exact.json" || exit 1
-test ! -e "$SR_PHASE4B2_ROOT/target-serial-exact.md" || exit 1
-phase4b2_compare_target_serial "$SR_PHASE4B2_ROOT" || exit 1
+# Preserve all old exact-only failure evidence in place. New outputs have different names.
+test ! -e "$SR_PHASE4B2_ROOT/target-serial-matched-work.json"
+test ! -e "$SR_PHASE4B2_ROOT/target-serial-matched-work.md"
+test ! -e "$SR_PHASE4B2_ROOT/target-serial-before-dual.sha256"
+find "$SR_PHASE4B2_ROOT/target" "$SR_PHASE4B2_ROOT/serial" -type f -print0 | \
+  sort -z | xargs -0 sha256sum > "$SR_PHASE4B2_ROOT/target-serial-before-dual.sha256"
 
-python - "$SR_PHASE4B2_ROOT/target-serial-exact.json" <<'PY'
-import json, sys
-
-value = json.load(open(sys.argv[1], encoding="utf-8"))
-assert value["valid"] is True
-assert value["comparison_complete"] is False
-assert value["performance_valid"] is False
-assert value["speedups"] is None
-assert value["exact_correctness_triangle"]["target_equals_serial"]["equal"] is True
-print("TARGET == SERIAL EXACT")
-PY
+source integrations/vllm/phase4b2_run_helpers.sh
+phase4b2_compare_target_serial "$SR_PHASE4B2_ROOT"
+phase4b2_require_matched_work_pair "$SR_PHASE4B2_ROOT" 100
 ```
 
-Expected output is `SERIAL VALID`, followed by `TARGET == SERIAL EXACT`. Stop on every other
-outcome. Only then is a fresh Dual-Batch GPU run permitted. The recovered Serial metrics remain
-preliminary, and no speedup exists until the exact three-mode triangle passes.
+Expected for the reported current pair (verified from its files, never hard-coded):
 
-## One-shot A800 procedure
+```text
+MATCHED WORK TARGET/SERIAL PASS
+exact_sequence_equal = false
+performance_comparable = true
+```
 
-Run every block in the same shell. Stop immediately on any nonzero command or failed assertion.
-Never delete or reuse the newly created result root. Do not retry a mode until it passes.
+The diagnostic should retain 9 divergent and 91 matching requests. These counts are observations,
+not approval assertions. The exact command approving progression is
+`phase4b2_require_matched_work_pair "$SR_PHASE4B2_ROOT" 100`; it verifies the comparison's input
+hashes again. Do not rederive either mode or investigate individual divergent requests.
 
-### 1. Exact checkout, environment and immutable inputs
+Serial's legacy metadata recovery is already complete: execution `56bd0a50...`, measurement
+`abe452d3...`, `valid=true`, `errors=[]`. That recovery remains restricted to Serial with both
+raw fields absent and matching raw/runtime/decode-ready evidence. The raw Serial artifacts
+remain immutable. The earlier exact-only failed pair is retained as `target-serial-exact.*`.
+
+## Stage B — one Dual-Batch execution at the original execution commit (operator only)
+
+Keep the existing result root, environment, topology, workload and patch manifest. Do not restore,
+reapply or regenerate the patch stack. Do not run Target, Serial, hardware preflight generation,
+Gate3 diagnostics or Dual-Eager. The existing helper uses Draft GPU0 and Target GPU1,2 TP2.
 
 ```bash
-cd /root/autodl-tmp/src/SpecRhythm || exit 1
-git fetch origin codex/vllm-serving-v0.1 || exit 1
-git switch --detach origin/codex/vllm-serving-v0.1 || exit 1
-export SR_PHASE4B_COMMIT="$(git rev-parse HEAD)"
-test -z "$(git status --porcelain)" || exit 1
-
-conda activate /root/autodl-tmp/envs/specrhythm-phase4-vllm-0.25.1 || exit 1
-python -m pip install -e '.[dev]' --no-deps --no-build-isolation || exit 1
+# Approve with the new comparator helper BEFORE sourcing the old execution helper.
+phase4b2_require_matched_work_pair "$SR_PHASE4B2_ROOT" 100
+sha256sum -c "$SR_PHASE4B2_ROOT/target-serial-before-dual.sha256"
+test ! -e "$SR_PHASE4B2_ROOT/dual"
+test -z "$(git status --porcelain)"
+git switch --detach "$SR_PHASE4B_EXECUTION_COMMIT"
+export SR_PHASE4B_COMMIT="$SR_PHASE4B_EXECUTION_COMMIT"
+test "$(git rev-parse HEAD)" = "$SR_PHASE4B_EXECUTION_COMMIT"
+python -m pip install -e '.[dev]' --no-deps --no-build-isolation
 
 export VLLM_USE_V2_MODEL_RUNNER=0
 export VLLM_BATCH_INVARIANT=1
@@ -176,227 +170,145 @@ export VLLM_ALLOW_INSECURE_SERIALIZATION=1
 export SR_DRAFT_MODEL="/root/autodl-tmp/models/Qwen3-0.6B"
 export SR_TARGET_MODEL="/root/autodl-tmp/models/Qwen3-32B"
 export SR_VLLM_SOURCE="/root/autodl-tmp/src/vllm-v0.25.1"
-export SR_PHASE4B_CONFIG="$PWD/configs/phase4b_dual_batch_1d2v.yaml"
 export SR_VLLM_ROOT="$(python - <<'PY'
 from importlib import metadata
 print(metadata.distribution("vllm").locate_file(""))
 PY
 )"
+export PHASE4B1_OVERLAP_REQUIREMENT=required
+unset PHASE4B1_NUMERICAL_PLAN PHASE4B1_NUMERICAL_OUTPUT
 
-export SR_INPUT_ROOT="/root/autodl-tmp/SpecRhythm-data/results/phase4/eba0df493a7fd350ef3c8776e06d30e6196b6749/phase4b1-gate2-corrected5-20260827T040244Z"
-export SR_PHASE4B_WORKLOAD="$SR_INPUT_ROOT/workloads/corrected-100.jsonl"
-export SR_PHASE4B_REFERENCE="$SR_INPUT_ROOT/Gate-3-corrected-100/reference/stock-target-reference.json"
-export SR_HIST_BOOTSTRAP="/root/autodl-tmp/SpecRhythm-data/results/phase4/8773a611a555c9c6efcbce146bb722124d0ee513/phase4b1-gate3-per-token-kv-20260904T092503Z"
-export SR_HIST_ASYNC="/root/autodl-tmp/SpecRhythm-data/results/phase4/efea5c8884e93b39114c320a724dc2c768ec1c8d/phase4b1-gate3-matched-bootstrap-20260904T161526Z"
-
-test -d "$SR_VLLM_ROOT/vllm" || exit 1
-test -d "$SR_VLLM_SOURCE/.git" || exit 1
+test -d "$SR_DRAFT_MODEL"
+test -d "$SR_TARGET_MODEL"
+test -f "$SR_PHASE4B_REFERENCE"
+test -f "$SR_PHASE4B_ENVIRONMENT"
 test "$(git -C "$SR_VLLM_SOURCE" rev-parse HEAD)" = \
-  "752a3a504485790a2e8491cacbb35c137339ad34" || exit 1
-test -d "$SR_DRAFT_MODEL" || exit 1
-test -d "$SR_TARGET_MODEL" || exit 1
-test -f "$SR_PHASE4B_WORKLOAD" || exit 1
-test "$(wc -l < "$SR_PHASE4B_WORKLOAD")" -eq 100 || exit 1
-test -f "$SR_PHASE4B_REFERENCE" || exit 1
-test -d "$SR_HIST_BOOTSTRAP" || exit 1
-test -d "$SR_HIST_ASYNC" || exit 1
-```
+  "752a3a504485790a2e8491cacbb35c137339ad34"
+# Config must still be the artifact-bound configuration after switching checkout.
+python - "$SR_PHASE4B_CONFIG" "$SR_PHASE4B2_ROOT/target/decode-performance.json" <<'PY'
+import hashlib, json, pathlib, sys
+assert hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest() == \
+    json.loads(pathlib.Path(sys.argv[2]).read_text())["artifact_sha256"]["config"]
+PY
 
-Expected: detached checkout is clean, the conda environment resolves pinned vLLM, both model
-directories and all immutable inputs exist, and the workload contains exactly 100 rows.
-
-### 2. Check historical evidence, GPU state and exact patch state
-
-```bash
-export SR_PHASE4B2_ROOT="/root/autodl-tmp/SpecRhythm-data/results/phase4/$SR_PHASE4B_COMMIT/phase4b2-decode-performance-$(date -u +%Y%m%dT%H%M%SZ)"
-test ! -e "$SR_PHASE4B2_ROOT" || exit 1
-mkdir -p "$SR_PHASE4B2_ROOT"
-
-find "$SR_HIST_BOOTSTRAP" -type f -print0 | sort -z | \
-  xargs -0 sha256sum > "$SR_PHASE4B2_ROOT/historical-bootstrap-before.sha256" || exit 1
-find "$SR_HIST_ASYNC" -type f -print0 | sort -z | \
-  xargs -0 sha256sum > "$SR_PHASE4B2_ROOT/historical-async-before.sha256" || exit 1
-
-nvidia-smi -L | tee "$SR_PHASE4B2_ROOT/nvidia-smi-L.txt" || exit 1
-nvidia-smi topo -m | tee "$SR_PHASE4B2_ROOT/nvidia-smi-topo.txt" || exit 1
-if pgrep -af 'vllm|specrhythm.*draft-service|EngineCore' \
-    > "$SR_PHASE4B2_ROOT/preflight-processes.txt"; then
-  cat "$SR_PHASE4B2_ROOT/preflight-processes.txt" >&2
+# Read-only process/socket and installed-patch checks; no GPU experiment here.
+if pgrep -af 'vllm|specrhythm.*draft-service|EngineCore'; then
+  echo 'Existing GPU process: stop and resolve ownership before executing Dual' >&2
   exit 1
 fi
-if find /tmp -maxdepth 1 -type s -name 'sr4b1-*' -print -quit | grep -q .; then
-  echo "stale Phase-4B socket exists" >&2
+if test -n "$(find /tmp -maxdepth 1 -type s -name 'sr4b1-*' -print -quit)"; then
+  echo 'Existing Phase-4B socket: stop; do not unlink blindly' >&2
   exit 1
 fi
-
-source integrations/vllm/phase4b_run_helpers.sh || exit 1
-source integrations/vllm/phase4b1_gate_helpers.sh || exit 1
-source integrations/vllm/phase4b2_run_helpers.sh || exit 1
-phase4b1_restore_stock "$SR_PHASE4B2_ROOT/patch-stage" || exit 1
-
-env -u CUDA_VISIBLE_DEVICES VLLM_BATCH_INVARIANT=1 specrhythm phase4-probe \
-  --config "$SR_PHASE4B_CONFIG" --vllm-source "$SR_VLLM_SOURCE" \
-  --environment-output "$SR_PHASE4B2_ROOT/environment.json" \
-  --topology-output "$SR_PHASE4B2_ROOT/topology.json" \
-  --validation-output "$SR_PHASE4B2_ROOT/probe-validation.json" || exit 1
-export SR_PHASE4B_ENVIRONMENT="$SR_PHASE4B2_ROOT/environment.json"
-export SR_PHASE4B_TOPOLOGY="$SR_PHASE4B2_ROOT/topology.json"
-
-CUDA_VISIBLE_DEVICES=1,2 VLLM_USE_V2_MODEL_RUNNER=0 VLLM_BATCH_INVARIANT=1 \
-  specrhythm phase4-batch-invariant-preflight \
-    --correctness-mode batch-invariant \
-    --output "$SR_PHASE4B2_ROOT/batch-invariant-preflight.json" || exit 1
-
-phase4b1_apply_patch_stack "$SR_PHASE4B2_ROOT/patch-stage" || exit 1
+test ! -e "$SR_PHASE4B2_ROOT/dual-patched-state-check.json"
 python integrations/vllm/manage_patch.py check \
   --vllm-root "$SR_VLLM_ROOT" --source "$SR_VLLM_SOURCE" \
-  --expect-state patched \
-  --manifest "$SR_PHASE4B2_ROOT/patched-state-final-check.json" || exit 1
-```
+  --expect-state patched --manifest "$SR_PHASE4B2_ROOT/dual-patched-state-check.json"
 
-Expected: three A800s are visible, no stale owned process/socket exists, the fresh environment
-and topology probe validates, the TP=2 batch-invariant hardware preflight passes, and the
-patched-state manifest validates the exact pinned runner, scheduler and active patch hashes.
-The fresh topology artifact, rather than a historical Gate input, is bound into every mode
-result. This procedure does not freeze or rerun a stock reference.
-
-### 3. Target, then validate Target
-
-```bash
-phase4b2_run_mode target "$SR_PHASE4B2_ROOT/target" \
-  "$SR_PHASE4B_WORKLOAD" 100 "$SR_PHASE4B_REFERENCE" || exit 1
-phase4b2_measure_mode target "$SR_PHASE4B2_ROOT/target" \
-  "$SR_PHASE4B_WORKLOAD" || exit 1
-
-python - "$SR_PHASE4B2_ROOT/target/decode-performance.json" <<'PY'
-import json, sys
-value = json.load(open(sys.argv[1], encoding="utf-8"))
-assert value["schema_version"] == "specrhythm.phase4b2-decode-performance.v1"
-assert value["mode"] == "target"
-assert value["valid"] is True
-assert value["performance_result"] is True
-assert value["reports_speedup"] is False
-assert value["cleanup_valid"] is True
-assert value["measurement"]["setup_excluded"] is True
-assert value["measurement"]["bootstrap_excluded_from_measured_token_count"] is True
-assert value["mode_semantics"]["draft_measured_work"] is False
-assert value["request_count"] == 100
-assert all(row["token_accounting_valid"] for row in value["requests"])
-PY
-```
-
-Stop if Target exits nonzero, cleanup is invalid, the Phase-4B.2 boundary is absent/early, any
-commit is missing, or bootstrap accounting fails. A historical stock mismatch is retained as
-diagnostic evidence but is not a resident cross-mode failure.
-
-### 4. Serial, validate Serial, then exact Target–Serial gate
-
-```bash
-phase4b2_run_mode serial "$SR_PHASE4B2_ROOT/serial" \
-  "$SR_PHASE4B_WORKLOAD" 100 "$SR_PHASE4B_REFERENCE" || exit 1
-phase4b2_measure_mode serial "$SR_PHASE4B2_ROOT/serial" \
-  "$SR_PHASE4B_WORKLOAD" || exit 1
-
-python - "$SR_PHASE4B2_ROOT/serial/decode-performance.json" <<'PY'
-import json, sys
-value = json.load(open(sys.argv[1], encoding="utf-8"))
-assert value["mode"] == "serial"
-assert value["valid"] is True
-assert value["cleanup_valid"] is True
-assert value["mode_semantics"]["initial_proposal_after_measurement_start"] is True
-assert all(row["token_accounting_valid"] for row in value["requests"])
-PY
-
-phase4b2_compare_target_serial "$SR_PHASE4B2_ROOT" || exit 1
-python - "$SR_PHASE4B2_ROOT/target-serial-exact.json" <<'PY'
-import json, sys
-value = json.load(open(sys.argv[1], encoding="utf-8"))
-assert value["valid"] is True
-assert value["comparison_complete"] is False
-assert value["performance_valid"] is False
-assert value["speedups"] is None
-assert value["exact_correctness_triangle"]["target_equals_serial"]["equal"] is True
-PY
-```
-
-The intentionally incomplete pair comparison reports no speedup. Stop before Dual on any exact
-request/prompt/bootstrap/measured-token/final-token/finish/termination or provenance difference.
-
-### 5. Dual-Batch, validate Dual, then exact triangle and metrics
-
-```bash
+source integrations/vllm/phase4b_run_helpers.sh
+source integrations/vllm/phase4b1_gate_helpers.sh
+source integrations/vllm/phase4b2_run_helpers.sh
+# This is the ONLY GPU execution command in the continuation. Never retry in place.
 phase4b2_run_mode dual "$SR_PHASE4B2_ROOT/dual" \
   "$SR_PHASE4B_WORKLOAD" 100 "$SR_PHASE4B_REFERENCE" || exit 1
-phase4b2_measure_mode dual-batch "$SR_PHASE4B2_ROOT/dual" \
-  "$SR_PHASE4B_WORKLOAD" || exit 1
+sha256sum -c "$SR_PHASE4B2_ROOT/target-serial-before-dual.sha256"
+```
 
-python - "$SR_PHASE4B2_ROOT/dual/decode-performance.json" <<'PY'
-import json, sys
-value = json.load(open(sys.argv[1], encoding="utf-8"))
-assert value["mode"] == "dual-batch"
-assert value["valid"] is True
-assert value["cleanup_valid"] is True
+Stop on a nonzero run, failed cleanup, missing overlap, or existing Dual directory. Preserve the
+failed run if one occurs; do not run again for a favorable result. This stage uses the unchanged
+resident Dual-Batch state machine already present at `56bd0a50...`.
+
+## Stage C — offline Dual measurement and final three-mode comparison
+
+Switch back to the pinned comparison commit and re-source its helper. Do not rerun any mode.
+
+```bash
+test -z "$(git status --porcelain)"
+git switch --detach "$SR_PHASE4B_MEASUREMENT_COMMIT"
+test "$(git rev-parse HEAD)" = "$SR_PHASE4B_MEASUREMENT_COMMIT"
+python -m pip install -e '.[dev]' --no-deps --no-build-isolation
+source integrations/vllm/phase4b2_run_helpers.sh
+phase4b2_require_matched_work_pair "$SR_PHASE4B2_ROOT" 100
+
+test ! -e "$SR_PHASE4B2_ROOT/dual/decode-performance.json"
+phase4b2_measure_mode dual-batch "$SR_PHASE4B2_ROOT/dual" "$SR_PHASE4B_WORKLOAD"
+python - "$SR_PHASE4B2_ROOT/dual/decode-performance.json" \
+  "$SR_PHASE4B_EXECUTION_COMMIT" "$SR_PHASE4B_MEASUREMENT_COMMIT" <<'PY'
+import json, pathlib, sys
+value = json.loads(pathlib.Path(sys.argv[1]).read_text())
+assert value["valid"] is True and value["errors"] == []
+assert value["performance_result"] is True and value["cleanup_valid"] is True
+assert value["execution_git_commit"] == sys.argv[2]
+assert value["measurement_code_git_commit"] == sys.argv[3]
+assert value["request_count"] == value["metrics"]["completed_requests"] == 100
 assert value["mode_semantics"]["natural_draft_target_overlap"] is True
 assert value["mode_semantics"]["per_round_global_cuda_synchronize"] is False
 assert all(row["token_accounting_valid"] for row in value["requests"])
+print("DUAL PERFORMANCE ARTIFACT VALID")
 PY
 
-phase4b2_compare_all "$SR_PHASE4B2_ROOT" || exit 1
+test ! -e "$SR_PHASE4B2_ROOT/decode-performance-comparison.json"
+test ! -e "$SR_PHASE4B2_ROOT/decode-performance-comparison.md"
+phase4b2_compare_all "$SR_PHASE4B2_ROOT"
 python - "$SR_PHASE4B2_ROOT/decode-performance-comparison.json" <<'PY'
-import json, sys
-value = json.load(open(sys.argv[1], encoding="utf-8"))
-assert value["valid"] is True
+import json, pathlib, sys
+value = json.loads(pathlib.Path(sys.argv[1]).read_text())
+assert value["valid"] is True and value["errors"] == []
 assert value["comparison_complete"] is True
 assert value["performance_valid"] is True
-assert value["exact_correctness_triangle"]["valid"] is True
-assert value["exact_correctness_triangle"]["target_equals_serial"]["equal"] is True
-assert value["exact_correctness_triangle"]["target_equals_dual-batch"]["equal"] is True
+assert value["matched_work_comparability"]["valid"] is True
+assert all(row["completed_requests"] == 100 for row in value["metrics"].values())
 assert value["speedups"] is not None
-print(json.dumps(value["metrics"], indent=2, sort_keys=True))
-print(json.dumps(value["speedups"], indent=2, sort_keys=True))
+print("performance_valid = true")
+print("matched_work_comparability.valid = true")
+print("exact_sequence_diagnostic.all_equal =", json.dumps(value["exact_sequence_diagnostic"]["all_equal"]))
+for key in ("metrics", "warmup", "speedups", "exact_sequence_diagnostic"):
+    print(key, json.dumps(value[key], indent=2, sort_keys=True))
+print(value["claim_boundary"])
 PY
+sha256sum -c "$SR_PHASE4B2_ROOT/target-serial-before-dual.sha256"
 ```
 
-Only the final artifact may report speedup. It reports makespan speedup with an explicit
-denominator and the corresponding throughput ratios. `warmup_clean=false` does not silently
-discard the run; inspect each mode's `post_measurement_jit_events` before interpreting numbers.
+No assertion requires exact generated-token equality. The JSON and Markdown include measured
+count, decode makespan, aggregate throughput, latency p50/p90/p99, TPOT mean/p50/p90/p99,
+`warmup_clean` and post-measurement JIT count for each mode. They also expose:
 
-### 6. Prove historical immutability and freeze the new root
+- `target_vs_serial`: Serial relative to Target.
+- `target_vs_dual_batch`: Dual relative to Target.
+- `serial_vs_dual_batch`: Dual relative to Serial.
 
-```bash
-find "$SR_HIST_BOOTSTRAP" -type f -print0 | sort -z | \
-  xargs -0 sha256sum > "$SR_PHASE4B2_ROOT/historical-bootstrap-after.sha256" || exit 1
-find "$SR_HIST_ASYNC" -type f -print0 | sort -z | \
-  xargs -0 sha256sum > "$SR_PHASE4B2_ROOT/historical-async-after.sha256" || exit 1
-diff -u "$SR_PHASE4B2_ROOT/historical-bootstrap-before.sha256" \
-  "$SR_PHASE4B2_ROOT/historical-bootstrap-after.sha256" || exit 1
-diff -u "$SR_PHASE4B2_ROOT/historical-async-before.sha256" \
-  "$SR_PHASE4B2_ROOT/historical-async-after.sha256" || exit 1
+`makespan_speedup = baseline makespan / compared mode makespan`;
+`throughput_ratio = compared mode throughput / baseline throughput`. A value below one is a
+slowdown. Both ratios agree for equal measured work. No Serial slowdown is hidden or corrected.
 
-find "$SR_PHASE4B2_ROOT" -type f ! -name SHA256SUMS -print0 | sort -z | \
-  xargs -0 sha256sum > "$SR_PHASE4B2_ROOT/SHA256SUMS" || exit 1
-chmod -R a-w "$SR_PHASE4B2_ROOT" || exit 1
-echo "$SR_PHASE4B2_ROOT"
-```
+Known metrics from the operator's existing artifacts (not a new GPU measurement by this change):
 
-Stop here and return the root, the three `decode-performance.json` files, final comparison JSON
-and Markdown, and all three `warmup_clean` values. Do not run again for a favorable number.
+| Mode | Requests | Measured tokens | Makespan ms | Throughput tok/s | Mean TPOT ms | Warmup clean | JIT count |
+|---|---:|---:|---:|---:|---:|---|---:|
+| Target | 100 | 1487 | 5813.059543 | 255.8033319632212 | 382.881551485 | true | 0 |
+| Serial | 100 | 1487 | 50394.65011 | 29.50710039169275 | 2345.39918652 | false | 1 |
+| Dual-Batch | pending | pending | pending | pending | pending | pending | pending |
 
-## Hard stop conditions
+Expected Serial/Target makespan speedup and throughput ratio are approximately `0.115351x`
+(Serial takes approximately `8.669x` the Target makespan). Percentiles come directly from the
+existing artifacts; they were not supplied in the handoff and are not invented here.
 
-- Any command returns nonzero or any lifecycle/socket/process cleanup check fails.
-- A setup/proposal/commit timestamp precedes the Phase-4B.2 boundary.
-- A Target-mode Draft proposal is observed, or Serial round-zero/Dual initial Draft starts early.
-- Target, Serial or Dual token accounting differs from `bootstrap + measured == final`.
-- Target differs exactly from Serial, or either differs exactly from Dual.
-- Workload, config, patch stack, placement or topology provenance differs across modes.
-- Physical overlap evidence is absent from the Dual run.
+## Historical evidence and stop conditions
 
-Do not continue to Dual after a Target–Serial failure, and never report speedup from an invalid or
-incomplete comparison.
+Historical Gate3 roots remain immutable, including
+`8773a611a555c9c6efcbce146bb722124d0ee513` and
+`efea5c8884e93b39114c320a724dc2c768ec1c8d`. Existing
+`historical-bootstrap-before.sha256` / `historical-bootstrap-after.sha256` and corresponding
+async checksum evidence are retained. This continuation does not write to either historical root,
+replace the existing result root, or rewrite Target/Serial files or their metrics.
 
-## After successful bring-up
+Hard stops are invalid artifacts or cleanup; missing/duplicate/incomplete requests; unequal
+prompt/bootstrap/output limits or measured counts; inconsistent token accounting; unequal or
+missing workload/config/model/patch/execution/topology provenance; invalid measurement boundaries;
+and absent Dual physical overlap or per-round global synchronization. These failures suppress
+speedups. Exact post-bootstrap token differences and fixed-length finish/stop differences are
+diagnostic evidence. Warmup/JIT differences are recorded for later steady-state work.
 
-Phase 4B.3 will add fixed-output workloads and batch-size, output-length and context-length sweeps.
-Only after those baselines are stable does Phase 4C add Dual-Eager. Serving arrival/load sweeps,
-throughput/goodput/SLO, the capacity knee and final paper evaluation follow later.
+After successful three-mode bring-up, proceed to Phase 4B.3 fixed-output workloads, context-length,
+batch-size and output-length sweeps, and repeated steady-state measurements. Phase 4C adds
+Dual-Eager afterward. Do not add more exact-token diagnostics before those phases.

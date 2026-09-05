@@ -1066,7 +1066,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     phase4b2_compare = subparsers.add_parser(
         "phase4b2-decode-compare",
-        help="exact-compare resident modes and expose metrics only after the full triangle",
+        help="compare resident matched work and report exact sequence diagnostics separately",
     )
     phase4b2_compare.add_argument("--target", required=True)
     phase4b2_compare.add_argument("--serial", required=True)

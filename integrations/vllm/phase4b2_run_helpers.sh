@@ -47,8 +47,32 @@ phase4b2_compare_target_serial () {
   specrhythm phase4b2-decode-compare \
     --target "$phase4b2_root/target/decode-performance.json" \
     --serial "$phase4b2_root/serial/decode-performance.json" \
-    --output "$phase4b2_root/target-serial-exact.json" \
-    --markdown-output "$phase4b2_root/target-serial-exact.md"
+    --output "$phase4b2_root/target-serial-matched-work.json" \
+    --markdown-output "$phase4b2_root/target-serial-matched-work.md"
+}
+
+phase4b2_require_matched_work_pair () {
+  python - "$1" "${2:-100}" <<'PY'
+import hashlib
+import json
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+report = json.loads((root / "target-serial-matched-work.json").read_text())
+assert report["schema_version"] == "specrhythm.phase4b2-decode-performance-comparison.v2"
+assert report["valid"] is True and report["errors"] == []
+assert report["comparison_complete"] is False
+assert report["performance_valid_for_pair"] is True
+assert report["matched_work_comparability"]["valid"] is True
+for mode in ("target", "serial"):
+    path = root / mode / "decode-performance.json"
+    assert hashlib.sha256(path.read_bytes()).hexdigest() == report["input_sha256"][mode]
+    assert report["metrics"][mode]["completed_requests"] == int(sys.argv[2])
+print("MATCHED WORK TARGET/SERIAL PASS")
+print("exact_sequence_equal =", json.dumps(report["exact_sequence_diagnostic"]["all_equal"]))
+print("performance_comparable = true")
+PY
 }
 
 phase4b2_compare_all () {

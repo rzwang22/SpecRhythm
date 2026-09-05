@@ -293,10 +293,13 @@ boundary. TPOT is `(last_commit-first_commit)/(measured_tokens-1)` and is null f
 request. Makespan is the latest final commit minus the boundary; aggregate throughput is measured
 committed tokens divided by makespan.
 
-Standalone mode artifacts cannot produce a speedup. The final comparator requires exact resident
-Target==Serial==Dual request IDs, prompt hashes, bootstrap, maximum output, measured/final tokens,
-finish/termination, workload, patch, configuration and topology provenance. A mismatch sets
-`performance_valid=false` and emits no speedup. Timestamped process output is used only to report
+Standalone mode artifacts cannot produce a speedup. Comparison v2 gates pair and three-mode
+speedups on matched work: equal request sets/counts, prompt hashes/counts, bootstrap, maximum
+output and measured counts; valid within-mode token accounting and cleanup; equivalent
+measurement boundaries, workload/config/model/patch/execution/topology provenance. Exact
+generated sequences remain independent diagnostics. Finish/termination differences at the frozen
+output length are diagnostic provenance. A matched-work failure suppresses speedup; sequence
+differences do not. Timestamped process output is used only to report
 post-boundary JIT warnings and `warmup_clean`; it is never a latency authority. The initial
 corrected-100 run is functional bring-up, not a final paper workload or result. The Mac coding
 agent implemented and CPU-tested this infrastructure without running CUDA. See
@@ -310,8 +313,18 @@ strict offline compatibility path can reuse only that exact historical execution
 when both raw fields are absent, and only after exact raw/runtime/decode-ready provenance and
 two-rank GPU1/GPU2 synchronization validation. It records execution and measurement-code commits
 separately and never rewrites the raw GPU artifacts. Target and Dual have no fallback. The
-observed Serial metrics remain invalid until this offline recovery and the exact Target/Serial
-gate pass; Dual remains gated behind that comparison.
+Serial artifact has now recovered successfully: 100 requests, 1487 measured tokens,
+50394.65011 ms makespan, 29.50710039169275 tok/s and mean TPOT 2345.39918652 ms;
+`warmup_clean=false`, one post-boundary JIT event. Target has 100 requests, 1487 measured tokens,
+5813.059543 ms makespan, 255.8033319632212 tok/s and mean TPOT 382.881551485 ms;
+`warmup_clean=true`, zero post-boundary JIT events. These are operator-reported GPU results.
+Nine Target/Serial trajectories differ after identical bootstrap states; that evidence is retained
+without further per-token investigation. The offline comparator verifies per-request counts from
+the immutable artifacts before approving the pair. Dual is next, at the same `56bd0a50...`
+execution commit; measurement/comparison uses the new commit. PR #4 stays Draft and unmerged.
+The resulting claim is preliminary matched-work decode-only bring-up, with no exact-sequence,
+output-quality, steady-state or final paper benchmark equivalence claim. Phase 4B.3 sweeps
+follow, then Phase 4C Dual-Eager.
 
 After a successful Phase 4B.2 bring-up, Phase 4B.3 adds fixed-output batch/output/context sweeps;
 Phase 4C then adds real-GPU Dual-Eager. Arrival-rate, throughput/goodput/SLO and capacity-knee

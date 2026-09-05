@@ -232,9 +232,11 @@ therefore: numerical qualification complete, further Gate3 micro-diagnostics def
 
 Phase 4B.2 now provides a post-setup Target-TP measurement boundary, explicit semantic commit
 timestamps, exact bootstrap/measured-token accounting, decode latency/TPOT/makespan/throughput,
-JIT provenance, and a fail-closed resident Target/Serial/Dual-Batch comparator. Speedups are
-suppressed until all three resident modes match exactly. No GPU performance run has yet been
-performed for this implementation. The corrected-100 procedure is functional bring-up only; see
+JIT provenance, and a fail-closed matched-work Target/Serial/Dual-Batch comparator. Exact token
+sequences remain independent diagnostics. Equal work, provenance and valid per-mode artifacts
+permit pair and three-mode speedups despite post-bootstrap token divergence. The operator's
+Target and recovered Serial executions are reusable; one Dual-Batch execution is next.
+The corrected-100 procedure is preliminary functional performance bring-up only; see
 [docs/phase4b2-decode-performance-runbook.md](docs/phase4b2-decode-performance-runbook.md).
 Packed-tree verification, Dual-Eager, KVConnector, load/SLO evaluation and final paper performance
 remain outside this phase.

@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
+from copy import deepcopy
 from pathlib import Path
 from typing import Optional
 
@@ -829,7 +833,7 @@ def test_warmup_jit_is_provenance_not_silently_removed(tmp_path: Path) -> None:
     assert result["jit_observation"]["post_measurement_jit_event_count"] == 1
 
 
-def test_exact_pair_then_full_triangle_enables_speedups(tmp_path: Path) -> None:
+def test_matched_pair_then_full_triangle_enables_speedups(tmp_path: Path) -> None:
     paths = {}
     for mode in ("target", "serial", "dual-batch"):
         result = _measure(tmp_path, mode)
@@ -843,7 +847,8 @@ def test_exact_pair_then_full_triangle_enables_speedups(tmp_path: Path) -> None:
     )
     assert pair["valid"] is True
     assert pair["performance_valid"] is False
-    assert pair["speedups"] is None
+    assert pair["performance_valid_for_pair"] is True
+    assert pair["speedups"]["target_vs_serial"]["makespan_speedup"] == 1.0
     comparison = compare_decode_performance_results(
         target_path=paths["target"],
         serial_path=paths["serial"],
@@ -856,13 +861,20 @@ def test_exact_pair_then_full_triangle_enables_speedups(tmp_path: Path) -> None:
     assert comparison["speedups"] is not None
 
 
-@pytest.mark.parametrize("field", ["measured_committed_output_token_ids", "finish_reason"])
-def test_exact_cross_mode_mismatch_fails_closed(tmp_path: Path, field: str) -> None:
+@pytest.mark.parametrize(
+    "field", ["measured_committed_output_token_ids", "finish_reason", "termination_reason"]
+)
+def test_exact_cross_mode_mismatch_is_diagnostic(tmp_path: Path, field: str) -> None:
     for mode in ("target", "serial", "dual-batch"):
         _measure(tmp_path, mode)
     serial_path = tmp_path / "serial" / "decode-performance.json"
     serial = json.loads(serial_path.read_text(encoding="utf-8"))
-    serial["requests"][0][field] = [999] if field.endswith("token_ids") else "stop"
+    row = serial["requests"][0]
+    if field.endswith("token_ids"):
+        row[field][0] = 999
+        row["total_generated_token_ids"][1] = 999
+    else:
+        row[field] = "stop"
     _json(serial_path, serial)
     comparison = compare_decode_performance_results(
         target_path=tmp_path / "target" / "decode-performance.json",
@@ -871,8 +883,20 @@ def test_exact_cross_mode_mismatch_fails_closed(tmp_path: Path, field: str) -> N
         output_path=tmp_path / f"bad-{field}.json",
         markdown_path=tmp_path / f"bad-{field}.md",
     )
-    assert comparison["performance_valid"] is False
-    assert comparison["speedups"] is None
+    assert comparison["performance_valid"] is True
+    assert comparison["matched_work_comparability"]["valid"] is True
+    assert comparison["speedups"]["target_vs_serial"]["makespan_speedup"] == 1.0
+    assert comparison["exact_correctness_triangle"]["valid"] is False
+    diagnostic = comparison["exact_sequence_diagnostic"]
+    assert diagnostic["all_equal"] is (not field.endswith("token_ids"))
+    if field.endswith("token_ids"):
+        assert diagnostic["divergent_request_count"] == 1
+        assert diagnostic["matching_request_count"] == 1
+        assert diagnostic["first_mismatches"][0]["request_id"] == "a"
+    else:
+        differences = comparison["matched_work_comparability"]["termination_differences"]
+        assert differences[0]["field"] == field
+        assert differences[0]["fixed_length_completed"] is True
 
 
 @pytest.mark.parametrize("kind", ["topology", "workload"])
@@ -895,6 +919,282 @@ def test_provenance_mismatch_fails_closed(tmp_path: Path, kind: str) -> None:
     )
     assert comparison["performance_valid"] is False
     assert comparison["speedups"] is None
+
+
+def _compare_fixture(tmp_path: Path, *, dual: bool = True) -> dict:
+    return compare_decode_performance_results(
+        target_path=tmp_path / "target/decode-performance.json",
+        serial_path=tmp_path / "serial/decode-performance.json",
+        dual_path=tmp_path / "dual-batch/decode-performance.json" if dual else None,
+        output_path=tmp_path / "comparison.json",
+        markdown_path=tmp_path / "comparison.md",
+    )
+
+
+@pytest.mark.parametrize(
+    "kind,check",
+    [
+        ("bootstrap", "bootstrap_equal"),
+        ("prompt_sha", "prompt_provenance_equal"),
+        ("prompt_count", "prompt_provenance_equal"),
+        ("count", "per_request_measured_token_counts_equal"),
+        ("total", "total_measured_token_counts_equal"),
+        ("request_set", "request_set_equal"),
+        ("request_count", "request_count_equal"),
+        ("duplicate", "canonical_request_mapping_valid"),
+        ("maximum", "requested_workload_semantics_equal"),
+        ("workload", "workload_equal"),
+        ("config", "config_equal"),
+        ("topology", "topology_equal"),
+        ("placement", "topology_equal"),
+        ("patch", "execution_provenance_equal"),
+        ("model", "execution_provenance_equal"),
+        ("vllm", "execution_provenance_equal"),
+        ("execution", "execution_provenance_equal"),
+        ("execution_alias", "execution_provenance_equal"),
+        ("accounting", "token_accounting_valid"),
+        ("lying_accounting", "token_accounting_valid"),
+        ("cleanup", "cleanup_valid"),
+        ("failed", "requests_complete"),
+        ("incomplete", "requests_complete"),
+        ("artifact_invalid", "per_mode_artifacts_valid"),
+        ("overlap", "dual_overlap_valid"),
+        ("round_sync", "dual_overlap_valid"),
+        ("invalid_metrics", "metrics_valid"),
+        ("early_stop_difference", "requested_workload_semantics_equal"),
+    ],
+)
+def test_matched_work_rejects_incompatible_evidence(tmp_path: Path, kind: str, check: str) -> None:
+    for mode in ("target", "serial", "dual-batch"):
+        _measure(tmp_path, mode)
+    path = tmp_path / "dual-batch/decode-performance.json"
+    value = json.loads(path.read_text())
+    row = value["requests"][0]
+    if kind == "bootstrap":
+        row["bootstrap_token_id"] = row["total_generated_token_ids"][0] = 999
+    elif kind == "prompt_sha":
+        row["prompt_token_ids_sha256"] = "0" * 64
+    elif kind == "prompt_count":
+        row["prompt_token_count"] += 1
+    elif kind == "count":
+        row["measured_committed_output_token_ids"].pop()
+        row["total_generated_token_ids"].pop()
+        row["measured_committed_output_token_count"] -= 1
+        row["finish_reason"] = "stop"
+        value["metrics"]["total_measured_committed_output_tokens"] -= 1
+    elif kind == "total":
+        value["metrics"]["total_measured_committed_output_tokens"] += 1
+    elif kind == "request_set":
+        row["request_id"] = "unexpected"
+    elif kind == "request_count":
+        value["request_count"] += 1
+    elif kind == "duplicate":
+        value["requests"].append(deepcopy(row))
+    elif kind == "maximum":
+        row["maximum_new_tokens"] += 1
+    elif kind in ("workload", "config", "topology"):
+        value["artifact_sha256"][kind] = "0" * 64
+    elif kind == "placement":
+        value["placement"]["target_physical_gpu_ids"] = [0, 1]
+    elif kind == "patch":
+        value["patch_hashes"][0] = "0" * 64
+    elif kind == "model":
+        value["models"]["target"]["revision"] = "other-model"
+    elif kind == "vllm":
+        value["vllm_commit"] = "0" * 40
+    elif kind == "execution":
+        value["execution_git_commit"] = value["git_commit"] = "0" * 40
+    elif kind == "execution_alias":
+        value["execution_git_commit"] = "0" * 40
+    elif kind == "accounting":
+        row["token_accounting_valid"] = False
+    elif kind == "lying_accounting":
+        row["total_generated_token_ids"][1] = 999
+    elif kind == "cleanup":
+        value["cleanup_valid"] = False
+    elif kind in ("failed", "incomplete"):
+        row["finish_reason"] = "abort" if kind == "failed" else None
+    elif kind == "artifact_invalid":
+        value["valid"] = False
+    elif kind == "overlap":
+        value["mode_semantics"]["natural_draft_target_overlap"] = False
+    elif kind == "round_sync":
+        value["mode_semantics"]["per_round_global_cuda_synchronize"] = True
+    elif kind == "invalid_metrics":
+        value["metrics"]["decode_makespan_ms"] = 0
+    elif kind == "early_stop_difference":
+        for mode in ("target", "serial", "dual-batch"):
+            mode_path = tmp_path / mode / "decode-performance.json"
+            candidate = json.loads(mode_path.read_text()) if mode != "dual-batch" else value
+            candidate["requests"][0]["maximum_new_tokens"] += 1
+            candidate["requests"][0]["finish_reason"] = "stop"
+            _json(mode_path, candidate)
+        row["termination_reason"] = "different_stop"
+    _json(path, value)
+    report = _compare_fixture(tmp_path)
+    assert report["matched_work_comparability"][check] is False
+    assert report["performance_valid"] is False
+    assert report["speedups"] is None
+    assert report["errors"]
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "clock",
+        "setup_excluded",
+        "bootstrap_excluded_from_measured_token_count",
+        "first_post_bootstrap_token_counted",
+        "per_token_cuda_synchronize",
+        "first_measured_target_forward_consumes_pending_bootstrap",
+        "pre_measurement_tp_barrier",
+        "pre_measurement_target_cuda_synchronize",
+        "final_all_target_rank_cuda_synchronize",
+    ],
+)
+def test_matched_work_requires_every_boundary_contract_field(tmp_path: Path, field: str) -> None:
+    for mode in ("target", "serial"):
+        _measure(tmp_path, mode)
+    path = tmp_path / "serial/decode-performance.json"
+    value = json.loads(path.read_text())
+    value["measurement"].pop(field)
+    _json(path, value)
+    report = _compare_fixture(tmp_path, dual=False)
+    assert report["matched_work_comparability"]["measurement_boundary_equivalent"] is False
+    assert report["performance_valid_for_pair"] is False
+    assert report["speedups"] is None
+
+
+@pytest.mark.parametrize("legacy_target", [True, False])
+def test_legacy_execution_commit_and_different_measurement_commits_are_comparable(
+    tmp_path: Path, legacy_target: bool,
+) -> None:
+    for mode in ("target", "serial"):
+        _measure(tmp_path, mode)
+    target_path = tmp_path / "target/decode-performance.json"
+    target = json.loads(target_path.read_text())
+    if legacy_target:
+        target.pop("execution_git_commit")
+        target.pop("measurement_code_git_commit")
+    else:
+        target["measurement_code_git_commit"] = "2" * 40
+    target["requires_exact_cross_mode_comparison"] = True  # Immutable historical v1 policy.
+    _json(target_path, target)
+    serial_path = tmp_path / "serial/decode-performance.json"
+    serial = json.loads(serial_path.read_text())
+    serial["measurement_code_git_commit"] = "1" * 40
+    serial["requests"].reverse()  # Canonical ID mapping, not artifact row order.
+    serial["warmup_clean"] = False
+    serial["jit_observation"]["post_measurement_jit_event_count"] = 1
+    _json(serial_path, serial)
+    before = {path: path.read_bytes() for path in (target_path, serial_path)}
+    report = _compare_fixture(tmp_path, dual=False)
+    assert report["performance_valid_for_pair"] is True
+    assert report["metrics"] == {"target": target["metrics"], "serial": serial["metrics"]}
+    assert report["warmup"]["serial"] == {
+        "warmup_clean": False,
+        "post_measurement_jit_event_count": 1,
+    }
+    assert all(path.read_bytes() == contents for path, contents in before.items())
+
+
+def test_pair_approval_helper_checks_live_artifact_hashes(tmp_path: Path) -> None:
+    for mode in ("target", "serial"):
+        _measure(tmp_path, mode)
+    serial_path = tmp_path / "serial/decode-performance.json"
+    serial = json.loads(serial_path.read_text())
+    serial["requests"][0]["measured_committed_output_token_ids"][0] = 999
+    serial["requests"][0]["total_generated_token_ids"][1] = 999
+    _json(serial_path, serial)
+    from specrhythm.cli import main
+
+    assert main([
+        "phase4b2-decode-compare",
+        "--target", str(tmp_path / "target/decode-performance.json"),
+        "--serial", str(serial_path),
+        "--output", str(tmp_path / "target-serial-matched-work.json"),
+        "--markdown-output", str(tmp_path / "target-serial-matched-work.md"),
+    ]) == 0
+    helper = Path(__file__).resolve().parents[1] / "integrations/vllm/phase4b2_run_helpers.sh"
+    command = ["bash", "-c", 'source "$1"; phase4b2_require_matched_work_pair "$2" 2',
+               "bash", str(helper), str(tmp_path)]
+    env = dict(os.environ, PATH=str(Path(sys.executable).parent) + os.pathsep + os.environ["PATH"])
+    approved = subprocess.run(command, capture_output=True, text=True, env=env)
+    assert approved.returncode == 0, approved.stderr
+    assert approved.stdout.splitlines() == [
+        "MATCHED WORK TARGET/SERIAL PASS",
+        "exact_sequence_equal = false",
+        "performance_comparable = true",
+    ]
+    serial_path.write_text(serial_path.read_text() + "\n")
+    rejected = subprocess.run(command, capture_output=True, text=True, env=env)
+    assert rejected.returncode != 0  # Even a stale otherwise valid report cannot approve Dual.
+
+
+def test_full_length_reason_spelling_is_only_diagnostic(tmp_path: Path) -> None:
+    for mode in ("target", "serial"):
+        _measure(tmp_path, mode)
+    path = tmp_path / "serial/decode-performance.json"
+    serial = json.loads(path.read_text())
+    serial["requests"][0]["finish_reason"] = "max_tokens"
+    _json(path, serial)
+    report = _compare_fixture(tmp_path, dual=False)
+    assert report["performance_valid_for_pair"] is True
+    assert report["matched_work_comparability"]["termination_differences"]
+    assert report["exact_correctness_triangle"]["valid"] is False
+
+
+def test_synthetic_corrected_100_with_nine_divergences_preserves_reported_metrics(
+    tmp_path: Path,
+) -> None:
+    # CPU fixture only, not a copy or revalidation of the server's GPU artifacts.
+    expected = {
+        "target": (5813.059543, 255.8033319632212, 382.881551485),
+        "serial": (50394.65011, 29.50710039169275, 2345.39918652),
+    }
+    for mode, (makespan, throughput, tpot) in expected.items():
+        value = _measure(tmp_path, mode)
+        template = value["requests"][0]
+        value["requests"] = []
+        for index in range(100):
+            row = deepcopy(template)
+            row["request_id"] = f"synthetic-{index:03}"
+            count = 15 if index < 87 else 14
+            tokens = list(range(count))
+            if mode == "serial" and index < 9:
+                tokens[0] = 999
+            row.update(
+                {
+                    "maximum_new_tokens": count + 1,
+                    "measured_committed_output_token_count": count,
+                    "measured_committed_output_token_ids": tokens,
+                    "total_generated_token_ids": [row["bootstrap_token_id"], *tokens],
+                }
+            )
+            value["requests"].append(row)
+        value["request_count"] = value["metrics"]["completed_requests"] = 100
+        value["metrics"].update(
+            {
+                "total_measured_committed_output_tokens": 1487,
+                "decode_makespan_ms": makespan,
+                "aggregate_throughput_tokens_per_second": throughput,
+            }
+        )
+        value["metrics"]["tpot_ms"]["mean"] = tpot
+        _json(tmp_path / mode / "decode-performance.json", value)
+    report = _compare_fixture(tmp_path, dual=False)
+    assert report["performance_valid_for_pair"] is True
+    assert report["exact_sequence_diagnostic"]["all_equal"] is False
+    assert report["exact_sequence_diagnostic"]["divergent_request_count"] == 9
+    assert report["exact_sequence_diagnostic"]["matching_request_count"] == 91
+    assert len(report["exact_sequence_diagnostic"]["first_mismatches"]) == 9
+    for mode, (makespan, throughput, tpot) in expected.items():
+        assert report["metrics"][mode]["decode_makespan_ms"] == makespan
+        assert report["metrics"][mode]["aggregate_throughput_tokens_per_second"] == throughput
+        assert report["metrics"][mode]["tpot_ms"]["mean"] == tpot
+    speedup = report["speedups"]["target_vs_serial"]
+    assert speedup["makespan_speedup"] == pytest.approx(0.11535072445176113)
+    assert speedup["throughput_ratio"] == pytest.approx(speedup["makespan_speedup"])
 
 
 def test_performance_boundary_requires_unique_post_ready_event() -> None:
