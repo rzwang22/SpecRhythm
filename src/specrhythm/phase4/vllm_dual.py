@@ -46,10 +46,7 @@ from specrhythm.phase4.resident_setup import (
     setup_row_evidence,
 )
 from specrhythm.phase4.serial import greedy_acceptance, token_prefix_hash
-from specrhythm.phase4.stock_vllm import (
-    active_cuda_device_identity,
-    load_smoke_requests,
-)
+from specrhythm.phase4.stock_vllm import load_smoke_requests
 from specrhythm.phase4.transport import CheckpointJsonl
 
 
@@ -658,7 +655,7 @@ class DualBatchRemoteProposer:
         self.torch.cuda.nvtx.range_pop()
         host_end = time.monotonic_ns()
         self.tp_group.barrier()
-        identity = active_cuda_device_identity(self.torch)
+        identity = self.uuid_queries.for_verification()
         local_rows = []
         for internal_id in internal_verify_ids:
             start = self._verify_start.get(internal_id)

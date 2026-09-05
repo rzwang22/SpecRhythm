@@ -25,6 +25,11 @@ from specrhythm.phase4.dual_correctness import (
 )
 from specrhythm.phase4.dual_service import DualDraftClient
 from specrhythm.phase4.dual_terminal import build_terminal_reconciliation
+from specrhythm.phase4.dual_uuid import (
+    build_dual_uuid_query_report,
+    worker_dual_runtime_snapshot,
+    worker_dual_uuid_evidence,
+)
 from specrhythm.phase4.manifest import (
     atomic_write_json,
     build_runtime_manifest,
@@ -50,7 +55,6 @@ from specrhythm.phase4.stock_vllm import (
     _serialize_outputs,
     _visible_physical_ids,
     _worker_performance_finalize,
-    _worker_runtime_snapshot,
     load_smoke_requests,
     validate_worker_ranks,
 )
@@ -188,7 +192,7 @@ def run_dual_batch(
         },
         disable_log_stats=False,
     )
-    worker_ranks = llm.collective_rpc(_worker_runtime_snapshot)
+    worker_ranks = llm.collective_rpc(worker_dual_runtime_snapshot)
     rank_errors = validate_worker_ranks(worker_ranks, config.target)
     batch_validation = validate_batch_invariant_ranks(worker_ranks, requested=True)
     rank_errors.extend(batch_validation["batch_invariant_validation"]["errors"])
@@ -224,9 +228,13 @@ def run_dual_batch(
         )
     serialized = _ordered_checkpoint_rows(output_checkpoint_path, requests)
     comparison = compare_outputs_to_reference(serialized, reference)
+    verification_rows = CheckpointJsonl(verification_events_path).read()
+    uuid_query_evidence = build_dual_uuid_query_report(
+        llm.collective_rpc(worker_dual_uuid_evidence), worker_ranks, verification_rows
+    )
     cycle_rows, overlap_rows = build_cycle_and_overlap_events(
         CheckpointJsonl(draft_work_events_path).read(),
-        CheckpointJsonl(verification_events_path).read(),
+        verification_rows,
         CheckpointJsonl(proposal_events_path).read(),
     )
     _write_checkpoint_rows(cycle_events_path, cycle_rows, resume=resume)
@@ -298,6 +306,7 @@ def run_dual_batch(
         "comparison": comparison,
         "exact_sequence_match": comparison["all_sequences_equal"],
         "worker_ranks": worker_ranks,
+        "uuid_query_evidence": uuid_query_evidence,
         **batch_validation,
         "runtime_semantics": {
             "execution": "dual-batch",
@@ -494,7 +503,7 @@ def run_resident_dual_batch(
         },
         disable_log_stats=False,
     )
-    worker_ranks = llm.collective_rpc(_worker_runtime_snapshot)
+    worker_ranks = llm.collective_rpc(worker_dual_runtime_snapshot)
     rank_errors = validate_worker_ranks(worker_ranks, config.target)
     batch_validation = validate_batch_invariant_ranks(worker_ranks, requested=True)
     rank_errors.extend(batch_validation["batch_invariant_validation"]["errors"])
@@ -546,6 +555,9 @@ def run_resident_dual_batch(
     scheduler_rows = CheckpointJsonl(scheduler_events_path).read()
     draft_rows = CheckpointJsonl(draft_work_events_path).read()
     verification_rows = CheckpointJsonl(verification_events_path).read()
+    uuid_query_evidence = build_dual_uuid_query_report(
+        llm.collective_rpc(worker_dual_uuid_evidence), worker_ranks, verification_rows
+    )
     cycle_rows, overlap_rows = build_cycle_and_overlap_events(
         draft_rows, verification_rows, proposal_rows
     )
@@ -659,6 +671,7 @@ def run_resident_dual_batch(
         "run_start_ns": started_ns,
         "run_end_ns": ended_ns,
         "worker_ranks": worker_ranks,
+        "uuid_query_evidence": uuid_query_evidence,
         **batch_validation,
         "draft_shutdown": draft_shutdown,
         "request_identity": plugin_report.get("request_identity"),
