@@ -175,6 +175,43 @@ def test_natural_teardown_deadline_must_be_finite_and_positive(tmp_path, value):
     assert list(tmp_path.iterdir()) == []
 
 
+@pytest.mark.parametrize('exit_code', [0, 19, -signal.SIGTERM])
+def test_exit_between_live_snapshot_and_waitpid_preserves_real_status(
+    tmp_path, monkeypatch, exit_code,
+):
+    from specrhythm.phase4 import owned_processes, process_lifecycle
+
+    owner = owned_processes.OwnedProcesses(12340)
+    child = dict(pid=12341, ppid=12340, pgid=12340, session_id=12340,
+                 start_identity='owned-child', state='S', command='fixture', exit_code=None)
+    owner.observed[child['pid']] = child
+    reaped = False
+
+    def table():
+        return {} if reaped else {child['pid']: child}
+
+    def waitpid(pid, options):
+        nonlocal reaped
+        assert pid == child['pid'] and options == os.WNOHANG
+        reaped = True
+        return pid, exit_code << 8 if exit_code >= 0 else -exit_code
+
+    monkeypatch.setattr(owned_processes, 'process_table', table)
+    monkeypatch.setattr(owned_processes.os, 'waitpid', waitpid)
+    log = tmp_path / 'target.log'
+    log.write_text('')
+    remaining, failure = process_lifecycle._wait_for_natural_teardown(
+        owner, process_lifecycle._RuntimeFailureMonitor(log), 0.2, 0.01,
+    )
+    assert reaped and remaining == []
+    if exit_code == 0:
+        assert failure is None
+    else:
+        assert failure['reason'] == 'owned-child-nonzero-exit'
+        assert failure['child']['exit_code'] == exit_code
+        assert failure['child']['state'] == 'reaped'
+
+
 @pytest.mark.parametrize('mode', ['target', 'serial', 'dual'])
 def test_shared_shell_accepts_natural_teardown_and_removes_guard(tmp_path, mode):
     bin_dir = tmp_path / 'bin'

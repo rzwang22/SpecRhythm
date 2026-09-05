@@ -60,7 +60,11 @@ cleanup. The 250 ms timestamp-wrapper post-child drain is unchanged.
 
 The same fatal log markers and Linux nonzero owned-child status checks now operate
 during both execution and natural teardown. Teardown checks status before reaping
-adopted children. Existing PID/start identity checks, session/descendant ownership,
+adopted children and checks the actual `waitpid` status afterward. This closes the
+Linux CI regression where a child exited nonzero between a live `/proc` snapshot
+and its reap; checking snapshots alone lost that failure and returned status zero.
+Deterministic tests cover that race with zero, nonzero and signal exit statuses.
+Existing PID/start identity checks, session/descendant ownership,
 Linux subreaper/launch-token adoption, and Draft socket ownership rules are unchanged.
 
 ## Artifact and guard semantics

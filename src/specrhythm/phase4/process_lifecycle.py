@@ -334,7 +334,10 @@ def _wait_for_natural_teardown(
         failure = failure_monitor.detect(rows, owner.root_pid)
         if failure is not None:
             return rows, failure
-        owner.reap()
+        reaped = owner.reap()
+        failure = failure_monitor.detect(reaped, owner.root_pid)
+        if failure is not None:
+            return owner.snapshot(), failure
         rows = owner.snapshot()
         left = deadline - time.monotonic()
         if not rows or left <= 0:

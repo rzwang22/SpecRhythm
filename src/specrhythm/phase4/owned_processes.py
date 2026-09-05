@@ -111,7 +111,8 @@ class OwnedProcesses:
             self.observed.setdefault(row["pid"], dict(row))
         return rows
 
-    def reap(self, *, exclude_root: bool = True) -> None:
+    def reap(self, *, exclude_root: bool = True) -> list[dict[str, Any]]:
+        reaped = []
         table = process_table()
         for pid, previous in tuple(self.observed.items()):
             if exclude_root and pid == self.root_pid:
@@ -119,9 +120,15 @@ class OwnedProcesses:
             if pid not in table or table[pid]["start_identity"] != previous["start_identity"]:
                 continue
             try:
-                os.waitpid(pid, os.WNOHANG)
+                waited_pid, status = os.waitpid(pid, os.WNOHANG)
             except ChildProcessError:
-                pass
+                continue
+            if waited_pid == pid:
+                # A child can exit after process_table() observed it alive.
+                # Preserve the actual wait status, not only /proc's snapshot.
+                reaped.append({**table[pid], "state": "reaped",
+                               "exit_code": os.waitstatus_to_exitcode(status)})
+        return reaped
 
     def signal(self, selected: signal.Signals, actions: list[dict[str, Any]]) -> None:
         for row in reversed(self.snapshot()):
