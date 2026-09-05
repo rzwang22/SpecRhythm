@@ -21,6 +21,10 @@ from specrhythm.phase4.decode_ready import (
     validate_decode_ready_manifest,
 )
 from specrhythm.phase4.dual import DualProposal
+from specrhythm.phase4.dual_commit import (
+    dual_greedy_acceptance,
+    load_dual_stop_policies,
+)
 from specrhythm.phase4.dual_service import DualDraftClient
 from specrhythm.phase4.manifest import atomic_write_json
 from specrhythm.phase4.performance_boundary import (
@@ -96,13 +100,7 @@ class DualBatchRemoteProposer:
         )
         self.definitions = {item.request_id: item for item in definitions}
         self.identity = FrozenPromptIdentityMap.from_definitions(definitions)
-        eos = getattr(vllm_config.model_config.hf_config, "eos_token_id", None)
-        if isinstance(eos, int):
-            self.eos_token_ids = (eos,)
-        elif isinstance(eos, (list, tuple)):
-            self.eos_token_ids = tuple(int(item) for item in eos)
-        else:
-            self.eos_token_ids = ()
+        self.stop_policies = load_dual_stop_policies(vllm_config, definitions)
         self.requests: dict[str, _Request] = {}
         self.internal_to_stable = self.identity.internal_to_stable
         self.stable_to_internal = self.identity.stable_to_internal
@@ -178,7 +176,9 @@ class DualBatchRemoteProposer:
                 self._complete_global_setup(setup)
             return [[] for _ in request_ids]
         if self.tp_rank == 0:
-            result = self._rank_zero_update(request_ids, num_tokens_no_spec, token_ids_cpu)
+            result = self._rank_zero_update(
+                request_ids, sampled_token_ids, num_tokens_no_spec, token_ids_cpu
+            )
         else:
             result = None
         result = self.tp_group.broadcast_object(result, src=0)
@@ -246,9 +246,8 @@ class DualBatchRemoteProposer:
                 tracker.record(existing)
                 continue
             bootstrap_ready_ns = time.monotonic_ns()
-            terminal = _terminal(
-                generated, definition.maximum_new_tokens, self.eos_token_ids
-            )
+            _, stop_reason = self.stop_policies[stable_id].canonicalize((), generated)
+            terminal = stop_reason is not None
             initialized = self.client.call(
                 "execute",
                 {
@@ -711,29 +710,59 @@ class DualBatchRemoteProposer:
         self._verify_start = {}
 
     def _rank_zero_update(
-        self, request_ids: Sequence[str], num_tokens_no_spec: Any, token_ids_cpu: Any
+        self, request_ids: Sequence[str], sampled_token_ids: Sequence[Sequence[int]],
+        num_tokens_no_spec: Any, token_ids_cpu: Any
     ) -> dict[str, Any]:
+        if (
+            len(request_ids) != len(sampled_token_ids)
+            or len(request_ids) != len(num_tokens_no_spec)
+            or len(set(request_ids)) != len(request_ids)
+        ):
+            raise RuntimeError("Dual sampled-token rows do not match unique request IDs")
         bootstrap_rows = []
         commit_rows = []
         tail_rows = []
+        observed_verifications = set()
         for index, request_id_value in enumerate(request_ids):
             internal_request_id = str(request_id_value)
             count = int(num_tokens_no_spec[index])
             physical_tokens = tuple(
                 int(item) for item in token_ids_cpu[index, :count].tolist()
             )
+            if count < 0 or count != len(physical_tokens):
+                raise RuntimeError("Target physical token count exceeds its row")
             request_id = self.identity.bind(internal_request_id, physical_tokens)
             definition = self.definitions[request_id]
-            generated = _logical_generated(
-                physical_tokens[len(definition.prompt_token_ids) :],
-                definition.maximum_new_tokens,
-            )
-            prefix = definition.prompt_token_ids + generated
-            terminal = _terminal(generated, definition.maximum_new_tokens, self.eos_token_ids)
             state = self.requests.get(request_id)
+            sampled = tuple(sampled_token_ids[index])
+            if state is not None and state.terminal:
+                if (
+                    sampled or request_id in self._verified_ids
+                    or state.pending_proposal is not None
+                ):
+                    raise RuntimeError("Target sampled or verified an already terminal request")
+                if not _starts_with(physical_tokens, state.committed_token_ids):
+                    raise RuntimeError("terminal Target physical prefix regressed or diverged")
+                continue
+            previous = state.generated_token_ids if state is not None else ()
+            generated, stop_reason = self.stop_policies[request_id].canonicalize(previous, sampled)
+            prefix = definition.prompt_token_ids + generated
+            terminal = stop_reason is not None
+            prior_prefix = (
+                state.committed_token_ids if state is not None else definition.prompt_token_ids
+            )
+            if (
+                physical_tokens != prior_prefix + sampled
+                or not _starts_with(physical_tokens, prefix)
+            ):
+                raise RuntimeError(
+                    "Target physical row differs from prior logical prefix plus sampled delta"
+                )
             if state is None:
                 if not generated:
                     continue
+                if len(sampled) != 1:
+                    raise RuntimeError("Dual bootstrap must sample exactly one token")
                 state = _Request(
                     prompt_token_ids=definition.prompt_token_ids,
                     maximum_new_tokens=definition.maximum_new_tokens,
@@ -752,14 +781,18 @@ class DualBatchRemoteProposer:
                     self._transition(request_id, "DRAFTING")
                 continue
             if request_id in self._verified_ids:
+                observed_verifications.add(request_id)
                 commit_start_ns = time.monotonic_ns()
                 proposal = state.pending_proposal
                 if proposal is None:
                     raise RuntimeError("verified request lost its proposal identity")
+                # Validate rejection-parsed evidence before serving truncation;
+                # raw candidates or tokens after a rejection cannot be commits.
+                greedy_acceptance(proposal.proposal_token_ids, sampled, terminal=terminal)
                 if not _starts_with(prefix, state.committed_token_ids):
                     raise RuntimeError("Target committed prefix regressed or diverged")
                 delta = prefix[len(state.committed_token_ids) :]
-                decision = greedy_acceptance(
+                decision = dual_greedy_acceptance(
                     proposal.proposal_token_ids, delta, terminal=terminal
                 )
                 state.prefix_version += 1
@@ -793,16 +826,7 @@ class DualBatchRemoteProposer:
                         "target_bonus_token_ids": list(decision.target_bonus_token_ids),
                         "committed_token_ids": list(decision.committed_token_ids),
                         "terminal": terminal,
-                        "terminal_truncation_reason": (
-                            "max_tokens"
-                            if terminal
-                            and len(generated) >= state.maximum_new_tokens
-                            else "eos"
-                            if terminal
-                            and generated
-                            and generated[-1] in self.eos_token_ids
-                            else None
-                        ),
+                        "terminal_truncation_reason": stop_reason,
                         "stale": False,
                         "verify_microbatch_id": self._verify_batch_by_request.pop(
                             request_id
@@ -831,7 +855,10 @@ class DualBatchRemoteProposer:
                 # A proposal-free one-token tail is the only legal Target-only
                 # decode after bootstrap.
                 delta = prefix[len(state.committed_token_ids) :]
-                if state.pending_proposal is not None or len(delta) != 1 or not terminal:
+                if (
+                    state.pending_proposal is not None or len(delta) != 1
+                    or len(sampled) != 1 or not terminal
+                ):
                     raise RuntimeError("unproposed Target decode advanced a live request")
                 claimed = self.client.call(
                     "claimed", {"request_ids": [request_id]}
@@ -885,6 +912,8 @@ class DualBatchRemoteProposer:
                 self._transition(
                     request_id, "TERMINAL", reason="target-tail-terminal"
                 )
+        if observed_verifications != self._verified_ids:
+            raise RuntimeError("Dual verified requests are missing sampled-token rows")
         self._verified_ids.clear()
         if bootstrap_rows:
             self.client.call(
@@ -910,7 +939,7 @@ class DualBatchRemoteProposer:
             "prefix_version": state.prefix_version,
             "prefix_token_sha256": token_prefix_hash(state.committed_token_ids),
             "remaining_output_budget": remaining,
-            "eos_token_ids": list(self.eos_token_ids),
+            "eos_token_ids": list(self.stop_policies[request_id].terminal_token_ids),
             "terminal": terminal,
         }
 
@@ -974,6 +1003,20 @@ class DualBatchRemoteProposer:
                 "target_callback_blocks_on_draft_gpu": False,
                 "one_unverified_proposal_per_request": True,
                 "dependency_speculation": False,
+                "logical_commit_source": "current-round-rejection-parsed-sampled-token-ids",
+                "physical_token_row_role": "prior-prefix-plus-sampled-delta-cross-check",
+                "serving_stop_contract": {
+                    "source": "pinned-InputProcessor-generation-config-and-renderer-EOS",
+                    "custom_stop_strings": False,
+                    "requests": {
+                        request_id: {
+                            "maximum_new_tokens": policy.maximum_new_tokens,
+                            "eos_token_id": policy.eos_token_id,
+                            "stop_token_ids": list(policy.stop_token_ids),
+                        }
+                        for request_id, policy in self.stop_policies.items()
+                    },
+                },
                 "resident_decode_ready": self.resident_decode_ready,
                 "setup_complete": self.setup_complete,
                 "measurement_start_ns": self.measurement_start_ns,
@@ -1057,14 +1100,6 @@ def validate_target_rank_identity(
                     "Target verify logical/physical identity disagrees with worker evidence"
                 )
     return list(dict.fromkeys(errors))
-
-
-def _logical_generated(values: Sequence[int], maximum: int) -> Tuple[int, ...]:
-    return tuple(int(item) for item in values if int(item) >= 0)[:maximum]
-
-
-def _terminal(values: Sequence[int], maximum: int, eos: Sequence[int]) -> bool:
-    return len(values) >= maximum or bool(values and values[-1] in eos)
 
 
 def _starts_with(values: Sequence[int], prefix: Sequence[int]) -> bool:

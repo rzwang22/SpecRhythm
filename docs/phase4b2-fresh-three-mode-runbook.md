@@ -1,16 +1,25 @@
-# Phase 4B.2: fresh three-mode run after the retired-ready fix
+# Phase 4B.2: fresh three-mode run after the logical EOS commit fix
 
-The completed `04e9b614...` run now has a dedicated
-[terminal-state offline recovery runbook](phase4b2-terminal-state-recovery-runbook.md).
-Use that read-only recovery procedure for the reported DRAFT_SYNC terminal gap;
-do not rerun GPU work as part of the evidence-closure repair.
+The completed `04e9b614...` Dual run committed a physical token after EOS: logical
+length 84 disagreed with final length 83, and an unnecessary round-1 Draft proposal
+was generated. Strict terminal recovery correctly refused it. **Do not promote
+or recover that run.** Preserve its entire three-mode root unchanged. The
+[pinned-vLLM logical commit audit](phase4b2-dual-logical-commit-audit.md) explains
+the runtime repair, stop contract and CPU regression coverage.
 
 This supersedes the old Target/Serial reuse and historical-commit Dual continuation.
 The coding agent performs CPU validation only. The operator runs Target, Serial, and
 Dual-Batch **once each at the same new fix commit**, under a fresh result root. PR #4
 remains Draft/Open/unmerged. A failed mode directory is immutable; never retry in place.
 
-## Failure and lifecycle repair
+## Runtime repair and retained lifecycle protection
+
+The observer now commits the current rejection-parsed sampled delta onto the
+previous logical prefix, stopping inclusively at the first EOS/processed stop ID
+or output limit. It cross-checks the physical row without importing post-terminal
+tokens into logical output. Terminal work performs required Draft synchronization
+and release, with no next proposal. Target/Serial semantics, performance formulas
+and the strict reconciler are unchanged. The installed vLLM patch stack is unchanged.
 
 The failed A800 Dual run at `56bd0a50e3b5f33cf30e32564532b1483ea7e34d` progressed
 from 100 to 99 running requests before a late ready result reached the scheduler.
@@ -91,18 +100,39 @@ RC="$?"
 echo "fix commit supplied rc=$RC"
 ```
 
-## A. Preserve and checksum the failed Dual directory
+## A. Locate and preserve the invalid 04e9b three-mode root
 
-This block only reads the failed directory. The inventory is created in a separate,
-new audit directory. Keep that inventory even if a later step fails.
+If more than one `04e9b` result exists, set `SR_PHASE4B2_FAILED_ROOT` to the full
+root containing the reported `dual/resident-dual.json`, then repeat only the
+location block. Automatic selection requires exactly one match. These commands
+read the historical artifacts and create an inventory in a separate new audit
+directory. Keep it even if a later step fails.
 
 ```bash
-export SR_PHASE4B2_FAILED_ROOT="/root/autodl-tmp/SpecRhythm-data/results/phase4/56bd0a50e3b5f33cf30e32564532b1483ea7e34d/phase4b2-decode-performance-20260904T171955Z"
+SR_PHASE4B2_FAILED_ROOT="$(python3 - <<'PY'
+import json, os, pathlib
+base = pathlib.Path("/root/autodl-tmp/SpecRhythm-data/results/phase4/04e9b6141e3846835e6fdee0a42cdb9e8d021e4e")
+configured = os.environ.get("SR_PHASE4B2_FAILED_ROOT")
+matches = [pathlib.Path(configured)] if configured else sorted({p.parent.parent for p in base.glob("*/dual/resident-dual.json")})
+assert len(matches) == 1, "set the exact historical SR_PHASE4B2_FAILED_ROOT; candidates: " + repr(matches)
+root = matches[0]
+runtime = json.loads((root / "dual/runtime-manifest.json").read_text())
+assert runtime["git_commit"] == "04e9b6141e3846835e6fdee0a42cdb9e8d021e4e"
+assert (root / "dual/resident-dual.json").is_file()
+print(root)
+PY
+)"
+RC="$?"
+echo "locate invalid 04e9b run rc=$RC"
+```
+
+```bash
+export SR_PHASE4B2_FAILED_ROOT
 export SR_PHASE4B2_FAILED_DUAL="$SR_PHASE4B2_FAILED_ROOT/dual"
-export SR_PHASE4B2_AUDIT_DIR="/root/autodl-tmp/SpecRhythm-data/audits/phase4b2-retired-ready-$$"
+export SR_PHASE4B2_AUDIT_DIR="/root/autodl-tmp/SpecRhythm-data/audits/phase4b2-logical-commit-$$"
 python3 - <<'PY'
 import hashlib, json, os, pathlib
-root = pathlib.Path(os.environ["SR_PHASE4B2_FAILED_DUAL"])
+root = pathlib.Path(os.environ["SR_PHASE4B2_FAILED_ROOT"])
 audit = pathlib.Path(os.environ["SR_PHASE4B2_AUDIT_DIR"])
 assert root.is_dir(), root
 assert root.resolve() not in audit.resolve().parents
@@ -148,7 +178,8 @@ commit = os.environ["SR_PHASE4B_FIX_COMMIT"]
 assert re.fullmatch(r"[0-9a-f]{40}", commit), "supply the delivered full SHA"
 assert not subprocess.check_output(["git", "status", "--porcelain"], text=True).strip()
 assert subprocess.check_output(["git", "rev-parse", commit + "^{commit}"], text=True).strip() == commit
-assert commit != "56bd0a50e3b5f33cf30e32564532b1483ea7e34d"
+assert commit not in {"04e9b6141e3846835e6fdee0a42cdb9e8d021e4e", "d6fe1529c484dc57184d1855f97b26dfdeabd2ce"}
+assert subprocess.run(["git", "merge-base", "--is-ancestor", "d6fe1529c484dc57184d1855f97b26dfdeabd2ce", commit]).returncode == 0
 PY
 RC="$?"
 echo "clean checkout and explicit fix pin rc=$RC"
@@ -228,6 +259,8 @@ repo = pathlib.Path.cwd()
 scheduler = pathlib.Path(importlib.util.find_spec("specrhythm.phase4.vllm_dual_scheduler").origin)
 assert scheduler.resolve().is_relative_to(repo / "src")
 assert "def _drop_retired_ready_result(" in scheduler.read_text()
+from specrhythm.phase4.dual_commit import DualStopPolicy
+assert DualStopPolicy(8, 151645).canonicalize((45596,), (13, 151645, 151643)) == ((45596, 13, 151645), "eos")
 source = os.environ["SR_VLLM_SOURCE"]
 assert subprocess.check_output(["git", "-C", source, "rev-parse", "HEAD"], text=True).strip() == "752a3a504485790a2e8491cacbb35c137339ad34"
 assert not subprocess.check_output(["git", "-C", source, "status", "--porcelain", "--untracked-files=no"], text=True).strip()
@@ -261,7 +294,7 @@ The environment probe reads hardware/software metadata; it does not run generati
 SR_PHASE4B2_STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 RC="$?"
 echo "fresh root timestamp rc=$RC"
-export SR_PHASE4B2_ROOT="/root/autodl-tmp/SpecRhythm-data/results/phase4/$SR_PHASE4B_COMMIT/phase4b2-retired-ready-$SR_PHASE4B2_STAMP-$$"
+export SR_PHASE4B2_ROOT="/root/autodl-tmp/SpecRhythm-data/results/phase4/$SR_PHASE4B_COMMIT/phase4b2-logical-commit-$SR_PHASE4B2_STAMP-$$"
 export SR_PHASE4B_ENVIRONMENT="$SR_PHASE4B2_ROOT/environment.json"
 export SR_PHASE4B_TOPOLOGY="$SR_PHASE4B2_ROOT/topology.json"
 export SR_PHASE4B_PATCH_MANIFEST="$SR_PHASE4B2_ROOT/patch-stage/vllm-patch-stack.json"
@@ -369,6 +402,33 @@ if mode == "dual":
     raw = json.loads((root / mode / "resident-dual.json").read_text())
     assert raw["valid"] is True and raw["errors"] == []
     assert raw["overlap_gate"]["valid"] is True
+    from specrhythm.phase4.transport import CheckpointJsonl
+    from specrhythm.phase4.dual_correctness import validate_request_state_events
+    from specrhythm.phase4.serial import token_prefix_hash
+    plugin = json.loads((root / mode / "plugin-report.json").read_text())
+    assert plugin["logical_commit_source"] == "current-round-rejection-parsed-sampled-token-ids"
+    states = CheckpointJsonl(root / mode / "request-state-events.jsonl").read()
+    assert validate_request_state_events(states) == []
+    outputs = {row["request_id"]: row for row in raw["outputs"]}
+    workload = {row["request_id"]: row for row in map(json.loads, pathlib.Path(os.environ["SR_PHASE4B_WORKLOAD"]).read_text().splitlines())}
+    for request_id, output in outputs.items():
+        final_prefix = workload[request_id]["prompt_token_ids"] + output["generated_token_ids"]
+        last = [row for row in states if row["request_id"] == request_id][-1]
+        assert last["destination_state"] == "TERMINAL"
+        assert last["committed_prefix_length"] == len(final_prefix)
+        assert last["committed_prefix_sha256"] == token_prefix_hash(final_prefix)
+    affected = "r3-22887f929fd54d97814c2bd3"
+    if outputs[affected]["generated_token_ids"] == [45596, 13, 151645]:
+        trace = [row for row in states if row["request_id"] == affected]
+        assert trace[-1]["committed_prefix_length"] == 83
+        assert [row["destination_state"] for row in trace[-2:]] == ["COMMITTING", "TERMINAL"]
+        assert all(row["destination_state"] != "DRAFT_SYNC" for row in trace)
+        lifecycle = CheckpointJsonl(root / mode / "proposal-lifecycle-events.jsonl").read()
+        assert not [row for row in lifecycle if row["request_id"] == affected and row["round_id"] >= 1]
+        assert not [row for row in lifecycle if row["proposal_id"] == "868652c02d867275a39cbdf2cdc4c460133b2e26564e351b74cd2b433d9dda78"]
+        print("reported EOS trajectory: logical length 83, TERMINAL, no round-1 proposal")
+    else:
+        print("affected request followed a different trajectory; normal matched-work gates apply")
     summary = raw["retired_ready_results"]
     counts = {key: val for key, val in summary.items() if key.endswith("_count")}
     assert all(type(val) is int and val >= 0 for val in counts.values())
@@ -523,7 +583,7 @@ RC="$?"
 echo "final comparison provenance and validity rc=$RC"
 ```
 
-Finally verify that the failed historical Dual directory has exactly the same
+Finally verify that the entire invalid historical three-mode root has exactly the same
 contents. This check can also be run after a failure at any preceding step.
 
 ```bash
@@ -545,7 +605,7 @@ for path in sorted(root.rglob("*")):
     else:
         raise ValueError(f"unexpected non-file evidence: {path}")
 assert rows == before["entries"], "historical failed Dual evidence changed"
-print("historical failed Dual directory unchanged; files and directory inventory match")
+print("historical three-mode root unchanged; files and directory inventory match")
 print("new three-mode root:", os.environ["SR_PHASE4B2_ROOT"])
 PY
 RC="$?"
@@ -556,3 +616,8 @@ Keep the new result root, the separate audit inventory, and the original failed 
 The resulting claim remains preliminary matched-work decode-only bring-up, with
 the recorded warmup/JIT limitations. GPU completion and speedup are established
 only by the operator's new artifacts, not by the CPU lifecycle tests.
+
+Do not tune proposal/microbatch budgets, scheduling, acceptance, eager/graph mode,
+selection or Dual-Eager during this baseline. No token-level numerical divergence
+diagnostics belong to this run. On any failed return code, stop manually and retain
+the failed directory; a retry requires a separate fresh run root and new review.

@@ -15,6 +15,7 @@ from specrhythm.phase4.batch_invariant import (
 from specrhythm.phase4.config import Phase4Config
 from specrhythm.phase4.decode_ready import load_decode_ready_manifest
 from specrhythm.phase4.dual import validate_cycle_rows
+from specrhythm.phase4.dual_commit import phase4_dual_sampling_params
 from specrhythm.phase4.dual_correctness import (
     validate_overlap_witness,
     validate_proposal_lifecycle_events,
@@ -506,14 +507,7 @@ def run_resident_dual_batch(
             raise RuntimeError(f"Target tokenizer disagrees for {request.request_id}")
     prompts = [{"prompt_token_ids": list(row.prompt_token_ids)} for row in requests]
     parameters = [
-        SamplingParams(
-            temperature=0.0,
-            top_p=1.0,
-            max_tokens=row.maximum_new_tokens,
-            seed=row.sampling_seed,
-            n=1,
-            logprobs=config.logprobs,
-        )
+        phase4_dual_sampling_params(row, SamplingParams, config.logprobs)
         for row in requests
     ]
     atomic_write_json(
@@ -846,14 +840,7 @@ def _run_stable_cohort(
     llm: Any, sampling_params_type: Any, requests: Sequence[Any], logprobs: int
 ) -> list[Any]:
     for request in requests:
-        params = sampling_params_type(
-            temperature=0.0,
-            top_p=1.0,
-            max_tokens=request.maximum_new_tokens,
-            seed=request.sampling_seed,
-            n=1,
-            logprobs=logprobs,
-        )
+        params = phase4_dual_sampling_params(request, sampling_params_type, logprobs)
         llm.llm_engine.add_request(
             request.request_id,
             {"prompt_token_ids": list(request.prompt_token_ids)},

@@ -163,17 +163,17 @@ class DualBatchScheduler(Scheduler):
             and response.get("ready")
         ):
             self._dual_test_coordination_satisfied = True
-        if available:
-            pending = response.get("pending_request_ids", ())
-            # A poll snapshot can still mention work for a request retired by
-            # stock vLLM. Do not reintroduce it after ready-result cleanup.
-            self._dual_drafting = {
-                item
-                for item in pending
-                if (request := resolve_historical_ready_request(
-                    item, self._dual_identity, self.requests
-                )[1]) is not None and not request.is_finished()
-            }
+        pending = response.get("pending_request_ids", ()) if available else self._dual_drafting
+        # Final Draft synchronization can still be in flight after stock vLLM
+        # retires the Target request. It confers no live drafting ownership,
+        # even when ready slots are full and this cycle does not poll.
+        self._dual_drafting = {
+            item
+            for item in pending
+            if (request := resolve_historical_ready_request(
+                item, self._dual_identity, self.requests
+            )[1]) is not None and not request.is_finished()
+        }
         self._dual_decisions = {
             str(request.request_id): self._decision_for(request)
             for request in self.requests.values()

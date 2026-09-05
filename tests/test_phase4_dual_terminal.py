@@ -357,6 +357,23 @@ def test_normal_terminal_unchanged_and_reconciliation_is_idempotent(evidence):
     assert evidence == before
 
 
+def test_post_terminal_physical_commit_is_never_trimmed_by_reconciliation(evidence):
+    # Same false historical commit shape as the real 84-vs-83 prefix: a
+    # successful final output cannot authorize rewriting already committed work.
+    request = evidence["requests"][0]
+    final = request.prompt_token_ids + tuple(evidence["outputs"][0]["generated_token_ids"])
+    for row in evidence["state_rows"]:
+        if row["request_id"] == AFFECTED and row["destination_state"] in {
+            "COMMITTING", "DRAFT_SYNC",
+        }:
+            row["committed_prefix_length"] = len(final) + 1
+            row["committed_prefix_sha256"] = token_prefix_hash(final + (151643,))
+    before = deepcopy(evidence)
+    with pytest.raises(ValueError, match="state prefix/hash contradicts final output"):
+        build_terminal_reconciliation(**evidence)
+    assert evidence == before
+
+
 def test_tail_ready_legal_predecessor_with_same_completed_prefix(evidence):
     last = [row for row in evidence["state_rows"] if row["request_id"] == AFFECTED][-1]
     evidence["state_rows"].append(

@@ -24,8 +24,9 @@ from specrhythm.phase4.dual import (
     DualProposal,
     proposal_identity,
 )
+from specrhythm.phase4.dual_commit import dual_greedy_acceptance
 from specrhythm.phase4.manifest import atomic_write_json
-from specrhythm.phase4.serial import greedy_acceptance, token_prefix_hash
+from specrhythm.phase4.serial import token_prefix_hash
 from specrhythm.phase4.transport import (
     CheckpointJsonl,
     receive_message,
@@ -123,7 +124,7 @@ class DualDraftMachine:
             raise ValueError("Dual Draft commit proposal identity mismatch")
         if row.get("round_id") != proposal.round_id:
             raise ValueError("Dual Draft commit round mismatch")
-        decision = greedy_acceptance(
+        decision = dual_greedy_acceptance(
             proposal.proposal_token_ids,
             row.get("committed_delta", ()),
             terminal=bool(row.get("terminal", False)),

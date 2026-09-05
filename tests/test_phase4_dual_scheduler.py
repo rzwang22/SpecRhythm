@@ -183,6 +183,20 @@ def test_live_tail_remains_admissible(scheduler):
     assert scheduler.schedule().num_scheduled_tokens == {"opaque-a": 1}
 
 
+@pytest.mark.parametrize("removed", [False, True])
+def test_terminal_sync_has_no_drafting_ownership_even_when_poll_slots_full(scheduler, removed):
+    if removed:
+        retire(scheduler)
+    else:
+        scheduler.requests["opaque-a"].finished = True
+    scheduler._dual_drafting.add("a")
+    scheduler._accept_ready_result(proposal_result("b"))
+    scheduler.schedule()
+    assert scheduler._dual_client.poll_limits == []
+    assert "a" not in scheduler._dual_drafting
+    assert scheduler._dual_retired_ready_events == []
+
+
 @pytest.mark.parametrize("result_kind", ["proposal", "tail"])
 @pytest.mark.parametrize("still_in_table", [False, True])
 def test_retired_or_terminal_result_is_validated_dropped_and_cleared(

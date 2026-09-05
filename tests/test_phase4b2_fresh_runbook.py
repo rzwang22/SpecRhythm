@@ -82,7 +82,8 @@ def test_runbook_inventory_is_external_and_detects_failed_evidence_changes(tmp_p
     evidence = failed / "target.log"
     evidence.write_text("original EngineCore failure\n")
     audit = tmp_path / "audits" / "new"
-    environment = dict(os.environ, SR_PHASE4B2_FAILED_DUAL=str(failed),
+    environment = dict(os.environ, SR_PHASE4B2_FAILED_ROOT=str(failed.parent),
+                       SR_PHASE4B2_FAILED_DUAL=str(failed),
                        SR_PHASE4B2_AUDIT_DIR=str(audit), SR_PHASE4B2_ROOT=str(tmp_path / "fresh"))
     before = next(snippet for snippet in PYTHON_SNIPPETS if "audit.mkdir(" in snippet)
     after = next(snippet for snippet in PYTHON_SNIPPETS if 'rows == before["entries"]' in snippet)

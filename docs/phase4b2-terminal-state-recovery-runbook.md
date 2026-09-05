@@ -1,13 +1,19 @@
 # Phase 4B.2: terminal evidence closure and offline recovery
 
-The operator reports that execution `04e9b6141e3846835e6fdee0a42cdb9e8d021e4e`
-completed all 100 outputs, finalized both Target ranks, demonstrated physical
-overlap, and cleaned up successfully. One late proposal was safely dropped. The
-only embedded error was `r3-22887f929fd54d97814c2bd3: final state is DRAFT_SYNC, not TERMINAL`.
-This establishes that the previous retired-ready runtime crash was not reproduced.
-The reported completion is eligible for the strict offline audit below; acceptance
-requires the actual raw files to pass it. The CPU fixture models the reported shape
-and is explicitly synthetic, not a substitute for the A800 artifacts.
+**The reported real `04e9b6141e3846835e6fdee0a42cdb9e8d021e4e` run is NOT recoverable
+by this procedure. Do not use the commands below to promote it.** New evidence shows
+its state committed prefix has length 84 while final output has length 83, ending
+at EOS 151645. It also generated unnecessary round-1 Draft work. The strict checker
+correctly refused that contradiction and remains unchanged. See the
+[runtime semantic audit](phase4b2-dual-logical-commit-audit.md) and use the
+[fresh three-mode runbook](phase4b2-fresh-three-mode-runbook.md) for a future clean
+baseline. The coding agent does not run GPU.
+
+The remaining sections document the existing closure mechanism for genuinely
+missing terminal evidence with an already exact committed prefix. Its synthetic
+CPU fixture demonstrated that narrow case; it did not establish that the real
+A800 artifacts were eligible. Completion, overlap and cleanup alone cannot justify
+repairing an incorrect historical commit or its performance provenance.
 
 ## Process-boundary audit and future-run behavior
 
@@ -32,7 +38,7 @@ stop reason. No guessed model EOS set or new numerical diagnostic is introduced.
 
 Only a valid trace with a legal predecessor of `TERMINAL`, no `FAILED` or prior
 `TERMINAL`, matching absent-live-request evidence, and a strictly later observation
-timestamp receives a closure. For this run it is `DRAFT_SYNC -> TERMINAL`, reason
+timestamp receives a closure. For the eligible synthetic case it is `DRAFT_SYNC -> TERMINAL`, reason
 `stock-vllm-retired-after-final-output`. A legal `TARGET_TAIL_READY` predecessor is
 also supported by the future-run reconciler when the same final-prefix proof exists.
 The appended event is labelled `post-generation-terminal-reconciliation`; it is
