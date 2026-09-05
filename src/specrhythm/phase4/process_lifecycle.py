@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import signal
 import stat
@@ -74,6 +75,7 @@ def _run_owned_target(
     guard_path: Optional[Path] = None,
     draft_pid: Optional[int] = None,
     draft_socket: Optional[Path] = None,
+    natural_teardown_grace_seconds: float = 5.0,
     graceful_seconds: float = 5.0,
     kill_seconds: float = 2.0,
     poll_seconds: float = 0.05,
@@ -83,12 +85,13 @@ def _run_owned_target(
     if not command:
         raise ValueError("Target command is empty")
     for name, value in (
+        ("natural_teardown_grace_seconds", natural_teardown_grace_seconds),
         ("graceful_seconds", graceful_seconds),
         ("kill_seconds", kill_seconds),
         ("poll_seconds", poll_seconds),
     ):
-        if value <= 0:
-            raise ValueError(f"{name} must be positive")
+        if not math.isfinite(value) or value <= 0:
+            raise ValueError(f"{name} must be finite and positive")
     guard = guard_path or artifact_path.with_suffix(artifact_path.suffix + ".active")
     _acquire_guard(guard)
     target_log.parent.mkdir(parents=True, exist_ok=True)
@@ -113,7 +116,7 @@ def _run_owned_target(
         draft_pid is not None and draft_socket is not None
         and draft_socket_before is not None and socket_owned_by_pid(draft_socket, draft_pid)
     )
-    log_offset, log_tail = 0, b""
+    failure_monitor = _RuntimeFailureMonitor(target_log)
     with target_log.open("w", encoding="utf-8") as target_handle:
         try:
             process = subprocess.Popen(
@@ -134,25 +137,8 @@ def _run_owned_target(
                 _record_members(observed, rows)
                 if draft_owner is not None:
                     draft_owner.snapshot()
-                with target_log.open("rb") as log:
-                    log.seek(log_offset)
-                    chunk = log.read(1024 * 1024)
-                    log_offset = log.tell()
-                text = log_tail + chunk
-                fatal = next((marker for marker in (
-                    b"EngineCore encountered a fatal error",
-                    b"WorkerProc failed", b"EngineDeadError",
-                    b"died unexpectedly, shutting down executor.",
-                ) if marker in text), None)
-                log_tail = text[-256:]
-                failed_child = next((row for row in rows if row["pid"] != process.pid
-                                     and row.get("exit_code") not in {None, 0}), None)
-                if fatal is not None or failed_child is not None:
-                    failure_detection = {
-                        "reason": "fatal-runtime-log" if fatal else "owned-child-nonzero-exit",
-                        "marker": fatal.decode() if fatal else None,
-                        "child": failed_child, "timestamp_ns": time.monotonic_ns(),
-                    }
+                failure_detection = failure_monitor.detect(rows, process.pid)
+                if failure_detection is not None:
                     break
                 time.sleep(poll_seconds)
             if process.poll() is not None:
@@ -165,7 +151,26 @@ def _run_owned_target(
                 coordinator_status = process.poll()
 
     remaining = owner.snapshot() if owner is not None else []
-    leaked_after_coordinator_exit = coordinator_reaped and bool(remaining)
+    post_coordinator_descendants_observed = coordinator_reaped and bool(remaining)
+    post_coordinator_owned_pids = [row["pid"] for row in remaining] if coordinator_reaped else []
+    natural_teardown_started_ns = None
+    natural_teardown_ended_ns = None
+    natural_teardown_completed = None
+    leaked_after_coordinator_exit = False
+    if (coordinator_reaped and coordinator_status == 0 and failure_detection is None
+            and launch_error is None and owner is not None):
+        # A clean coordinator may finish before normal vLLM worker teardown.
+        # Observe/reap without signaling; only expiry establishes a real leak.
+        natural_teardown_started_ns = time.monotonic_ns()
+        remaining, failure_detection = _wait_for_natural_teardown(
+            owner, failure_monitor, natural_teardown_grace_seconds, poll_seconds,
+        )
+        natural_teardown_ended_ns = time.monotonic_ns()
+        natural_teardown_completed = not remaining and failure_detection is None
+        leaked_after_coordinator_exit = bool(remaining) and failure_detection is None
+    failed_coordinator_descendants = post_coordinator_descendants_observed and bool(
+        coordinator_status != 0 or failure_detection is not None or launch_error is not None
+    )
     if coordinator_status not in {0, None} or remaining or launch_error or failure_detection:
         if owner is not None and remaining:
             owner.signal(signal.SIGTERM, actions)
@@ -195,12 +200,12 @@ def _run_owned_target(
         owner.reap()
         _record_members(observed, list(owner.observed.values()))
     remaining = owner.snapshot() if owner is not None else []
+    owned_cleanup_completed = coordinator_reaped and not remaining and draft_shutdown["valid"]
     cleanup_valid = (
-        launch_error is None
-        and coordinator_reaped
+        owned_cleanup_completed
+        and launch_error is None
         and not leaked_after_coordinator_exit
-        and not remaining
-        and draft_shutdown["valid"]
+        and not failed_coordinator_descendants
     )
     run_valid = cleanup_valid and coordinator_status == 0 and not failure_detection
     effective_status = coordinator_status if coordinator_status not in {None, 0} else 0
@@ -224,10 +229,20 @@ def _run_owned_target(
         "exit_timestamp": datetime.now(timezone.utc).isoformat(),
         "exit_monotonic_ns": ended_ns,
         "term_kill_actions": actions,
+        "post_coordinator_descendants_observed": post_coordinator_descendants_observed,
+        "post_coordinator_owned_pids": post_coordinator_owned_pids,
+        "natural_teardown_grace_seconds": natural_teardown_grace_seconds,
+        "natural_teardown_started_ns": natural_teardown_started_ns,
+        "natural_teardown_ended_ns": natural_teardown_ended_ns,
+        "natural_teardown_completed": natural_teardown_completed,
+        "leaked_after_coordinator_exit": leaked_after_coordinator_exit,
+        "failed_coordinator_descendants": failed_coordinator_descendants,
         "child_reap_result": {
             "coordinator_reaped": coordinator_reaped,
             "owned_group_empty": not remaining,
-            "wrapper_exited_with_descendants_alive": leaked_after_coordinator_exit,
+            "wrapper_exited_with_descendants_alive": (
+                leaked_after_coordinator_exit or failed_coordinator_descendants
+            ),
         },
         "target_exit_status": coordinator_status,
         "effective_exit_status": effective_status,
@@ -236,6 +251,7 @@ def _run_owned_target(
         "launch_error": launch_error,
         "failure_detection": failure_detection,
         "ownership_tracking": "PID-start-identity-and-descendants; Linux-subreaper-launch-token",
+        "owned_cleanup_completed": owned_cleanup_completed,
         "cleanup_valid": cleanup_valid,
         "run_valid": run_valid,
     }
@@ -271,6 +287,59 @@ def _record_members(
     for row in rows:
         pid = int(row["pid"])
         observed.setdefault(pid, dict(row))
+
+
+class _RuntimeFailureMonitor:
+    """Keep the same fatal evidence checks active during natural teardown."""
+
+    def __init__(self, target_log: Path) -> None:
+        self.target_log = target_log
+        self.offset = 0
+        self.tail = b""
+
+    def detect(
+        self, rows: Sequence[Mapping[str, Any]], coordinator_pid: int,
+    ) -> Optional[dict[str, Any]]:
+        with self.target_log.open("rb") as log:
+            log.seek(self.offset)
+            chunk = log.read(1024 * 1024)
+            self.offset = log.tell()
+        text = self.tail + chunk
+        fatal = next((marker for marker in (
+            b"EngineCore encountered a fatal error",
+            b"WorkerProc failed", b"EngineDeadError",
+            b"died unexpectedly, shutting down executor.",
+        ) if marker in text), None)
+        self.tail = text[-256:]
+        failed_child = next((row for row in rows if row["pid"] != coordinator_pid
+                             and row.get("exit_code") not in {None, 0}), None)
+        if fatal is None and failed_child is None:
+            return None
+        return {
+            "reason": "fatal-runtime-log" if fatal else "owned-child-nonzero-exit",
+            "marker": fatal.decode() if fatal else None,
+            "child": failed_child, "timestamp_ns": time.monotonic_ns(),
+        }
+
+
+def _wait_for_natural_teardown(
+    owner: OwnedProcesses, failure_monitor: _RuntimeFailureMonitor,
+    timeout: float, poll_seconds: float,
+) -> tuple[list[dict[str, Any]], Optional[dict[str, Any]]]:
+    deadline = time.monotonic() + timeout
+    while True:
+        # Inspect exit status before reaping adopted children; a late fatal must
+        # not disappear into a successful natural-teardown result.
+        rows = owner.snapshot()
+        failure = failure_monitor.detect(rows, owner.root_pid)
+        if failure is not None:
+            return rows, failure
+        owner.reap()
+        rows = owner.snapshot()
+        left = deadline - time.monotonic()
+        if not rows or left <= 0:
+            return rows, None
+        time.sleep(min(poll_seconds, left))
 
 
 def _cleanup_draft(
@@ -405,6 +474,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--guard")
     parser.add_argument("--draft-pid", type=int)
     parser.add_argument("--draft-socket")
+    parser.add_argument("--natural-teardown-grace-seconds", type=float, default=5.0)
     parser.add_argument("--graceful-seconds", type=float, default=5.0)
     parser.add_argument("--kill-seconds", type=float, default=2.0)
     parser.add_argument("--poll-seconds", type=float, default=0.05)
@@ -418,6 +488,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         guard_path=Path(args.guard).resolve() if args.guard else None,
         draft_pid=args.draft_pid,
         draft_socket=Path(args.draft_socket).resolve() if args.draft_socket else None,
+        natural_teardown_grace_seconds=args.natural_teardown_grace_seconds,
         graceful_seconds=args.graceful_seconds,
         kill_seconds=args.kill_seconds,
         poll_seconds=args.poll_seconds,

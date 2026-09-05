@@ -1,13 +1,12 @@
-# Phase 4B.2: fresh three-mode run after row mapping and failure cleanup fixes
+# Phase 4B.2: fresh three-mode run after natural teardown supervision fix
 
-The `66207c521b8b313080583fc47265704bb7a6c66c` A800 run failed at the first
-speculative step because aligned request rows were compared with capacity-sized
-physical storage. Its hung Target workers also exposed missing internal-failure
-supervision. Preserve its entire three-mode root, including historical Target and
-Serial results and the failed `dual/` directory. The
-[row-domain and cleanup audit](phase4b2-dual-row-domain-audit.md) documents the
-repair and exact mappings. The earlier EOS canonicalization remains in force;
-the invalid `04e9b` post-EOS run also remains historical and unrecoverable.
+The `aa80ed22dfb13c7969e0944c4b56025ae3f42ca5` A800 Target run exposed premature
+leak classification after coordinator exit. Preserve its entire result root and
+failed `target/` directory, including `process-lifecycle.json`, `target.log` and
+the retained guard. The [natural teardown audit](phase4b2-natural-teardown-audit.md)
+documents the evidence boundary and repaired state machine. The five-patch
+sampled-row mapping, EOS canonicalization and retired-ready handling remain unchanged.
+Earlier `66207c` and `04e9b` failed roots also remain immutable historical evidence.
 
 This supersedes the old Target/Serial reuse and historical-commit Dual continuation.
 The coding agent performs CPU validation only. The operator runs Target, Serial, and
@@ -21,9 +20,17 @@ previous logical prefix, stopping inclusively at the first EOS/processed stop ID
 or output limit. It cross-checks the physical row without importing post-terminal
 tokens into logical output. Terminal work performs required Draft synchronization
 and release, with no next proposal. Target/Serial decoding semantics, performance
-formulas and the strict reconciler are unchanged. **The installed Python patch
-stack must be migrated to include `0005-dual-sampled-row-context.patch` below.**
-Its fresh manifest must be used by all three modes; the old manifest cannot be copied.
+formulas and the strict reconciler are unchanged. **The existing five-patch vLLM
+stack is unchanged and must pass the exact installed-state check below.** No patch
+restore/reapplication is required for this supervisor-only fix. The verified patch
+manifest is an input; all three execution results must be freshly produced.
+
+After a clean coordinator exit with no fatal evidence, the supervisor allows owned
+descendants a separate natural-exit grace of 5 seconds without sending signals.
+Natural completion keeps the run eligible and removes the guard. Surviving beyond
+that grace establishes a leak: bounded TERM/KILL cleanup follows, the run remains
+invalid even if cleanup succeeds, and the guard stays. Fatal evidence skips or
+interrupts natural grace and retains prompt bounded cleanup.
 
 The failed A800 Dual run at `56bd0a50e3b5f33cf30e32564532b1483ea7e34d` progressed
 from 100 to 99 running requests before a late ready result reached the scheduler.
@@ -79,8 +86,8 @@ tokens are diagnostic only. Warmup/JIT provenance remains visible.
 There is no cross-commit compatibility exception: all three execution commits must
 equal the delivered fix SHA. Old Target/Serial artifacts remain historical evidence.
 No Gate3 diagnostics, token-divergence investigation, additional GPU preflight
-generation or optimization belongs to this run. The one required Python patch
-migration is specified in section D.
+generation or optimization belongs to this run. The existing Python patch state is
+verified in section D.
 
 ## Interactive Bash contract
 
@@ -105,23 +112,23 @@ RC="$?"
 echo "fix commit supplied rc=$RC"
 ```
 
-## A. Preserve the exact failed 66207c three-mode root
+## A. Preserve and inspect the exact failed aa80ed Target root
 
 These commands read the supplied failed root and create an inventory in a separate
-new audit directory. A failed Dual need not have produced `resident-dual.json` or
-its final runtime manifest. Keep all partial logs and the external inventory.
+new audit directory. A failed Target need not have produced a performance report.
+Keep all partial logs, the guard, and the external inventory. Reading an old
+lifecycle artifact does not authorize clearing its guard or retrying its directory.
 
 ```bash
-export SR_PHASE4B2_FAILED_ROOT="/root/autodl-tmp/SpecRhythm-data/results/phase4/66207c521b8b313080583fc47265704bb7a6c66c/phase4b2-logical-commit-20260905T102753Z-1526"
-test -f "$SR_PHASE4B2_FAILED_ROOT/dual/target.log"
+export SR_PHASE4B2_FAILED_ROOT="/root/autodl-tmp/SpecRhythm-data/results/phase4/aa80ed22dfb13c7969e0944c4b56025ae3f42ca5/phase4b2-row-mapping-20260905T115441Z-1467"
+test -f "$SR_PHASE4B2_FAILED_ROOT/target/process-lifecycle.json" && test -f "$SR_PHASE4B2_FAILED_ROOT/target/target.log"
 RC="$?"
-echo "locate failed 66207c run rc=$RC"
+echo "locate failed aa80ed Target run rc=$RC"
 ```
 
 ```bash
 export SR_PHASE4B2_FAILED_ROOT
-export SR_PHASE4B2_FAILED_DUAL="$SR_PHASE4B2_FAILED_ROOT/dual"
-export SR_PHASE4B2_AUDIT_DIR="/root/autodl-tmp/SpecRhythm-data/audits/phase4b2-row-mapping-$$"
+export SR_PHASE4B2_AUDIT_DIR="/root/autodl-tmp/SpecRhythm-data/audits/phase4b2-natural-teardown-$$"
 python3 - <<'PY'
 import hashlib, json, os, pathlib
 root = pathlib.Path(os.environ["SR_PHASE4B2_FAILED_ROOT"])
@@ -141,12 +148,50 @@ for path in sorted(root.rglob("*")):
         raise ValueError(f"unexpected non-file evidence: {path}")
 assert rows, "failed evidence directory is empty"
 audit.mkdir(parents=True, exist_ok=False)
-with (audit / "failed-dual-before.json").open("x") as handle:
+with (audit / "failed-run-before.json").open("x") as handle:
     json.dump({"root": str(root), "entries": rows}, handle, indent=2, sort_keys=True)
-print("preserved failed Dual inventory:", audit / "failed-dual-before.json")
+print("preserved failed run inventory:", audit / "failed-run-before.json")
 PY
 RC="$?"
-echo "failed Dual checksum inventory rc=$RC"
+echo "failed run checksum inventory rc=$RC"
+```
+
+Inspect the original evidence without changing it. The old supervisor did not
+measure natural-exit time. These fields can confirm its premature classification
+branch, but cannot prove how long shutdown would have taken without its signals.
+If the recorded exit/failure fields differ, stop and review that cause.
+
+```bash
+python3 - <<'PY'
+import hashlib, json, os, pathlib
+root = pathlib.Path(os.environ["SR_PHASE4B2_FAILED_ROOT"]) / "target"
+audit = pathlib.Path(os.environ["SR_PHASE4B2_AUDIT_DIR"])
+raw = (root / "process-lifecycle.json").read_bytes()
+log = (root / "target.log").read_bytes()
+value = json.loads(raw)
+keys = ("coordinator_pid", "target_exit_status", "effective_exit_status", "failure_detection",
+        "launch_error", "child_reap_result", "term_kill_actions", "remaining_owned_pids",
+        "draft_shutdown_result", "cleanup_valid", "run_valid")
+review = {key: value.get(key) for key in keys}
+review["source_root"] = str(root)
+review["source_sha256"] = {"process-lifecycle.json": hashlib.sha256(raw).hexdigest(),
+                         "target.log": hashlib.sha256(log).hexdigest()}
+markers = ("Running:", "SIGTERM", "WorkerProc", "fatal", "Traceback", "all workers exited")
+review["log_evidence"] = [{"line": index, "text": line} for index, line in
+                         enumerate(log.decode(errors="replace").splitlines(), 1)
+                         if any(marker in line for marker in markers)]
+with (audit / "failed-target-lifecycle-review.json").open("x") as handle:
+    json.dump(review, handle, indent=2, sort_keys=True)
+print(json.dumps(review, indent=2))
+assert value["target_exit_status"] == 0 and value.get("failure_detection") is None
+assert value.get("launch_error") is None
+assert value["child_reap_result"]["wrapper_exited_with_descendants_alive"] is True
+assert any(row["signal"] == "SIGTERM" for row in value["term_kill_actions"])
+assert value["effective_exit_status"] == 125 and value["run_valid"] is False
+print("old supervisor immediately signaled post-coordinator descendants; preserve failed evidence")
+PY
+RC="$?"
+echo "read-only failed Target lifecycle audit rc=$RC"
 ```
 
 ## B. Check out the delivered fix commit
@@ -170,8 +215,8 @@ commit = os.environ["SR_PHASE4B_FIX_COMMIT"]
 assert re.fullmatch(r"[0-9a-f]{40}", commit), "supply the delivered full SHA"
 assert not subprocess.check_output(["git", "status", "--porcelain"], text=True).strip()
 assert subprocess.check_output(["git", "rev-parse", commit + "^{commit}"], text=True).strip() == commit
-assert commit != "66207c521b8b313080583fc47265704bb7a6c66c"
-assert subprocess.run(["git", "merge-base", "--is-ancestor", "66207c521b8b313080583fc47265704bb7a6c66c", commit]).returncode == 0
+assert commit != "aa80ed22dfb13c7969e0944c4b56025ae3f42ca5"
+assert subprocess.run(["git", "merge-base", "--is-ancestor", "aa80ed22dfb13c7969e0944c4b56025ae3f42ca5", commit]).returncode == 0
 PY
 RC="$?"
 echo "clean checkout and explicit fix pin rc=$RC"
@@ -218,6 +263,7 @@ export SR_PHASE4B_WORKLOAD="$SR_INPUT_ROOT/workloads/corrected-100.jsonl"
 export SR_PHASE4B_REFERENCE="$SR_INPUT_ROOT/Gate-3-corrected-100/reference/stock-target-reference.json"
 export SR_PHASE4B_CONFIG="$PWD/configs/phase4b_dual_batch_1d2v.yaml"
 export PHASE4B1_OVERLAP_REQUIREMENT=required
+export PHASE4B_NATURAL_TEARDOWN_GRACE_SECONDS=5
 unset PHASE4B1_NUMERICAL_PLAN PHASE4B1_NUMERICAL_OUTPUT
 SR_VLLM_ROOT="$(python - <<'PY'
 from importlib import metadata
@@ -229,11 +275,11 @@ echo "locate installed vLLM rc=$RC"
 export SR_VLLM_ROOT
 ```
 
-## D. Verify quiescence and migrate the installed Python patch stack
+## D. Verify quiescence and the unchanged five-patch stack
 
 The old failed run may still have orphan workers. This precondition reads process
 state only. If it fails, stop and resolve the previously owned processes before
-modifying installed vLLM or starting a new run. It never kills by process name or
+starting a new run. It never kills by process name or
 unlinks an unverified old socket. The new supervisor prevents this failure on
 future owned runs; it cannot retroactively prove ownership of arbitrary old PIDs.
 
@@ -248,33 +294,10 @@ RC="$?"
 echo "quiescent process precondition rc=$RC"
 ```
 
-The manager accepts only known exact source hashes, restores the old four-patch
-state (or current five-patch state) to pinned stock, then applies all five patches
-without fuzz. All migration evidence is written into the new audit directory.
-
-```bash
-python integrations/vllm/manage_patch.py restore \
-  --vllm-root "$SR_VLLM_ROOT" --source "$SR_VLLM_SOURCE" \
-  --manifest "$SR_PHASE4B2_AUDIT_DIR/restore-before-row-context.json"
-RC="$?"
-echo "restore known installed patch state rc=$RC"
-```
-
-```bash
-python integrations/vllm/manage_patch.py check \
-  --vllm-root "$SR_VLLM_ROOT" --source "$SR_VLLM_SOURCE" \
-  --expect-state stock --manifest "$SR_PHASE4B2_AUDIT_DIR/stock-before-row-context.json"
-RC="$?"
-echo "pinned stock state before new patch rc=$RC"
-```
-
-```bash
-python integrations/vllm/manage_patch.py apply \
-  --vllm-root "$SR_VLLM_ROOT" --source "$SR_VLLM_SOURCE" \
-  --manifest "$SR_PHASE4B2_AUDIT_DIR/vllm-patch-stack.json"
-RC="$?"
-echo "apply complete sampled-row patch stack rc=$RC"
-```
+Keep the installed five-patch stack from `aa80ed`. The manager checks exact hashes
+without modifying installed vLLM. A failed check requires review, not automatic
+restore/reapplication. The old apply manifest is reused only as a verified common
+input; old Target/Serial/Dual outputs are never copied into the new result root.
 
 ```bash
 python integrations/vllm/manage_patch.py check \
@@ -304,18 +327,17 @@ assert not subprocess.check_output(["git", "-C", source, "status", "--porcelain"
 old = pathlib.Path(os.environ["SR_PHASE4B2_FAILED_ROOT"])
 config_path = pathlib.Path(os.environ["SR_PHASE4B_CONFIG"])
 config = load_phase4_config(config_path)
-manifest = load_patch_manifest(pathlib.Path(os.environ["SR_PHASE4B2_AUDIT_DIR"]) / "vllm-patch-stack.json", config)
+manifest = load_patch_manifest(old / "patch-stage/vllm-patch-stack.json", config)
 assert manifest["patch_stack"][-1]["patch_file"] == "0005-dual-sampled-row-context.patch"
 print(json.dumps(validate_installed_patch_stack(manifest), indent=2))
 workload = pathlib.Path(os.environ["SR_PHASE4B_WORKLOAD"])
 assert len(load_smoke_requests(workload, 100, require_task_mixture=True)) == 100
 assert pathlib.Path(os.environ["SR_PHASE4B_REFERENCE"]).is_file()
-historical = json.loads((old / "target/decode-performance.json").read_text())
-for key, path in (("config", config_path), ("workload", workload)):
-    assert hashlib.sha256(path.read_bytes()).hexdigest() == historical["artifact_sha256"][key]
+historical_inputs = json.loads((old / "fixed-input-sha256.json").read_text())
+for path in (config_path, workload, pathlib.Path(os.environ["SR_PHASE4B_REFERENCE"])):
+    assert hashlib.sha256(path.read_bytes()).hexdigest() == historical_inputs[str(path)]
 for role, env in (("draft", "SR_DRAFT_MODEL"), ("target", "SR_TARGET_MODEL")):
     assert pathlib.Path(os.environ[env]).is_dir()
-    assert historical["models"][role]["path"] == os.environ[env]
 print("fixed code, workload, models and installed patch verified")
 PY
 RC="$?"
@@ -324,15 +346,15 @@ echo "source and fixed input validation rc=$RC"
 
 ## E. Create a new root and capture current environment/topology
 
-The root creation rejects an existing directory and copies only the newly applied
-five-patch manifest. It does not copy old mode outputs or relabel their provenance.
+The root creation rejects an existing directory and copies only the verified,
+unchanged five-patch input manifest. It does not copy old mode outputs or relabel their provenance.
 The environment probe reads hardware/software metadata; it does not run generation.
 
 ```bash
 SR_PHASE4B2_STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 RC="$?"
 echo "fresh root timestamp rc=$RC"
-export SR_PHASE4B2_ROOT="/root/autodl-tmp/SpecRhythm-data/results/phase4/$SR_PHASE4B_COMMIT/phase4b2-row-mapping-$SR_PHASE4B2_STAMP-$$"
+export SR_PHASE4B2_ROOT="/root/autodl-tmp/SpecRhythm-data/results/phase4/$SR_PHASE4B_COMMIT/phase4b2-natural-teardown-$SR_PHASE4B2_STAMP-$$"
 export SR_PHASE4B_ENVIRONMENT="$SR_PHASE4B2_ROOT/environment.json"
 export SR_PHASE4B_TOPOLOGY="$SR_PHASE4B2_ROOT/topology.json"
 export SR_PHASE4B_PATCH_MANIFEST="$SR_PHASE4B2_ROOT/patch-stage/vllm-patch-stack.json"
@@ -349,7 +371,7 @@ assert root.parent.name == commit and root.resolve() != old.resolve()
 assert old.resolve() not in root.resolve().parents
 root.mkdir(parents=True, exist_ok=False)
 (root / "patch-stage").mkdir()
-shutil.copyfile(pathlib.Path(os.environ["SR_PHASE4B2_AUDIT_DIR"]) / "vllm-patch-stack.json", os.environ["SR_PHASE4B_PATCH_MANIFEST"])
+shutil.copyfile(old / "patch-stage/vllm-patch-stack.json", os.environ["SR_PHASE4B_PATCH_MANIFEST"] )
 print("NEW result root:", root)
 PY
 RC="$?"
@@ -432,6 +454,12 @@ assert value["performance_result"] is True and value["cleanup_valid"] is True
 assert value["execution_git_commit"] == os.environ["SR_PHASE4B_FIX_COMMIT"]
 assert value["measurement_code_git_commit"] == os.environ["SR_PHASE4B_FIX_COMMIT"]
 assert value["request_count"] == value["metrics"]["completed_requests"] == 100
+lifecycle = json.loads((root / mode / "process-lifecycle.json").read_text())
+assert lifecycle["target_exit_status"] == lifecycle["effective_exit_status"] == 0
+assert lifecycle["natural_teardown_completed"] is True
+assert lifecycle["leaked_after_coordinator_exit"] is False
+assert lifecycle["owned_cleanup_completed"] is lifecycle["cleanup_valid"] is lifecycle["run_valid"] is True
+assert not (root / mode / "process-lifecycle.active").exists()
 for name, expected in json.loads((root / "fixed-input-sha256.json").read_text()).items():
     assert hashlib.sha256(pathlib.Path(name).read_bytes()).hexdigest() == expected, name
 print(mode, "metrics:", json.dumps(value["metrics"], indent=2))
@@ -577,8 +605,12 @@ echo "Dual execution and cleanup rc=$RC"
 On failure, stop manually. Preserve this new Dual directory and its logs; do not
 derive performance from an incomplete run or invoke this GPU command again in place.
 The supervisor detects pinned fatal-worker/EngineCore messages or a nonzero owned
-child status while the wrapper is still alive. Defaults are a 50 ms poll, 5 seconds
-for TERM and 2 seconds for KILL, followed by the same bounded Draft cleanup. Linux
+child status while the wrapper is still alive. Fatal failures immediately use a
+50 ms poll, 5 seconds for TERM and 2 seconds for KILL, followed by the same bounded
+Draft cleanup. Clean coordinator exit instead allows 5 seconds of natural teardown
+before any signal; a surviving descendant after that deadline invalidates the run
+and retains its guard. The lifecycle artifact distinguishes initial observation,
+natural completion, leak classification and successful forced cleanup. Linux
 adopts and reaps orphan Target workers, including tracked workers in another
 session. Socket removal requires original Draft PID ownership and unchanged inode.
 The timestamp wrapper drains output for at most 250 ms after its direct child ends;
@@ -638,7 +670,7 @@ contents. This check can also be run after a failure at any preceding step.
 python - <<'PY'
 import hashlib, json, os, pathlib
 audit = pathlib.Path(os.environ["SR_PHASE4B2_AUDIT_DIR"])
-before = json.loads((audit / "failed-dual-before.json").read_text())
+before = json.loads((audit / "failed-run-before.json").read_text())
 root = pathlib.Path(before["root"])
 assert root.is_dir()
 rows = {}
@@ -652,12 +684,12 @@ for path in sorted(root.rglob("*")):
         rows[key] = {"directory": True}
     else:
         raise ValueError(f"unexpected non-file evidence: {path}")
-assert rows == before["entries"], "historical failed Dual evidence changed"
-print("historical three-mode root unchanged; files and directory inventory match")
+assert rows == before["entries"], "historical failed Target evidence changed"
+print("historical result root unchanged; files and directory inventory match")
 print("new three-mode root:", os.environ["SR_PHASE4B2_ROOT"])
 PY
 RC="$?"
-echo "historical failed Dual immutability verification rc=$RC"
+echo "historical failed Target immutability verification rc=$RC"
 ```
 
 Keep the new result root, the separate audit inventory, and the original failed root.

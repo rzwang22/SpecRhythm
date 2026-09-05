@@ -79,10 +79,13 @@ def test_bounded_target_tree_draft_kill_and_owned_socket_cleanup(tmp_path, reaso
         status, report = run_owned_target(
             command, target_log=tmp_path / "target.log", artifact_path=tmp_path / "lifecycle.json",
             draft_pid=draft.pid, draft_socket=socket_path,
+            natural_teardown_grace_seconds=10,
             graceful_seconds=0.15, kill_seconds=1, poll_seconds=0.01,
         )
         assert time.monotonic() - started < 8
         assert status != 0 and report["run_valid"] is False
+        assert report["natural_teardown_completed"] is None
+        assert report["natural_teardown_started_ns"] is None
         assert report["remaining_owned_pids"] == []
         assert {row["signal"] for row in report["term_kill_actions"]} == {"SIGTERM", "SIGKILL"}
         if reason != "coordinator-exit":

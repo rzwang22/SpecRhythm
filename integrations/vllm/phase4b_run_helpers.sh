@@ -63,6 +63,7 @@ phase4b_run_target_with_cleanup () {
     --target-log "$phase4b_target_log"
     --guard "$phase4b_guard"
     --draft-pid "$phase4b_draft_pid"
+    --natural-teardown-grace-seconds "${PHASE4B_NATURAL_TEARDOWN_GRACE_SECONDS:-5}"
     --graceful-seconds "${PHASE4B_CLEANUP_GRACE_SECONDS:-5}"
     --kill-seconds "${PHASE4B_CLEANUP_KILL_SECONDS:-2}"
     --poll-seconds "${PHASE4B_CLEANUP_POLL_SECONDS:-0.05}"

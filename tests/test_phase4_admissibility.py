@@ -322,6 +322,7 @@ def test_wrapper_exit_with_live_grandchild_fails_and_cleans_owned_group(tmp_path
         [sys.executable, "-c", script],
         target_log=tmp_path / "tree.log",
         artifact_path=tmp_path / "tree.json",
+        natural_teardown_grace_seconds=0.15,
         graceful_seconds=0.2,
         kill_seconds=0.2,
         poll_seconds=0.01,
