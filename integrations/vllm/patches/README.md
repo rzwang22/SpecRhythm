@@ -31,13 +31,20 @@ already computed by the runner and never depends on speculative-only common atte
 It does not modify model inputs, scheduler state,
 sampling, proposals, KV ownership or outputs. A patched-observational stock-style run remains
 ineligible for stock-reference freezing.
+5. `0005-dual-sampled-row-context.patch` captures the bookkeeping output-copy IDs
+and index map together with the current physical InputBatch IDs/index map and
+scheduled/verification request sets. Only proposers declaring
+`requires_sampled_row_context` receive this additional structured argument. Dual
+validates and projects the rows before applying its unchanged logical EOS commit
+semantics. Capacity-sized token arrays are never treated as request-row counts.
+The synchronous call order, sampler/rejection parsing and physical writes are unchanged.
 
 The per-logical-token Gate3 localizer does not require another vLLM patch. The same default-off
 `0004` hook enters the out-of-tree Python observer before the forward. A new immutable plan asks
 that observer to reconstruct only two selected layers per checkpoint in logical block-table order
 and transfer each selected layer to CPU once for separate K/V token hashing. The active exact
-patched runner remains the e73 SHA256
-`a8b56ee511ad04d4f6e56e802417e6b8fb8b723a9fef05de36148f4218e9e945`; scheduler SHA256 remains
+patched runner including the Dual row-context hook has SHA256
+`2905189397b1517659e6606f5bc36c7ca226330f42255c579207fe38f61f9e19`; scheduler SHA256 remains
 `ffaefd61869589f086e6acdf9a0c4f55f80d5dad145ca3f6fff2379f7a4e2455`. Restore from that exact
 state, stock check, reapply, and patched check are all still mandatory. No patch changes model,
 attention, KV ownership, scheduler, sampling, C++/CUDA, or Triton semantics.
@@ -63,4 +70,7 @@ order. A Phase-4A installation containing only the prior worker patch and the ex
 patched state, including the exact pre-`0004` runner, can still be restored through strict known
 hashes. The manager also recognizes the exact retired `c142fa7` four-layer observer solely as a
 strict restore input; `check --expect-state patched` rejects it, and new applications use only the
-active generic-ownership four-layer stack. Do not apply the stack to another vLLM commit.
+active five-patch stack. The previous four-patch runner
+`a8b56ee511ad04d4f6e56e802417e6b8fb8b723a9fef05de36148f4218e9e945` is accepted only
+for strict restore/migration, not as a current patched installation. Do not apply
+the stack to another vLLM commit.

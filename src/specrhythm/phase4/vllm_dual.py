@@ -25,6 +25,7 @@ from specrhythm.phase4.dual_commit import (
     dual_greedy_acceptance,
     load_dual_stop_policies,
 )
+from specrhythm.phase4.dual_rows import PhysicalTokenRows, align_sampled_rows
 from specrhythm.phase4.dual_service import DualDraftClient
 from specrhythm.phase4.manifest import atomic_write_json
 from specrhythm.phase4.performance_boundary import (
@@ -67,6 +68,8 @@ class _Request:
 
 class DualBatchRemoteProposer:
     """Target-side observer and non-blocking Draft work submitter."""
+
+    requires_sampled_row_context = True
 
     def __init__(self, vllm_config: Any) -> None:
         try:
@@ -149,10 +152,40 @@ class DualBatchRemoteProposer:
         request_ids: Optional[Sequence[str]] = None,
         slot_mappings: Any = None,
         target_materialized_token_counts: Optional[Sequence[int]] = None,
+        sampled_row_context: Optional[Mapping[str, Any]] = None,
     ) -> list[list[int]]:
         del slot_mappings
-        if request_ids is None:
-            raise RuntimeError("Phase-4 worker hook did not provide request IDs")
+        # InputBatch vectors have capacity-sized storage. Resolve both domains
+        # before invoking the observer's unchanged aligned-row consistency checks.
+        aligned = None
+        try:
+            aligned = align_sampled_rows(
+                sampled_row_context, sampled_token_ids, num_tokens_no_spec, token_ids_cpu,
+                physical_request_ids=request_ids or (),
+                target_materialized_token_counts=target_materialized_token_counts,
+            )
+            local_contract = {
+                "valid": True, "signature": aligned.logical_signature,
+                "physical_request_ids": sorted(request_ids or ()),
+            }
+        except (ValueError, TypeError, KeyError, IndexError) as error:
+            local_contract = {"valid": False, "error": str(error)}
+        contracts: list[Any] = [None] * self.tp_world_size
+        self.dist.all_gather_object(contracts, local_contract, group=self.tp_group.cpu_group)
+        if any(not isinstance(row, Mapping) or row.get("valid") is not True for row in contracts):
+            raise RuntimeError(f"Dual TP sampled-row contract failed: {contracts}")
+        if (
+            len({row["signature"] for row in contracts}) != 1
+            or len({tuple(row["physical_request_ids"]) for row in contracts}) != 1
+        ):
+            raise RuntimeError("Dual TP sampled-row mappings disagree")
+        assert aligned is not None
+        physical_request_count = len(request_ids or ())
+        request_ids = aligned.request_ids
+        sampled_token_ids = [list(row) for row in aligned.sampled_tokens]
+        num_tokens_no_spec = [len(row) for row in aligned.physical_tokens]
+        token_ids_cpu = PhysicalTokenRows(aligned.physical_tokens)
+        target_materialized_token_counts = aligned.materialized_counts
         if self.resident_decode_ready and not self.setup_complete:
             if target_materialized_token_counts is None:
                 raise RuntimeError(
@@ -174,20 +207,27 @@ class DualBatchRemoteProposer:
                 raise RuntimeError("incremental resident Dual setup observation failed")
             if setup.get("complete") is True:
                 self._complete_global_setup(setup)
-            return [[] for _ in request_ids]
+            return [[] for _ in range(physical_request_count)]
         if self.tp_rank == 0:
-            result = self._rank_zero_update(
-                request_ids, sampled_token_ids, num_tokens_no_spec, token_ids_cpu
-            )
+            try:
+                result = self._rank_zero_update(
+                    request_ids, sampled_token_ids, num_tokens_no_spec, token_ids_cpu
+                )
+            except (RuntimeError, ValueError, KeyError, TypeError) as error:
+                result = {"ok": False, "error": str(error), "error_type": type(error).__name__}
         else:
             result = None
         result = self.tp_group.broadcast_object(result, src=0)
         if not isinstance(result, Mapping) or result.get("ok") is not True:
+            if isinstance(result, Mapping) and result.get("error_type") == "ValueError":
+                raise ValueError(result["error"])
+            if isinstance(result, Mapping) and result.get("error"):
+                raise RuntimeError(result["error"])
             raise RuntimeError("Target TP ranks did not agree on Dual-Batch state update")
         # Ready proposals are injected by DualBatchScheduler before execution.
         # Returning empty rows prevents the stock post-step path from creating
         # a second, unverified proposal for any request.
-        return [[] for _ in request_ids]
+        return [[] for _ in range(physical_request_count)]
 
     def _rank_zero_observe_setup(
         self,
@@ -1005,6 +1045,9 @@ class DualBatchRemoteProposer:
                 "dependency_speculation": False,
                 "logical_commit_source": "current-round-rejection-parsed-sampled-token-ids",
                 "physical_token_row_role": "prior-prefix-plus-sampled-delta-cross-check",
+                "sampled_row_domain": "bookkeeping-req_ids_output_copy",
+                "physical_row_lookup": "request-id-to-current-input-batch-index",
+                "sampled_row_tp_consensus": True,
                 "serving_stop_contract": {
                     "source": "pinned-InputProcessor-generation-config-and-renderer-EOS",
                     "custom_stop_strings": False,

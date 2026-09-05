@@ -14,6 +14,7 @@ from specrhythm.phase4.dual_correctness import (
     validate_request_state_events,
     validate_round_accounting,
 )
+from specrhythm.phase4.dual_rows import ROW_CONTEXT_SCHEMA
 from specrhythm.phase4.dual_service import AsyncDualDraftController, DualDraftMachine
 from specrhythm.phase4.request_identity import FrozenPromptIdentityMap
 from specrhythm.phase4.serial import token_prefix_hash
@@ -31,6 +32,21 @@ class PhysicalRows:
     def __getitem__(self, key):
         index, section = key
         return SimpleNamespace(tolist=lambda: list(self.rows[index][section]))
+
+    def __len__(self):
+        return len(self.rows)
+
+
+def row_context(ids=("opaque",), physical_ids=None):
+    physical_ids = ids if physical_ids is None else physical_ids
+    return {
+        "schema_version": ROW_CONTEXT_SCHEMA,
+        "sampled_request_ids": list(ids),
+        "req_id_to_sampled_index": {key: index for index, key in enumerate(ids)},
+        "physical_request_ids": list(physical_ids),
+        "req_id_to_physical_index": {key: index for index, key in enumerate(physical_ids)},
+        "scheduled_request_ids": list(ids), "scheduled_spec_request_ids": [],
+    }
 
 
 class Backend:
@@ -96,7 +112,10 @@ def observer(tmp_path, *, proposal=(13, EOS), maximum=8, eos=EOS, stops=(), tail
     obj.timing_log = CheckpointJsonl(tmp_path / "timing.jsonl")
     obj._write_report = lambda: None
     obj.resident_decode_ready, obj.setup_complete, obj.tp_rank = True, True, 0
-    obj.tp_group = SimpleNamespace(broadcast_object=lambda result, src: result)
+    obj.tp_world_size = 2
+    obj.dist = SimpleNamespace(all_gather_object=lambda rows, value, group:
+                               rows.__setitem__(slice(None), [value, value]))
+    obj.tp_group = SimpleNamespace(broadcast_object=lambda result, src: result, cpu_group=None)
     backend = Backend(proposal)
     machine = DualDraftMachine(backend)
     obj._transition(RID, "DRAFT_READY")
@@ -119,7 +138,7 @@ def update(obj, sampled, physical=None):
     if physical is None:
         physical = obj.requests[RID].committed_token_ids + tuple(sampled)
     assert obj.propose([list(sampled)], [len(physical)], PhysicalRows([physical]),
-                       request_ids=["opaque"]) == [[]]
+                       request_ids=["opaque"], sampled_row_context=row_context()) == [[]]
 
 
 @pytest.mark.parametrize("proposal,sampled,maximum,expected,reason,accepted,correction,bonus", [
@@ -277,8 +296,9 @@ def test_explicit_processed_stop_token_is_inclusive_and_distinct_from_eos(tmp_pa
                                           ([], [], [])])
 def test_missing_or_duplicate_verification_rows_fail_closed(tmp_path, rows, ids, counts):
     obj, _, _ = observer(tmp_path)
-    with pytest.raises(RuntimeError, match="request IDs|missing sampled-token rows"):
-        obj.propose(rows, counts, PhysicalRows([]), request_ids=ids)
+    with pytest.raises(RuntimeError, match="contract failed|missing sampled-token rows"):
+        obj.propose(rows, counts, PhysicalRows([]), request_ids=ids,
+                    sampled_row_context=row_context(ids))
     assert obj.requests[RID].prefix_version == 1
     assert obj.client.calls == []
 

@@ -47,13 +47,15 @@ def test_patched_check_accepts_only_exact_patched_state():
     assert report["actual_runner_sha256"] == manager.PATCHED_SHA256
     assert report["actual_scheduler_sha256"] == manager.SCHEDULER_PATCHED_SHA256
     assert report["pinned_source_commit"] == manager.BASE_COMMIT
-    assert len(report["active_patch_hashes"]) == 4
+    assert len(report["active_patch_hashes"]) == 5
     assert _report(stock, "patched")["valid"] is False
     old_observer = _actual(
         manager.PRE_GENERIC_NUMERICAL_PATCHED_SHA256,
         manager.SCHEDULER_PATCHED_SHA256,
     )
     assert _report(old_observer, "patched")["valid"] is False
+    old_four_patch = _actual(manager.PRE_SAMPLED_ROWS_SHA256, manager.SCHEDULER_PATCHED_SHA256)
+    assert _report(old_four_patch, "patched")["valid"] is False
 
 
 @pytest.mark.parametrize(
@@ -100,7 +102,7 @@ def test_apply_then_e73_patched_check_and_restore_then_stock_check(
     tmp_path, monkeypatch
 ):
     assert manager.PATCHED_SHA256 == (
-        "a8b56ee511ad04d4f6e56e802417e6b8fb8b723a9fef05de36148f4218e9e945"
+        "2905189397b1517659e6606f5bc36c7ca226330f42255c579207fe38f61f9e19"
     )
     root = tmp_path / "site-packages"
     target = root / manager.TARGET_FILE
@@ -145,6 +147,12 @@ def test_apply_then_e73_patched_check_and_restore_then_stock_check(
                 state[str(manager.TARGET_FILE)] = (
                     manager.TIMING_PATCHED_SHA256
                     if reverse
+                    else manager.PRE_SAMPLED_ROWS_SHA256
+                )
+            elif patch == manager.SAMPLED_ROWS_PATCH:
+                state[str(manager.TARGET_FILE)] = (
+                    manager.PRE_SAMPLED_ROWS_SHA256
+                    if reverse
                     else manager.PATCHED_SHA256
                 )
         return subprocess.CompletedProcess([], 0, "", "")
@@ -152,6 +160,16 @@ def test_apply_then_e73_patched_check_and_restore_then_stock_check(
     monkeypatch.setattr(manager, "sha256", fake_sha256)
     monkeypatch.setattr(manager, "run_patch", fake_patch)
     monkeypatch.setattr(manager, "source_commit", lambda _source: manager.BASE_COMMIT)
+
+    # The real server starts from the exact four-patch state. It is restore-only,
+    # and must not try reversing a fifth patch that is not installed there.
+    state[str(manager.TARGET_FILE)] = manager.PRE_SAMPLED_ROWS_SHA256
+    state[str(manager.SCHEDULER_FILE)] = manager.SCHEDULER_PATCHED_SHA256
+    old_restore = tmp_path / "old-four-restore.json"
+    assert manager.main(["restore", "--vllm-root", str(root), "--source", str(source),
+                         "--manifest", str(old_restore)]) == 0
+    assert len(json.loads(old_restore.read_text())["patch_stack"]) == 4
+    assert state == _actual(manager.BASE_SHA256, manager.SCHEDULER_BASE_SHA256)
 
     assert manager.main(["apply", "--vllm-root", str(root), "--source", str(source)]) == 0
     patched_manifest = tmp_path / "patched-check.json"

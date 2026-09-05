@@ -23,7 +23,9 @@ TIMING_PATCHED_SHA256 = (
 PRE_GENERIC_NUMERICAL_PATCHED_SHA256 = (
     "0e1972aa3d9b9f03e1de60ef95fb567e8ad6164f46cca3bee85ce27f5d04c56d"
 )
-PATCHED_SHA256 = "a8b56ee511ad04d4f6e56e802417e6b8fb8b723a9fef05de36148f4218e9e945"
+PRE_SAMPLED_ROWS_SHA256 = "a8b56ee511ad04d4f6e56e802417e6b8fb8b723a9fef05de36148f4218e9e945"
+PATCHED_SHA256 = "2905189397b1517659e6606f5bc36c7ca226330f42255c579207fe38f61f9e19"
+SAMPLED_ROWS_PATCH = Path(__file__).parent / "patches" / "0005-dual-sampled-row-context.patch"
 PATCH = Path(__file__).parent / "patches" / "0001-custom-proposer-request-and-verify-hooks.patch"
 PRE_GATE3_WORKER_HOOKS_SHA256 = (
     "a99c410cd791f20071bb17b8a619e5b309427b50ed864b8753d066c1dc4b150c"
@@ -156,6 +158,7 @@ def expected_state_hashes(expected_state: str) -> Mapping[str, str]:
 def patch_stack(
     active_runner_patch: Path = PATCH,
     active_numerical_patch: Path = NUMERICAL_PATCH,
+    *, include_sampled_rows: bool = True,
 ) -> list[Mapping[str, Any]]:
     worker_hooks_sha256 = WORKER_HOOKS_SHA256
     timing_runner_sha256 = TIMING_PATCHED_SHA256
@@ -202,11 +205,21 @@ def patch_stack(
                 "patched_source_sha256": (
                     PRE_GENERIC_NUMERICAL_PATCHED_SHA256
                     if active_numerical_patch == PRE_GENERIC_NUMERICAL_PATCH
-                    else PATCHED_SHA256
+                    else PRE_SAMPLED_ROWS_SHA256
                 ),
                 "diagnostic_only": True,
             }
         )
+        if include_sampled_rows and active_numerical_patch == NUMERICAL_PATCH:
+            stack.append({
+                "order": 5,
+                "patch_file": SAMPLED_ROWS_PATCH.name,
+                "patch_sha256": sha256(SAMPLED_ROWS_PATCH),
+                "target_file": str(TARGET_FILE),
+                "original_source_sha256": PRE_SAMPLED_ROWS_SHA256,
+                "patched_source_sha256": PATCHED_SHA256,
+                "dual_only": True,
+            })
     return stack
 
 
@@ -326,6 +339,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 TIMING_PATCHED_SHA256,
                 PRE_GENERIC_NUMERICAL_PATCHED_SHA256,
                 PATCHED_SHA256,
+                PRE_SAMPLED_ROWS_SHA256,
                 PRE_GATE3_WORKER_HOOKS_SHA256,
                 PRE_GATE3_PATCHED_SHA256,
                 LEGACY_PATCHED_SHA256,
@@ -355,16 +369,21 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         (SCHEDULER_FILE, SCHEDULER_PATCH),
         (TARGET_FILE, TIMING_PATCH),
         (TARGET_FILE, NUMERICAL_PATCH),
+        (TARGET_FILE, SAMPLED_ROWS_PATCH),
     ]
     if args.operation == "restore":
         operations = []
+        if runner_before == PATCHED_SHA256:
+            operations.append((TARGET_FILE, SAMPLED_ROWS_PATCH))
         if runner_before in {
             PATCHED_SHA256,
+            PRE_SAMPLED_ROWS_SHA256,
             PRE_GENERIC_NUMERICAL_PATCHED_SHA256,
         }:
             operations.append((TARGET_FILE, active_numerical_patch))
         if runner_before in {
             PATCHED_SHA256,
+            PRE_SAMPLED_ROWS_SHA256,
             PRE_GENERIC_NUMERICAL_PATCHED_SHA256,
             TIMING_PATCHED_SHA256,
             PRE_GATE3_PATCHED_SHA256,
@@ -374,6 +393,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             operations.append((SCHEDULER_FILE, SCHEDULER_PATCH))
         if runner_before in {
             PATCHED_SHA256,
+            PRE_SAMPLED_ROWS_SHA256,
             PRE_GENERIC_NUMERICAL_PATCHED_SHA256,
             TIMING_PATCHED_SHA256,
             WORKER_HOOKS_SHA256,
@@ -413,7 +433,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 f"post-operation {relative} SHA256 is {after[relative]}, "
                 f"expected {expected_sha}"
             )
-    stack = patch_stack(active_runner_patch, active_numerical_patch)
+    stack = patch_stack(
+        active_runner_patch, active_numerical_patch,
+        include_sampled_rows=args.operation == "apply" or runner_before == PATCHED_SHA256,
+    )
     report = {
         "schema_version": "specrhythm.vllm-base-and-patch-manifest.v1",
         "timestamp": datetime.now(timezone.utc).isoformat(),

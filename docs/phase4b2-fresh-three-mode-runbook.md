@@ -1,11 +1,13 @@
-# Phase 4B.2: fresh three-mode run after the logical EOS commit fix
+# Phase 4B.2: fresh three-mode run after row mapping and failure cleanup fixes
 
-The completed `04e9b614...` Dual run committed a physical token after EOS: logical
-length 84 disagreed with final length 83, and an unnecessary round-1 Draft proposal
-was generated. Strict terminal recovery correctly refused it. **Do not promote
-or recover that run.** Preserve its entire three-mode root unchanged. The
-[pinned-vLLM logical commit audit](phase4b2-dual-logical-commit-audit.md) explains
-the runtime repair, stop contract and CPU regression coverage.
+The `66207c521b8b313080583fc47265704bb7a6c66c` A800 run failed at the first
+speculative step because aligned request rows were compared with capacity-sized
+physical storage. Its hung Target workers also exposed missing internal-failure
+supervision. Preserve its entire three-mode root, including historical Target and
+Serial results and the failed `dual/` directory. The
+[row-domain and cleanup audit](phase4b2-dual-row-domain-audit.md) documents the
+repair and exact mappings. The earlier EOS canonicalization remains in force;
+the invalid `04e9b` post-EOS run also remains historical and unrecoverable.
 
 This supersedes the old Target/Serial reuse and historical-commit Dual continuation.
 The coding agent performs CPU validation only. The operator runs Target, Serial, and
@@ -18,8 +20,10 @@ The observer now commits the current rejection-parsed sampled delta onto the
 previous logical prefix, stopping inclusively at the first EOS/processed stop ID
 or output limit. It cross-checks the physical row without importing post-terminal
 tokens into logical output. Terminal work performs required Draft synchronization
-and release, with no next proposal. Target/Serial semantics, performance formulas
-and the strict reconciler are unchanged. The installed vLLM patch stack is unchanged.
+and release, with no next proposal. Target/Serial decoding semantics, performance
+formulas and the strict reconciler are unchanged. **The installed Python patch
+stack must be migrated to include `0005-dual-sampled-row-context.patch` below.**
+Its fresh manifest must be used by all three modes; the old manifest cannot be copied.
 
 The failed A800 Dual run at `56bd0a50e3b5f33cf30e32564532b1483ea7e34d` progressed
 from 100 to 99 running requests before a late ready result reached the scheduler.
@@ -75,7 +79,8 @@ tokens are diagnostic only. Warmup/JIT provenance remains visible.
 There is no cross-commit compatibility exception: all three execution commits must
 equal the delivered fix SHA. Old Target/Serial artifacts remain historical evidence.
 No Gate3 diagnostics, token-divergence investigation, additional GPU preflight
-generation, patch reapplication, or optimization belongs to this run.
+generation or optimization belongs to this run. The one required Python patch
+migration is specified in section D.
 
 ## Interactive Bash contract
 
@@ -100,36 +105,23 @@ RC="$?"
 echo "fix commit supplied rc=$RC"
 ```
 
-## A. Locate and preserve the invalid 04e9b three-mode root
+## A. Preserve the exact failed 66207c three-mode root
 
-If more than one `04e9b` result exists, set `SR_PHASE4B2_FAILED_ROOT` to the full
-root containing the reported `dual/resident-dual.json`, then repeat only the
-location block. Automatic selection requires exactly one match. These commands
-read the historical artifacts and create an inventory in a separate new audit
-directory. Keep it even if a later step fails.
+These commands read the supplied failed root and create an inventory in a separate
+new audit directory. A failed Dual need not have produced `resident-dual.json` or
+its final runtime manifest. Keep all partial logs and the external inventory.
 
 ```bash
-SR_PHASE4B2_FAILED_ROOT="$(python3 - <<'PY'
-import json, os, pathlib
-base = pathlib.Path("/root/autodl-tmp/SpecRhythm-data/results/phase4/04e9b6141e3846835e6fdee0a42cdb9e8d021e4e")
-configured = os.environ.get("SR_PHASE4B2_FAILED_ROOT")
-matches = [pathlib.Path(configured)] if configured else sorted({p.parent.parent for p in base.glob("*/dual/resident-dual.json")})
-assert len(matches) == 1, "set the exact historical SR_PHASE4B2_FAILED_ROOT; candidates: " + repr(matches)
-root = matches[0]
-runtime = json.loads((root / "dual/runtime-manifest.json").read_text())
-assert runtime["git_commit"] == "04e9b6141e3846835e6fdee0a42cdb9e8d021e4e"
-assert (root / "dual/resident-dual.json").is_file()
-print(root)
-PY
-)"
+export SR_PHASE4B2_FAILED_ROOT="/root/autodl-tmp/SpecRhythm-data/results/phase4/66207c521b8b313080583fc47265704bb7a6c66c/phase4b2-logical-commit-20260905T102753Z-1526"
+test -f "$SR_PHASE4B2_FAILED_ROOT/dual/target.log"
 RC="$?"
-echo "locate invalid 04e9b run rc=$RC"
+echo "locate failed 66207c run rc=$RC"
 ```
 
 ```bash
 export SR_PHASE4B2_FAILED_ROOT
 export SR_PHASE4B2_FAILED_DUAL="$SR_PHASE4B2_FAILED_ROOT/dual"
-export SR_PHASE4B2_AUDIT_DIR="/root/autodl-tmp/SpecRhythm-data/audits/phase4b2-logical-commit-$$"
+export SR_PHASE4B2_AUDIT_DIR="/root/autodl-tmp/SpecRhythm-data/audits/phase4b2-row-mapping-$$"
 python3 - <<'PY'
 import hashlib, json, os, pathlib
 root = pathlib.Path(os.environ["SR_PHASE4B2_FAILED_ROOT"])
@@ -178,8 +170,8 @@ commit = os.environ["SR_PHASE4B_FIX_COMMIT"]
 assert re.fullmatch(r"[0-9a-f]{40}", commit), "supply the delivered full SHA"
 assert not subprocess.check_output(["git", "status", "--porcelain"], text=True).strip()
 assert subprocess.check_output(["git", "rev-parse", commit + "^{commit}"], text=True).strip() == commit
-assert commit not in {"04e9b6141e3846835e6fdee0a42cdb9e8d021e4e", "d6fe1529c484dc57184d1855f97b26dfdeabd2ce"}
-assert subprocess.run(["git", "merge-base", "--is-ancestor", "d6fe1529c484dc57184d1855f97b26dfdeabd2ce", commit]).returncode == 0
+assert commit != "66207c521b8b313080583fc47265704bb7a6c66c"
+assert subprocess.run(["git", "merge-base", "--is-ancestor", "66207c521b8b313080583fc47265704bb7a6c66c", commit]).returncode == 0
 PY
 RC="$?"
 echo "clean checkout and explicit fix pin rc=$RC"
@@ -237,9 +229,52 @@ echo "locate installed vLLM rc=$RC"
 export SR_VLLM_ROOT
 ```
 
-## D. Read-only pinned-source and installed-patch checks
+## D. Verify quiescence and migrate the installed Python patch stack
 
-Check the existing installed patch stack; do not restore or reapply it.
+The old failed run may still have orphan workers. This precondition reads process
+state only. If it fails, stop and resolve the previously owned processes before
+modifying installed vLLM or starting a new run. It never kills by process name or
+unlinks an unverified old socket. The new supervisor prevents this failure on
+future owned runs; it cannot retroactively prove ownership of arbitrary old PIDs.
+
+```bash
+python - <<'PY'
+import subprocess
+check = subprocess.run(["pgrep", "-af", "vllm|specrhythm.*draft-service|EngineCore|VLLM::Worker"], capture_output=True, text=True)
+assert check.returncode == 1, "review existing owned processes manually:\n" + check.stdout + check.stderr
+print("no old model processes remain")
+PY
+RC="$?"
+echo "quiescent process precondition rc=$RC"
+```
+
+The manager accepts only known exact source hashes, restores the old four-patch
+state (or current five-patch state) to pinned stock, then applies all five patches
+without fuzz. All migration evidence is written into the new audit directory.
+
+```bash
+python integrations/vllm/manage_patch.py restore \
+  --vllm-root "$SR_VLLM_ROOT" --source "$SR_VLLM_SOURCE" \
+  --manifest "$SR_PHASE4B2_AUDIT_DIR/restore-before-row-context.json"
+RC="$?"
+echo "restore known installed patch state rc=$RC"
+```
+
+```bash
+python integrations/vllm/manage_patch.py check \
+  --vllm-root "$SR_VLLM_ROOT" --source "$SR_VLLM_SOURCE" \
+  --expect-state stock --manifest "$SR_PHASE4B2_AUDIT_DIR/stock-before-row-context.json"
+RC="$?"
+echo "pinned stock state before new patch rc=$RC"
+```
+
+```bash
+python integrations/vllm/manage_patch.py apply \
+  --vllm-root "$SR_VLLM_ROOT" --source "$SR_VLLM_SOURCE" \
+  --manifest "$SR_PHASE4B2_AUDIT_DIR/vllm-patch-stack.json"
+RC="$?"
+echo "apply complete sampled-row patch stack rc=$RC"
+```
 
 ```bash
 python integrations/vllm/manage_patch.py check \
@@ -261,13 +296,16 @@ assert scheduler.resolve().is_relative_to(repo / "src")
 assert "def _drop_retired_ready_result(" in scheduler.read_text()
 from specrhythm.phase4.dual_commit import DualStopPolicy
 assert DualStopPolicy(8, 151645).canonicalize((45596,), (13, 151645, 151643)) == ((45596, 13, 151645), "eos")
+from specrhythm.phase4.vllm_dual import DualBatchRemoteProposer
+assert DualBatchRemoteProposer.requires_sampled_row_context is True
 source = os.environ["SR_VLLM_SOURCE"]
 assert subprocess.check_output(["git", "-C", source, "rev-parse", "HEAD"], text=True).strip() == "752a3a504485790a2e8491cacbb35c137339ad34"
 assert not subprocess.check_output(["git", "-C", source, "status", "--porcelain", "--untracked-files=no"], text=True).strip()
 old = pathlib.Path(os.environ["SR_PHASE4B2_FAILED_ROOT"])
 config_path = pathlib.Path(os.environ["SR_PHASE4B_CONFIG"])
 config = load_phase4_config(config_path)
-manifest = load_patch_manifest(old / "patch-stage/vllm-patch-stack.json", config)
+manifest = load_patch_manifest(pathlib.Path(os.environ["SR_PHASE4B2_AUDIT_DIR"]) / "vllm-patch-stack.json", config)
+assert manifest["patch_stack"][-1]["patch_file"] == "0005-dual-sampled-row-context.patch"
 print(json.dumps(validate_installed_patch_stack(manifest), indent=2))
 workload = pathlib.Path(os.environ["SR_PHASE4B_WORKLOAD"])
 assert len(load_smoke_requests(workload, 100, require_task_mixture=True)) == 100
@@ -286,15 +324,15 @@ echo "source and fixed input validation rc=$RC"
 
 ## E. Create a new root and capture current environment/topology
 
-The root creation rejects an existing directory and copies only the unchanged
-vLLM apply manifest. It does not copy old mode outputs or relabel their provenance.
+The root creation rejects an existing directory and copies only the newly applied
+five-patch manifest. It does not copy old mode outputs or relabel their provenance.
 The environment probe reads hardware/software metadata; it does not run generation.
 
 ```bash
 SR_PHASE4B2_STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 RC="$?"
 echo "fresh root timestamp rc=$RC"
-export SR_PHASE4B2_ROOT="/root/autodl-tmp/SpecRhythm-data/results/phase4/$SR_PHASE4B_COMMIT/phase4b2-logical-commit-$SR_PHASE4B2_STAMP-$$"
+export SR_PHASE4B2_ROOT="/root/autodl-tmp/SpecRhythm-data/results/phase4/$SR_PHASE4B_COMMIT/phase4b2-row-mapping-$SR_PHASE4B2_STAMP-$$"
 export SR_PHASE4B_ENVIRONMENT="$SR_PHASE4B2_ROOT/environment.json"
 export SR_PHASE4B_TOPOLOGY="$SR_PHASE4B2_ROOT/topology.json"
 export SR_PHASE4B_PATCH_MANIFEST="$SR_PHASE4B2_ROOT/patch-stage/vllm-patch-stack.json"
@@ -311,7 +349,7 @@ assert root.parent.name == commit and root.resolve() != old.resolve()
 assert old.resolve() not in root.resolve().parents
 root.mkdir(parents=True, exist_ok=False)
 (root / "patch-stage").mkdir()
-shutil.copyfile(old / "patch-stage/vllm-patch-stack.json", os.environ["SR_PHASE4B_PATCH_MANIFEST"])
+shutil.copyfile(pathlib.Path(os.environ["SR_PHASE4B2_AUDIT_DIR"]) / "vllm-patch-stack.json", os.environ["SR_PHASE4B_PATCH_MANIFEST"])
 print("NEW result root:", root)
 PY
 RC="$?"
@@ -407,6 +445,9 @@ if mode == "dual":
     from specrhythm.phase4.serial import token_prefix_hash
     plugin = json.loads((root / mode / "plugin-report.json").read_text())
     assert plugin["logical_commit_source"] == "current-round-rejection-parsed-sampled-token-ids"
+    assert plugin["sampled_row_domain"] == "bookkeeping-req_ids_output_copy"
+    assert plugin["physical_row_lookup"] == "request-id-to-current-input-batch-index"
+    assert plugin["sampled_row_tp_consensus"] is True
     states = CheckpointJsonl(root / mode / "request-state-events.jsonl").read()
     assert validate_request_state_events(states) == []
     outputs = {row["request_id"]: row for row in raw["outputs"]}
@@ -535,6 +576,13 @@ echo "Dual execution and cleanup rc=$RC"
 
 On failure, stop manually. Preserve this new Dual directory and its logs; do not
 derive performance from an incomplete run or invoke this GPU command again in place.
+The supervisor detects pinned fatal-worker/EngineCore messages or a nonzero owned
+child status while the wrapper is still alive. Defaults are a 50 ms poll, 5 seconds
+for TERM and 2 seconds for KILL, followed by the same bounded Draft cleanup. Linux
+adopts and reaps orphan Target workers, including tracked workers in another
+session. Socket removal requires original Draft PID ownership and unchanged inode.
+The timestamp wrapper drains output for at most 250 ms after its direct child ends;
+an inherited writer cannot keep it waiting for EOF indefinitely.
 
 ## L. Derive and validate Dual performance
 

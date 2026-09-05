@@ -1,5 +1,11 @@
 # Phase 4B.2 Dual serving-visible commit audit
 
+The EOS semantics below remain current. Subsequent A800 validation of `66207c5`
+exposed a separate capacity/row-domain error and failure-cleanup defect, repaired
+in the [row-domain audit](phase4b2-dual-row-domain-audit.md). That follow-up requires
+the fifth vLLM Python patch; statements below about an unchanged patch stack refer
+to the original EOS-only revision.
+
 The `04e9b6141e3846835e6fdee0a42cdb9e8d021e4e` A800 execution is invalid for
 performance use. Its retired-ready protection worked, but the Target observer
 committed a token after EOS and caused unnecessary round-1 Draft work. The strict

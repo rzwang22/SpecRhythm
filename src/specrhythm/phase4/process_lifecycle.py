@@ -10,9 +10,16 @@ import stat
 import subprocess
 import tempfile
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
+
+from specrhythm.phase4.owned_processes import (
+    OwnedProcesses,
+    set_subreaper,
+    socket_owned_by_pid,
+)
 
 LIFECYCLE_SCHEMA = "specrhythm.phase4b-process-lifecycle.v1"
 
@@ -48,6 +55,18 @@ def process_group_members(pgid: int) -> list[dict[str, Any]]:
 
 
 def run_owned_target(
+    command: Sequence[str], **kwargs: Any,
+) -> tuple[int, dict[str, Any]]:
+    """Adopt/reap Linux Target orphans for this bounded owned-process run."""
+    previous = set_subreaper(True)
+    try:
+        return _run_owned_target(command, **kwargs)
+    finally:
+        if previous is not None:
+            set_subreaper(bool(previous))
+
+
+def _run_owned_target(
     command: Sequence[str],
     *,
     target_log: Path,
@@ -83,6 +102,18 @@ def run_owned_target(
     pgid: Optional[int] = None
     session_id: Optional[int] = None
     launch_error: Optional[str] = None
+    failure_detection: Optional[dict[str, Any]] = None
+    owner: Optional[OwnedProcesses] = None
+    ownership_token = uuid.uuid4().hex
+    draft_owner = OwnedProcesses(draft_pid) if draft_pid is not None else None
+    if draft_owner is not None:
+        draft_owner.snapshot()
+    draft_socket_before = _unix_socket_identity(draft_socket)
+    draft_socket_proven = bool(
+        draft_pid is not None and draft_socket is not None
+        and draft_socket_before is not None and socket_owned_by_pid(draft_socket, draft_pid)
+    )
+    log_offset, log_tail = 0, b""
     with target_log.open("w", encoding="utf-8") as target_handle:
         try:
             process = subprocess.Popen(
@@ -90,31 +121,58 @@ def run_owned_target(
                 stdout=target_handle,
                 stderr=subprocess.STDOUT,
                 start_new_session=True,
+                env={**os.environ, "SR_PHASE4_OWNED_TARGET_TOKEN": ownership_token},
             )
             pgid = os.getpgid(process.pid)
             session_id = os.getsid(process.pid)
             if pgid != process.pid or session_id != process.pid:
                 raise RuntimeError("Target did not enter its recorded owned session")
+            owner = OwnedProcesses(process.pid, target_token=ownership_token)
+            owner.snapshot()
             while process.poll() is None:
-                _record_members(observed, process_group_members(pgid))
+                rows = owner.snapshot()
+                _record_members(observed, rows)
+                if draft_owner is not None:
+                    draft_owner.snapshot()
+                with target_log.open("rb") as log:
+                    log.seek(log_offset)
+                    chunk = log.read(1024 * 1024)
+                    log_offset = log.tell()
+                text = log_tail + chunk
+                fatal = next((marker for marker in (
+                    b"EngineCore encountered a fatal error",
+                    b"WorkerProc failed", b"EngineDeadError",
+                    b"died unexpectedly, shutting down executor.",
+                ) if marker in text), None)
+                log_tail = text[-256:]
+                failed_child = next((row for row in rows if row["pid"] != process.pid
+                                     and row.get("exit_code") not in {None, 0}), None)
+                if fatal is not None or failed_child is not None:
+                    failure_detection = {
+                        "reason": "fatal-runtime-log" if fatal else "owned-child-nonzero-exit",
+                        "marker": fatal.decode() if fatal else None,
+                        "child": failed_child, "timestamp_ns": time.monotonic_ns(),
+                    }
+                    break
                 time.sleep(poll_seconds)
-            coordinator_status = process.wait()
-            coordinator_reaped = True
-            _record_members(observed, process_group_members(pgid))
+            if process.poll() is not None:
+                coordinator_status = process.wait()
+                coordinator_reaped = True
+            _record_members(observed, owner.snapshot())
         except Exception as error:
             launch_error = str(error)
             if process is not None and coordinator_status is None:
                 coordinator_status = process.poll()
 
-    remaining = process_group_members(pgid) if pgid is not None else []
-    leaked_after_coordinator_exit = bool(remaining)
-    if coordinator_status not in {0, None} or remaining or launch_error:
-        if pgid is not None and remaining:
-            _signal_group(pgid, signal.SIGTERM, actions)
-            remaining = _wait_for_group_empty(pgid, graceful_seconds, poll_seconds, observed)
-        if pgid is not None and remaining:
-            _signal_group(pgid, signal.SIGKILL, actions)
-            remaining = _wait_for_group_empty(pgid, kill_seconds, poll_seconds, observed)
+    remaining = owner.snapshot() if owner is not None else []
+    leaked_after_coordinator_exit = coordinator_reaped and bool(remaining)
+    if coordinator_status not in {0, None} or remaining or launch_error or failure_detection:
+        if owner is not None and remaining:
+            owner.signal(signal.SIGTERM, actions)
+            remaining = _wait_for_owned_empty(owner, process, graceful_seconds, poll_seconds)
+        if owner is not None and remaining:
+            owner.signal(signal.SIGKILL, actions)
+            remaining = _wait_for_owned_empty(owner, process, kill_seconds, poll_seconds)
         if process is not None and not coordinator_reaped:
             try:
                 coordinator_status = process.wait(timeout=kill_seconds)
@@ -124,11 +182,19 @@ def run_owned_target(
     draft_shutdown = _cleanup_draft(
         draft_pid,
         draft_socket,
-        force=bool(coordinator_status not in {0, None} or leaked_after_coordinator_exit),
+        force=bool(coordinator_status not in {0, None} or leaked_after_coordinator_exit
+                   or failure_detection or launch_error),
         graceful_seconds=graceful_seconds,
         poll_seconds=poll_seconds,
+        kill_seconds=kill_seconds,
+        owner=draft_owner,
+        socket_before=draft_socket_before,
+        socket_proven=draft_socket_proven,
     )
-    remaining = process_group_members(pgid) if pgid is not None else []
+    if owner is not None:
+        owner.reap()
+        _record_members(observed, list(owner.observed.values()))
+    remaining = owner.snapshot() if owner is not None else []
     cleanup_valid = (
         launch_error is None
         and coordinator_reaped
@@ -136,9 +202,11 @@ def run_owned_target(
         and not remaining
         and draft_shutdown["valid"]
     )
-    run_valid = cleanup_valid and coordinator_status == 0 and not leaked_after_coordinator_exit
+    run_valid = cleanup_valid and coordinator_status == 0 and not failure_detection
     effective_status = coordinator_status if coordinator_status not in {None, 0} else 0
     if effective_status == 0 and not run_valid:
+        effective_status = 125
+    if failure_detection is not None:
         effective_status = 125
     ended_ns = time.monotonic_ns()
     report = {
@@ -166,6 +234,8 @@ def run_owned_target(
         "draft_shutdown_result": draft_shutdown,
         "remaining_owned_pids": [int(row["pid"]) for row in remaining],
         "launch_error": launch_error,
+        "failure_detection": failure_detection,
+        "ownership_tracking": "PID-start-identity-and-descendants; Linux-subreaper-launch-token",
         "cleanup_valid": cleanup_valid,
         "run_valid": run_valid,
     }
@@ -203,37 +273,6 @@ def _record_members(
         observed.setdefault(pid, dict(row))
 
 
-def _signal_group(pgid: int, selected: signal.Signals, actions: list[dict[str, Any]]) -> None:
-    try:
-        os.killpg(pgid, selected)
-        delivered = True
-    except ProcessLookupError:
-        delivered = False
-    actions.append(
-        {
-            "signal": selected.name,
-            "pgid": pgid,
-            "timestamp_ns": time.monotonic_ns(),
-            "delivered": delivered,
-        }
-    )
-
-
-def _wait_for_group_empty(
-    pgid: int,
-    timeout: float,
-    poll_seconds: float,
-    observed: dict[int, dict[str, Any]],
-) -> list[dict[str, Any]]:
-    deadline = time.monotonic() + timeout
-    rows = process_group_members(pgid)
-    while rows and time.monotonic() < deadline:
-        _record_members(observed, rows)
-        time.sleep(poll_seconds)
-        rows = process_group_members(pgid)
-    return rows
-
-
 def _cleanup_draft(
     draft_pid: Optional[int],
     draft_socket: Optional[Path],
@@ -241,27 +280,30 @@ def _cleanup_draft(
     force: bool,
     graceful_seconds: float,
     poll_seconds: float,
+    kill_seconds: float,
+    owner: Optional[OwnedProcesses],
+    socket_before: Optional[dict[str, Any]],
+    socket_proven: bool,
 ) -> dict[str, Any]:
     if draft_pid is None:
         return {"required": False, "valid": True, "pid": None}
-    socket_before = _unix_socket_identity(draft_socket)
-    was_alive = _pid_alive(draft_pid)
-    signaled = False
+    assert owner is not None
+    was_alive = any(not row["state"].startswith("Z") for row in owner.snapshot())
+    actions: list[dict[str, Any]] = []
     if force and was_alive:
-        try:
-            os.kill(draft_pid, signal.SIGTERM)
-            signaled = True
-        except ProcessLookupError:
-            pass
-    deadline = time.monotonic() + graceful_seconds
-    while _pid_alive(draft_pid) and time.monotonic() < deadline:
-        time.sleep(poll_seconds)
-    alive = _pid_alive(draft_pid)
+        owner.signal(signal.SIGTERM, actions)
+    remaining = _wait_for_owned_empty(owner, None, graceful_seconds, poll_seconds)
+    if force and remaining:
+        owner.signal(signal.SIGKILL, actions)
+        remaining = _wait_for_owned_empty(owner, None, kill_seconds, poll_seconds)
+    alive = any(not row["state"].startswith("Z") for row in remaining)
     socket_after_exit = _unix_socket_identity(draft_socket)
     removed_stale_socket = False
     socket_cleanup_error = None
     if not alive and socket_after_exit is not None:
-        if socket_before is None:
+        if not socket_proven:
+            socket_cleanup_error = "Draft PID did not prove ownership of the original Unix socket"
+        elif socket_before is None:
             socket_cleanup_error = (
                 "Draft socket appeared after ownership was first observed"
             )
@@ -281,7 +323,12 @@ def _cleanup_draft(
         "required": True,
         "pid": draft_pid,
         "was_alive": was_alive,
-        "term_sent": signaled,
+        "term_sent": any(row["signal"] == "SIGTERM" for row in actions),
+        "kill_sent": any(row["signal"] == "SIGKILL" for row in actions),
+        "term_kill_actions": actions,
+        "owned_processes_observed": list(owner.observed.values()),
+        "remaining_owned_pids": [row["pid"] for row in remaining],
+        "socket_ownership_proven": socket_proven,
         "alive_after_cleanup": alive,
         "socket_path": str(draft_socket) if draft_socket is not None else None,
         "socket_identity_before_cleanup": socket_before,
@@ -290,8 +337,23 @@ def _cleanup_draft(
         "socket_cleanup_error": socket_cleanup_error,
         "socket_exists_after_cleanup": socket_final is not None,
         "reaped_by_calling_shell": not alive,
-        "valid": not alive and socket_final is None and socket_cleanup_error is None,
+        "valid": not remaining and socket_final is None and socket_cleanup_error is None,
     }
+
+
+def _wait_for_owned_empty(
+    owner: OwnedProcesses, process: Optional[subprocess.Popen[Any]],
+    timeout: float, poll_seconds: float,
+) -> list[dict[str, Any]]:
+    deadline = time.monotonic() + timeout
+    while True:
+        if process is not None:
+            process.poll()
+        owner.reap(exclude_root=process is not None)
+        rows = owner.snapshot()
+        if not rows or time.monotonic() >= deadline:
+            return rows
+        time.sleep(poll_seconds)
 
 
 def _unix_socket_identity(path: Optional[Path]) -> Optional[dict[str, Any]]:
@@ -307,23 +369,6 @@ def _unix_socket_identity(path: Optional[Path]) -> Optional[dict[str, Any]]:
         "mode": int(value.st_mode),
         "is_socket": stat.S_ISSOCK(value.st_mode),
     }
-
-
-def _pid_alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    completed = subprocess.run(
-        ("ps", "-o", "stat=", "-p", str(pid)),
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    state = completed.stdout.strip()
-    return bool(state) and not state.startswith("Z")
 
 
 def _acquire_guard(path: Path) -> None:

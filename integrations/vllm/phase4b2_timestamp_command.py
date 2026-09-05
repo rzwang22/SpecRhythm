@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 import argparse
+import codecs
 import json
 import os
+import selectors
 import subprocess
 import sys
 import time
@@ -31,11 +33,13 @@ def main() -> int:
             command,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
         )
         assert process.stdout is not None
-        for line in process.stdout:
+        decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        pending = ""
+        child_exited_at = None
+
+        def record(line: str) -> None:
             sys.stdout.write(line)
             sys.stdout.flush()
             artifact.write(
@@ -53,6 +57,29 @@ def main() -> int:
                 + "\n"
             )
             artifact.flush()
+        # EOF belongs to every inherited writer, not just our direct child.
+        # Poll the actual child independently and bound the post-exit drain.
+        with selectors.DefaultSelector() as selector:
+            selector.register(process.stdout, selectors.EVENT_READ)
+            while True:
+                if process.poll() is not None and child_exited_at is None:
+                    child_exited_at = time.monotonic()
+                if child_exited_at is not None and time.monotonic() - child_exited_at >= 0.25:
+                    break
+                events = selector.select(timeout=0.05)
+                if not events:
+                    continue
+                chunk = os.read(process.stdout.fileno(), 65536)
+                if not chunk:
+                    break
+                pending += decoder.decode(chunk)
+                while "\n" in pending:
+                    line, pending = pending.split("\n", 1)
+                    record(line + "\n")
+            pending += decoder.decode(b"", final=True)
+            if pending:
+                record(pending)
+        process.stdout.close()
         status = process.wait()
         artifact.flush()
         os.fsync(artifact.fileno())
