@@ -5,6 +5,11 @@ Reuse both `decode-performance.json` files without remeasurement or GPU reruns. 
 work is exactly one Dual-Batch execution. PR #4 stays Draft and unmerged. The coding agent
 performs CPU/offline work only; the operator runs Stage B on the A800 server.
 
+The current validator repair runs **Stage A only**. Preserve the failed comparison from
+`42fdb4f7f6b38d1dffe6546b011a3823ef192d54`, then rerun the two offline comparison helpers.
+Do not run Dual as part of this repair. Stages B/C below retain the previously planned operator
+continuation, available only after the repaired Stage A passes.
+
 ## Acceptance policy and schema
 
 Comparison v2 (`specrhythm.phase4b2-decode-performance-comparison.v2`) reads immutable v1
@@ -30,13 +35,25 @@ Execution compatibility currently requires the identical execution commit. Histo
 `measurement_code_git_commit` may differ (or be unavailable in the original Target artifact).
 Requested workload semantics are bound by the equal workload/config digests, correctness mode
 and per-request output limits. No equivalence between different execution commits is assumed.
+Local model `revision=null` is legal: each model must have a nonempty string path and a revision
+key whose value is null or a string. Optional tokenizer/revision fields follow the same type
+rule. Complete cross-mode model identity equality remains strict, including null versus string.
 
 Different post-bootstrap token IDs do not fail matched work. Finish/stop differences are
-recorded under `termination_differences` and do not fail when both modes fill their frozen output
-limit. `maximum_new_tokens` includes the one setup bootstrap, so the full measured count is
-`maximum_new_tokens - 1`. A reason difference before that fixed length, incomplete/failed
-requests, or any measured-count difference fails. `warmup_clean=false` and post-boundary JIT
-are reported without rejecting this preliminary bring-up.
+recorded under `termination_differences` when valid completed requests perform the same measured
+work, including legitimate early EOS/stop. The source's `SmokeRequest.maximum_new_tokens` limits
+total outputs including bootstrap. Historical v1 performance artifacts incorrectly copied the
+absent workload `output_tokens` key and therefore may contain `maximum_new_tokens=null`.
+Null means unavailable metadata; it does not mean an incomplete request. See the
+[source and output-length audit](phase4b2-validator-semantic-audit.md).
+
+Completion uses the valid per-mode artifact, terminal evidence and token accounting. For a known
+limit, final generated length must not exceed it, and a length finish must fill it. For an explicit
+legacy null, the comparator consumes the existing validated completion evidence and equal frozen
+workload SHA without guessing a numeric limit from observed output. Known limits still compare
+strictly across modes; null versus a number fails equality. Abort/error/cancel/incomplete, missing
+completion, contradictory known lengths, or measured-count differences fail. Bootstrap accounting
+remains independent. `warmup_clean=false` and post-boundary JIT remain provenance.
 
 A valid pair exposes `performance_valid_for_pair=true` and Target/Serial speedup while keeping
 `comparison_complete=false` and `performance_valid=false` (the latter reserves the complete
@@ -72,10 +89,12 @@ set -euo pipefail
 cd /root/autodl-tmp/src/SpecRhythm
 git fetch origin codex/vllm-serving-v0.1
 test -z "$(git status --porcelain)"
-git switch --detach origin/codex/vllm-serving-v0.1
-export SR_PHASE4B_MEASUREMENT_COMMIT="$(git rev-parse HEAD)"
+export SR_PHASE4B_MEASUREMENT_COMMIT="${SR_PHASE4B_MEASUREMENT_COMMIT:-$(git rev-parse origin/codex/vllm-serving-v0.1)}"
+git switch --detach "$SR_PHASE4B_MEASUREMENT_COMMIT"
+test "$(git rev-parse HEAD)" = "$SR_PHASE4B_MEASUREMENT_COMMIT"
 export SR_PHASE4B_EXECUTION_COMMIT="56bd0a50e3b5f33cf30e32564532b1483ea7e34d"
 test "$SR_PHASE4B_MEASUREMENT_COMMIT" != "$SR_PHASE4B_EXECUTION_COMMIT"
+test "$SR_PHASE4B_MEASUREMENT_COMMIT" != "42fdb4f7f6b38d1dffe6546b011a3823ef192d54"
 
 conda activate /root/autodl-tmp/envs/specrhythm-phase4-vllm-0.25.1
 python -m pip install -e '.[dev]' --no-deps --no-build-isolation
@@ -117,16 +136,35 @@ for mode in ("target", "serial"):
 assert sum(bool(line.strip()) for line in pathlib.Path(sys.argv[3]).read_text().splitlines()) == 100
 PY
 
-# Preserve all old exact-only failure evidence in place. New outputs have different names.
-test ! -e "$SR_PHASE4B2_ROOT/target-serial-matched-work.json"
-test ! -e "$SR_PHASE4B2_ROOT/target-serial-matched-work.md"
-test ! -e "$SR_PHASE4B2_ROOT/target-serial-before-dual.sha256"
-find "$SR_PHASE4B2_ROOT/target" "$SR_PHASE4B2_ROOT/serial" -type f -print0 | \
-  sort -z | xargs -0 sha256sum > "$SR_PHASE4B2_ROOT/target-serial-before-dual.sha256"
+# Reuse the previous checksum inventory; do not overwrite the original evidence.
+if test -f "$SR_PHASE4B2_ROOT/target-serial-before-dual.sha256"; then
+  sha256sum -c "$SR_PHASE4B2_ROOT/target-serial-before-dual.sha256"
+else
+  find "$SR_PHASE4B2_ROOT/target" "$SR_PHASE4B2_ROOT/serial" -type f -print0 | \
+    sort -z | xargs -0 sha256sum > "$SR_PHASE4B2_ROOT/target-serial-before-dual.sha256"
+fi
+
+# Archive BOTH failed v2 outputs, preserving the older exact-only evidence in place.
+test -f "$SR_PHASE4B2_ROOT/target-serial-matched-work.json"
+test -f "$SR_PHASE4B2_ROOT/target-serial-matched-work.md"
+test ! -e "$SR_PHASE4B2_ROOT/target-serial-matched-work.invalid-pre-validator-fix.json"
+test ! -e "$SR_PHASE4B2_ROOT/target-serial-matched-work.invalid-pre-validator-fix.md"
+python - "$SR_PHASE4B2_ROOT/target-serial-matched-work.json" <<'PY'
+import json, pathlib, sys
+value = json.loads(pathlib.Path(sys.argv[1]).read_text())
+assert value["schema_version"] == "specrhythm.phase4b2-decode-performance-comparison.v2"
+assert value["valid"] is False  # Preserve a failure; never silently replace an approved pair.
+PY
+mv "$SR_PHASE4B2_ROOT/target-serial-matched-work.json" \
+  "$SR_PHASE4B2_ROOT/target-serial-matched-work.invalid-pre-validator-fix.json"
+mv "$SR_PHASE4B2_ROOT/target-serial-matched-work.md" \
+  "$SR_PHASE4B2_ROOT/target-serial-matched-work.invalid-pre-validator-fix.md"
 
 source integrations/vllm/phase4b2_run_helpers.sh
 phase4b2_compare_target_serial "$SR_PHASE4B2_ROOT"
 phase4b2_require_matched_work_pair "$SR_PHASE4B2_ROOT" 100
+sha256sum -c "$SR_PHASE4B2_ROOT/target-serial-before-dual.sha256"
+# Stop here for this validator repair. No Target, Serial or Dual execution.
 ```
 
 Expected for the reported current pair (verified from its files, never hard-coded):
@@ -306,7 +344,7 @@ Hard stops are invalid artifacts or cleanup; missing/duplicate/incomplete reques
 prompt/bootstrap/output limits or measured counts; inconsistent token accounting; unequal or
 missing workload/config/model/patch/execution/topology provenance; invalid measurement boundaries;
 and absent Dual physical overlap or per-round global synchronization. These failures suppress
-speedups. Exact post-bootstrap token differences and fixed-length finish/stop differences are
+speedups. Exact post-bootstrap token differences and successful finish/stop label differences are
 diagnostic evidence. Warmup/JIT differences are recorded for later steady-state work.
 
 After successful three-mode bring-up, proceed to Phase 4B.3 fixed-output workloads, context-length,

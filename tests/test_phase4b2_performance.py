@@ -40,6 +40,7 @@ from specrhythm.phase4.resident_setup import (
 )
 from specrhythm.phase4.serial import PROTOCOL_VERSION, Proposal
 from specrhythm.phase4.serial_runner import _phase4b2_serial_execution_evidence
+from specrhythm.phase4.stock_vllm import SmokeRequest
 from specrhythm.phase4.transport import CheckpointJsonl
 
 START = 1_000_000_000
@@ -66,6 +67,7 @@ def _make_run(
     *,
     one_token: bool = False,
     execution_commit: str = "f" * 40,
+    native_workload: bool = False,
 ) -> tuple[Path, dict[str, Path]]:
     root = tmp_path / mode
     root.mkdir()
@@ -75,6 +77,15 @@ def _make_run(
             "".join(
                 json.dumps(
                     {
+                        "request_id": request_id,
+                        "task_class": "code",
+                        "prompt_text": "source-a" if request_id == "a" else "source-b",
+                        "prompt_token_ids": [1, 2],
+                        "prompt_length": 2,
+                        "maximum_new_tokens": 2 if one_token else 3,
+                        "sampling_seed": 1664,
+                        "tokenizer_fingerprint": "fixture-tokenizer",
+                    } if native_workload else {
                         "request_id": request_id,
                         "input_tokens": 2,
                         "output_tokens": 2 if one_token else 3,
@@ -961,7 +972,6 @@ def _compare_fixture(tmp_path: Path, *, dual: bool = True) -> dict:
         ("overlap", "dual_overlap_valid"),
         ("round_sync", "dual_overlap_valid"),
         ("invalid_metrics", "metrics_valid"),
-        ("early_stop_difference", "requested_workload_semantics_equal"),
     ],
 )
 def test_matched_work_rejects_incompatible_evidence(tmp_path: Path, kind: str, check: str) -> None:
@@ -1022,14 +1032,6 @@ def test_matched_work_rejects_incompatible_evidence(tmp_path: Path, kind: str, c
         value["mode_semantics"]["per_round_global_cuda_synchronize"] = True
     elif kind == "invalid_metrics":
         value["metrics"]["decode_makespan_ms"] = 0
-    elif kind == "early_stop_difference":
-        for mode in ("target", "serial", "dual-batch"):
-            mode_path = tmp_path / mode / "decode-performance.json"
-            candidate = json.loads(mode_path.read_text()) if mode != "dual-batch" else value
-            candidate["requests"][0]["maximum_new_tokens"] += 1
-            candidate["requests"][0]["finish_reason"] = "stop"
-            _json(mode_path, candidate)
-        row["termination_reason"] = "different_stop"
     _json(path, value)
     report = _compare_fixture(tmp_path)
     assert report["matched_work_comparability"][check] is False
@@ -1144,8 +1146,9 @@ def test_full_length_reason_spelling_is_only_diagnostic(tmp_path: Path) -> None:
     assert report["exact_correctness_triangle"]["valid"] is False
 
 
+@pytest.mark.parametrize("legacy_null_metadata", [False, True])
 def test_synthetic_corrected_100_with_nine_divergences_preserves_reported_metrics(
-    tmp_path: Path,
+    tmp_path: Path, legacy_null_metadata: bool,
 ) -> None:
     # CPU fixture only, not a copy or revalidation of the server's GPU artifacts.
     expected = {
@@ -1154,6 +1157,9 @@ def test_synthetic_corrected_100_with_nine_divergences_preserves_reported_metric
     }
     for mode, (makespan, throughput, tpot) in expected.items():
         value = _measure(tmp_path, mode)
+        if legacy_null_metadata:
+            for role in ("target", "draft"):
+                value["models"][role]["revision"] = None
         template = value["requests"][0]
         value["requests"] = []
         for index in range(100):
@@ -1165,7 +1171,7 @@ def test_synthetic_corrected_100_with_nine_divergences_preserves_reported_metric
                 tokens[0] = 999
             row.update(
                 {
-                    "maximum_new_tokens": count + 1,
+                    "maximum_new_tokens": None if legacy_null_metadata else count + 1,
                     "measured_committed_output_token_count": count,
                     "measured_committed_output_token_ids": tokens,
                     "total_generated_token_ids": [row["bootstrap_token_id"], *tokens],
@@ -1195,6 +1201,145 @@ def test_synthetic_corrected_100_with_nine_divergences_preserves_reported_metric
     speedup = report["speedups"]["target_vs_serial"]
     assert speedup["makespan_speedup"] == pytest.approx(0.11535072445176113)
     assert speedup["throughput_ratio"] == pytest.approx(speedup["makespan_speedup"])
+
+
+@pytest.mark.parametrize("roles", [("target",), ("draft",), ("target", "draft")])
+def test_local_model_null_revisions_are_valid(tmp_path: Path, roles: tuple) -> None:
+    for mode in ("target", "serial"):
+        value = _measure(tmp_path, mode)
+        for role in roles:
+            value["models"][role]["revision"] = None
+            value["models"][role]["tokenizer_revision"] = None
+        value["models"]["tokenizer_revision"] = None
+        _json(tmp_path / mode / "decode-performance.json", value)
+    report = _compare_fixture(tmp_path, dual=False)
+    assert report["performance_valid_for_pair"] is True
+    assert report["matched_work_comparability"]["execution_provenance_equal"] is True
+
+
+@pytest.mark.parametrize(
+    "kind",
+    ["different", "missing_revision", "bool_revision", "int_revision", "object_revision",
+     "empty_path", "whitespace_path", "non_string_path", "missing_model",
+     "tokenizer_revision_type", "nested_tokenizer_revision_type", "tokenizer_revision_diff"],
+)
+def test_model_revision_validation_stays_strict(tmp_path: Path, kind: str) -> None:
+    for mode in ("target", "serial"):
+        value = _measure(tmp_path, mode)
+        for model in value["models"].values():
+            model["revision"] = None
+        value["models"]["tokenizer_revision"] = None
+        if kind != "different" or mode == "serial":
+            model = value["models"]["target"]
+            if kind == "different":
+                model["revision"] = "pinned-explicit-revision"
+            elif kind == "missing_revision":
+                model.pop("revision")
+            elif kind in ("bool_revision", "int_revision", "object_revision"):
+                model["revision"] = {"bool_revision": False, "int_revision": 7,
+                                     "object_revision": {}}[kind]
+            elif kind in ("empty_path", "whitespace_path", "non_string_path"):
+                model["path"] = {"empty_path": "", "whitespace_path": " ",
+                                 "non_string_path": 7}[kind]
+            elif kind == "missing_model":
+                value["models"].pop("target")
+            elif kind == "tokenizer_revision_type":
+                value["models"]["tokenizer_revision"] = []
+            elif kind == "nested_tokenizer_revision_type":
+                model["tokenizer_revision"] = False
+            elif kind == "tokenizer_revision_diff" and mode == "serial":
+                value["models"]["tokenizer_revision"] = "different"
+        _json(tmp_path / mode / "decode-performance.json", value)
+    report = _compare_fixture(tmp_path, dual=False)
+    assert report["matched_work_comparability"]["execution_provenance_equal"] is False
+    assert report["performance_valid_for_pair"] is False
+    assert report["speedups"] is None
+
+
+def test_native_workload_audit_reproduces_legacy_null_output_limit(tmp_path: Path) -> None:
+    for mode in ("target", "serial"):
+        root, paths = _make_run(tmp_path, mode, native_workload=True)
+        workload = [json.loads(line) for line in paths["workload"].read_text().splitlines()]
+        requested = {row["request_id"]: SmokeRequest.from_dict(row) for row in workload}
+        assert all("output_tokens" not in row for row in workload)
+        result = _build_result(root, paths, mode)
+        assert result["valid"] is True
+        for row in result["requests"]:
+            # Real runner uses this SmokeRequest value for SamplingParams.max_tokens.
+            total_limit = requested[row["request_id"]].maximum_new_tokens
+            measured_limit = total_limit - row["setup_committed_output_tokens"]
+            assert total_limit == len(row["total_generated_token_ids"]) == 3
+            assert measured_limit == row["measured_committed_output_token_count"] == 2
+            assert row["maximum_new_tokens"] is None  # Historical builder reads wrong key.
+            assert row["finish_reason"] == "length"
+            assert row["termination_reason"] is None
+            assert row["setup_committed_output_tokens"] == 1
+    report = _compare_fixture(tmp_path, dual=False)
+    assert report["valid"] is True and report["errors"] == []
+    assert report["matched_work_comparability"]["requests_complete"] is True
+    assert report["matched_work_comparability"]["completion_evidence"][
+        "null_output_limit_request_counts"
+    ] == {"target": 2, "serial": 2}
+
+
+@pytest.mark.parametrize("known_limit", [False, True])
+def test_valid_early_stop_and_different_labels_remain_comparable(
+    tmp_path: Path, known_limit: bool,
+) -> None:
+    for mode in ("target", "serial"):
+        value = _measure(tmp_path, mode)
+        for row in value["requests"]:
+            row["maximum_new_tokens"] = 8 if known_limit else None
+            row["finish_reason"] = "stop" if mode == "target" else "eos"
+            row["termination_reason"] = "eos_token" if mode == "target" else 42
+        _json(tmp_path / mode / "decode-performance.json", value)
+    report = _compare_fixture(tmp_path, dual=False)
+    assert report["performance_valid_for_pair"] is True
+    assert report["matched_work_comparability"]["termination_differences"]
+    assert report["exact_correctness_triangle"]["valid"] is False
+
+
+@pytest.mark.parametrize("maximum", [None, 3])
+@pytest.mark.parametrize(
+    "failure",
+    ["abort", "aborted", "error", "failed", "cancel", "cancelled", "canceled", "incomplete",
+     "no_finish", "unfinished", "not_completed", "no_output", "bad_accounting",
+     "missing_limit", "malformed_limit", "short_length", "over_limit"],
+)
+def test_completion_rejects_contradictory_evidence(
+    tmp_path: Path, maximum: Optional[int], failure: str,
+) -> None:
+    for mode in ("target", "serial"):
+        value = _measure(tmp_path, mode)
+        for row in value["requests"]:
+            row["maximum_new_tokens"] = maximum
+        if mode == "serial":
+            row = value["requests"][0]
+            if failure == "no_finish":
+                row["finish_reason"] = None
+            elif failure == "unfinished":
+                row["finished"] = False
+            elif failure == "not_completed":
+                row["completed"] = False
+            elif failure == "no_output":
+                row["total_generated_token_ids"] = []
+            elif failure == "bad_accounting":
+                row["token_accounting_valid"] = False
+            elif failure == "missing_limit":
+                row.pop("maximum_new_tokens")
+            elif failure == "malformed_limit":
+                row["maximum_new_tokens"] = "3"
+            elif failure == "short_length":
+                row["maximum_new_tokens"] = 8  # Length finish below a known total limit.
+            elif failure == "over_limit":
+                row["maximum_new_tokens"] = 2
+            else:
+                row["finish_reason"] = failure
+        _json(tmp_path / mode / "decode-performance.json", value)
+    report = _compare_fixture(tmp_path, dual=False)
+    assert report["matched_work_comparability"]["requests_complete"] is False
+    assert report["performance_valid_for_pair"] is False
+    assert report["speedups"] is None
 
 
 def test_performance_boundary_requires_unique_post_ready_event() -> None:

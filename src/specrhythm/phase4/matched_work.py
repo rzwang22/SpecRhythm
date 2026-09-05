@@ -26,6 +26,72 @@ def _tokens(value: Any) -> bool:
     return isinstance(value, list) and all(_integer(token) for token in value)
 
 
+def _revision_fields_valid(value: Mapping[str, Any]) -> bool:
+    return all(
+        revision is None or isinstance(revision, str)
+        for key, revision in value.items()
+        if key == "revision" or key.endswith("_revision")
+    )
+
+
+def _model_identity_valid(value: Any) -> bool:
+    models = _mapping(value)
+    for role in ("target", "draft"):
+        model = _mapping(models.get(role))
+        path = model.get("path")
+        if (
+            not isinstance(path, str)
+            or not path.strip()
+            or "revision" not in model
+            or not _revision_fields_valid(model)
+        ):
+            return False
+    return _revision_fields_valid(models)
+
+
+def _request_complete(row: Mapping[str, Any]) -> bool:
+    """Consume v1 completion evidence and reject concrete contradictions.
+
+    SmokeRequest.maximum_new_tokens / SamplingParams.max_tokens limit TOTAL outputs.
+    Historical performance v1 mistakenly copied workload.output_tokens, which is absent
+    in R3-real workloads, as maximum_new_tokens=None. Null is unavailable metadata, not
+    an output limit of zero. Equal workload SHA and equal measured work remain mandatory.
+    Never infer the missing requested limit from the number of observed tokens.
+    """
+
+    finish = row.get("finish_reason")
+    if (
+        not isinstance(finish, str)
+        or not finish.strip()
+        or finish.strip().lower() in {
+            "abort", "aborted", "error", "failed", "cancel", "cancelled", "canceled",
+            "incomplete",
+        }
+        or row.get("completed", True) is not True
+        or row.get("finished", True) is not True
+        or row.get("token_accounting_valid") is not True
+        or not _integer(row.get("measured_committed_output_token_count"), 1)
+        or not _tokens(row.get("total_generated_token_ids"))
+        or not row["total_generated_token_ids"]
+        or "maximum_new_tokens" not in row
+    ):
+        return False
+    maximum = row["maximum_new_tokens"]
+    if maximum is None:
+        return True  # Explicit legacy v1 omission; overall per-mode validity still gates.
+    if not _integer(maximum, 1):
+        return False
+    generated_count = len(row["total_generated_token_ids"])
+    if generated_count > maximum:
+        return False
+    # A length-limited finish below a known limit is contradictory. Other terminal
+    # reasons may legitimately stop early; v1 already checked output.finished.
+    return (
+        finish.strip().lower() not in {"length", "max_tokens"}
+        or generated_count == maximum
+    )
+
+
 def compare_matched_work(values: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
     """Require equivalent provenance and completed work, never cross-mode token identity.
 
@@ -100,7 +166,6 @@ def compare_matched_work(values: Mapping[str, Mapping[str, Any]]) -> dict[str, A
             measured = row.get("measured_committed_output_token_ids")
             generated = row.get("total_generated_token_ids")
             bootstrap = row.get("bootstrap_token_id")
-            maximum = row.get("maximum_new_tokens")
             count_valid = _integer(count, 1)
             count_sum += count if count_valid else 0
             require(
@@ -121,23 +186,9 @@ def compare_matched_work(values: Mapping[str, Mapping[str, Any]]) -> dict[str, A
                 and _sha(row.get("prompt_token_ids_sha256")),
                 f"{mode}/{request_id}: prompt provenance missing or malformed",
             )
-            # Completed EOS/stop requests can be shorter than the configured limit.
-            # A changed reason is allowed below only when every mode fills the limit.
-            finish = row.get("finish_reason")
-            finish_valid = (
-                isinstance(finish, str)
-                and bool(finish)
-                and finish.lower() not in (
-                    "abort", "aborted", "error", "failed", "cancelled", "canceled", "incomplete"
-                )
-            )
             require(
                 "requests_complete",
-                _integer(maximum, 2)
-                and count_valid
-                and count + 1 <= maximum
-                and finish_valid
-                and (count + 1 == maximum or finish == "stop"),
+                _request_complete(row),
                 f"{mode}/{request_id}: failed, incomplete, or invalid output length",
             )
         total = metrics.get("total_measured_committed_output_tokens")
@@ -229,11 +280,7 @@ def compare_matched_work(values: Mapping[str, Mapping[str, Any]]) -> dict[str, A
             and isinstance(value.get("patch_hashes"), list)
             and bool(value["patch_hashes"])
             and all(_sha(item) for item in value["patch_hashes"])
-            and all(
-                _mapping(_mapping(value.get("models")).get(role)).get("path")
-                and _mapping(_mapping(value.get("models")).get(role)).get("revision")
-                for role in ("target", "draft")
-            ),
+            and _model_identity_valid(value.get("models")),
             f"{mode}: model/vLLM/patch identity missing or malformed",
         )
         placement = _mapping(value.get("placement"))
@@ -285,12 +332,16 @@ def compare_matched_work(values: Mapping[str, Mapping[str, Any]]) -> dict[str, A
                 )
             for field in ("finish_reason", "termination_reason"):
                 if target.get(field) != row.get(field):
-                    fixed_length = all(
-                        _integer(candidate.get("maximum_new_tokens"), 2)
-                        and candidate.get("measured_committed_output_token_count")
-                        == candidate["maximum_new_tokens"] - 1
+                    limits_known = all(
+                        _integer(candidate.get("maximum_new_tokens"), 1)
                         for candidate in (target, row)
                     )
+                    fixed_length = all(
+                        _tokens(candidate.get("total_generated_token_ids"))
+                        and len(candidate["total_generated_token_ids"])
+                        == candidate["maximum_new_tokens"]
+                        for candidate in (target, row)
+                    ) if limits_known else None
                     termination_differences.append(
                         {
                             "mode": mode,
@@ -301,11 +352,8 @@ def compare_matched_work(values: Mapping[str, Mapping[str, Any]]) -> dict[str, A
                             "fixed_length_completed": fixed_length,
                         }
                     )
-                    require(
-                        "requested_workload_semantics_equal",
-                        fixed_length,
-                        f"target/{mode}/{request_id}: termination differs before fixed length",
-                    )
+                    # Completion and equal measured counts are independently required.
+                    # Different successful stop labels do not change matched work.
     return {
         "valid": not errors,
         "errors": errors,
@@ -313,6 +361,17 @@ def compare_matched_work(values: Mapping[str, Mapping[str, Any]]) -> dict[str, A
         "request_mapping": "canonical request_id; artifact row order is immaterial",
         "execution_compatibility_policy": "identical execution commit; v1 git_commit fallback",
         "measurement_code_commit_equality_required": False,
+        "completion_evidence": {
+            "authority": "valid v1 mode artifact, token accounting and terminal evidence",
+            "known_output_limit_scope": "total generated tokens, including setup bootstrap",
+            "null_output_limit_scope": (
+                "legacy v1 metadata unavailable; frozen workload SHA binds it"
+            ),
+            "null_output_limit_request_counts": {
+                mode: sum(row.get("maximum_new_tokens") is None for row in rows.values())
+                for mode, rows in requests.items()
+            },
+        },
         "termination_differences": termination_differences,
     }
 
