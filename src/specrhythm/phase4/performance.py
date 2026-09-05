@@ -130,6 +130,7 @@ def build_decode_performance_result(
     topology_path: Path,
     patch_manifest_path: Path,
     output_path: Path,
+    terminal_revalidation_path: Optional[Path] = None,
 ) -> dict[str, Any]:
     """Validate one immutable resident run and derive decode-only metrics."""
 
@@ -137,6 +138,22 @@ def build_decode_performance_result(
         raise ValueError("Phase-4B.2 mode must be target, serial, or dual-batch")
     if output_path.exists():
         raise FileExistsError(f"refusing to overwrite performance result {output_path}")
+    terminal_revalidation = None
+    if terminal_revalidation_path is not None:
+        if mode != "dual-batch":
+            raise ValueError("terminal-state revalidation is restricted to Dual-Batch")
+        if run_root.resolve().parent in output_path.resolve().parents:
+            raise ValueError("recovered performance must be outside the immutable source root")
+        from specrhythm.phase4.dual_terminal_recovery import validate_recovery_certificate
+
+        terminal_revalidation = validate_recovery_certificate(
+            terminal_revalidation_path,
+            run_root=run_root,
+            workload_path=workload_path,
+            config_path=config_path,
+            topology_path=topology_path,
+            patch_manifest_path=patch_manifest_path,
+        )
     raw_path = run_root / RUN_FILES[mode]
     manifest_path = run_root / "decode-ready-manifest.json"
     setup_ready_path = run_root / "setup-ready.json"
@@ -170,12 +187,12 @@ def build_decode_performance_result(
         patch_manifest_path=patch_manifest_path,
     )
     errors.extend(metadata_errors)
-    if raw.get("valid") is not True:
+    if raw.get("valid") is not True and terminal_revalidation is None:
         errors.append("underlying resident run is invalid")
     if performance_candidate is not True:
         errors.append("underlying run did not request Phase-4B.2 measurement")
     errors.extend(validate_lifecycle_artifact(lifecycle))
-    if lifecycle.get("run_valid") is not True:
+    if lifecycle.get("run_valid") is not True and terminal_revalidation is None:
         errors.append("owned Target process run is invalid")
     if setup_ready.get("global_decode_ready") is not True:
         errors.append("setup-ready did not prove global decode readiness")
@@ -318,6 +335,15 @@ def build_decode_performance_result(
             ),
         },
     }
+    if terminal_revalidation is not None:
+        result["terminal_state_reconciliation"] = {
+            **terminal_revalidation["terminal_state_reconciliation"],
+            "certificate_path": str(terminal_revalidation_path.resolve()),
+            "certificate_sha256": sha256_file(terminal_revalidation_path),
+            "source_resident_valid": raw["valid"],
+            "source_process_run_valid": lifecycle["run_valid"],
+            "source_target_exit_status": lifecycle["target_exit_status"],
+        }
     atomic_write_json(output_path, result)
     return result
 

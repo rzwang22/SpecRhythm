@@ -1063,6 +1063,14 @@ def build_parser() -> argparse.ArgumentParser:
         "output",
     ):
         phase4b2_run.add_argument(f"--{name}", required=True)
+    phase4b2_run.add_argument("--terminal-revalidation")
+
+    phase4b2_recover = subparsers.add_parser(
+        "phase4b2-reconcile-dual-terminal",
+        help="offline revalidation of completed 04e9b61 Dual terminal-state evidence",
+    )
+    for name in ("run-root", "workload", "config", "topology", "patch-manifest", "output-dir"):
+        phase4b2_recover.add_argument(f"--{name}", required=True)
 
     phase4b2_compare = subparsers.add_parser(
         "phase4b2-decode-compare",
@@ -2085,6 +2093,22 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             }
         _write_json(report, args.output)
         return 0 if report["valid"] else 1
+    if args.command == "phase4b2-reconcile-dual-terminal":
+        from specrhythm.phase4.dual_terminal_recovery import recover_terminal_state
+
+        try:
+            report = recover_terminal_state(
+                run_root=Path(args.run_root).resolve(),
+                workload_path=Path(args.workload).resolve(),
+                config_path=Path(args.config).resolve(),
+                topology_path=Path(args.topology).resolve(),
+                patch_manifest_path=Path(args.patch_manifest).resolve(),
+                output_dir=Path(args.output_dir).resolve(),
+            )
+        except (OSError, KeyError, RuntimeError, TypeError, ValueError) as error:
+            raise SystemExit(f"Dual terminal-state recovery refused: {error}") from error
+        print(json.dumps(report["terminal_state_reconciliation"], indent=2))
+        return 0
     if args.command == "phase4b2-decode-run":
         from specrhythm.phase4.performance import build_decode_performance_result
 
@@ -2097,6 +2121,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 topology_path=Path(args.topology).resolve(),
                 patch_manifest_path=Path(args.patch_manifest).resolve(),
                 output_path=Path(args.output).resolve(),
+                terminal_revalidation_path=(
+                    Path(args.terminal_revalidation).resolve()
+                    if args.terminal_revalidation else None
+                ),
             )
         except (
             FileExistsError,

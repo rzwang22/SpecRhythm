@@ -23,6 +23,7 @@ from specrhythm.phase4.dual_correctness import (
     validate_scheduler_cycles,
 )
 from specrhythm.phase4.dual_service import DualDraftClient
+from specrhythm.phase4.dual_terminal import build_terminal_reconciliation
 from specrhythm.phase4.manifest import (
     atomic_write_json,
     build_runtime_manifest,
@@ -558,8 +559,31 @@ def run_resident_dual_batch(
     _write_checkpoint_rows(overlap_events_path, overlap_rows, resume=False)
     decode_rows = _decode_rows(serialized, manifest)
     plugin_report = _load_object(plugin_report_path)
+    reconciliation = None
+    reconciliation_errors = []
+    try:
+        reconciliation = build_terminal_reconciliation(
+            requests=requests,
+            outputs=serialized,
+            manifest=manifest,
+            identity=plugin_report.get("request_identity", {}),
+            state_rows=state_rows,
+            scheduler_rows=scheduler_rows,
+            lifecycle_rows=lifecycle_rows,
+            proposal_rows=proposal_rows,
+            observation_ns=time.monotonic_ns(),
+        )
+    except (KeyError, TypeError, ValueError) as error:
+        reconciliation_errors.append(f"terminal reconciliation failed: {error}")
+    if reconciliation is not None:
+        # Target/Draft work has completed and the service is shut down. Only the
+        # coordinator can join final output with retirement and observer evidence.
+        for event in reconciliation["events"]:
+            CheckpointJsonl(request_state_events_path).append(event)
+        state_rows = [*state_rows, *reconciliation["events"]]
     overlap_errors = validate_overlap_witness(overlap_rows)
     errors = [
+        *reconciliation_errors,
         *validate_request_state_events(state_rows),
         *validate_proposal_lifecycle_events(lifecycle_rows),
         *validate_scheduler_cycles(
@@ -663,6 +687,7 @@ def run_resident_dual_batch(
             "errors": overlap_errors,
         },
         "retired_ready_results": summarize_retired_ready_results(scheduler_rows),
+        "terminal_state_reconciliation": reconciliation,
         "evidence_counts": {
             "state_events": len(state_rows),
             "proposal_rounds": len(proposal_rows),

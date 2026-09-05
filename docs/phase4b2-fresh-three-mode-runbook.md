@@ -1,5 +1,10 @@
 # Phase 4B.2: fresh three-mode run after the retired-ready fix
 
+The completed `04e9b614...` run now has a dedicated
+[terminal-state offline recovery runbook](phase4b2-terminal-state-recovery-runbook.md).
+Use that read-only recovery procedure for the reported DRAFT_SYNC terminal gap;
+do not rerun GPU work as part of the evidence-closure repair.
+
 This supersedes the old Target/Serial reuse and historical-commit Dual continuation.
 The coding agent performs CPU validation only. The operator runs Target, Serial, and
 Dual-Batch **once each at the same new fix commit**, under a fresh result root. PR #4
