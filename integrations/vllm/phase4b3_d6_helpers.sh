@@ -48,7 +48,11 @@ phase4b3_d6_run () {
       phase4b2_run_mode "$sr6_mode" "$sr6_dir" "$sr6_workload" "$sr6_count" "$sr6_reference" || return
   fi
   if test "$sr6_stage" != A; then
-    phase4b2_measure_mode "$sr6_mode" "$sr6_dir" "$sr6_workload" || return
+    local sr6_performance_mode="$sr6_mode"
+    if test "$sr6_mode" = dual; then
+      sr6_performance_mode=dual-batch
+    fi
+    phase4b2_measure_mode "$sr6_performance_mode" "$sr6_dir" "$sr6_workload" || return
   fi
   python -m specrhythm.phase4.draft_dual_comparison validate \
     --run-root "$sr6_dir" --mode "$sr6_mode" --request-count "$sr6_count" \

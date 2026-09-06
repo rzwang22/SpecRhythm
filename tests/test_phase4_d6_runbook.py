@@ -88,25 +88,34 @@ phase4b3_d6_run "$STAGE" "$MODE"
 
 
 @pytest.mark.parametrize(
-    "stage,mode,workload,count,backend,overlap",
+    "stage,mode,workload,count,backend,overlap,performance_mode",
     [
-        ("A", "dual", "smoke", 2, "vllm-batched", "separate-gate"),
-        ("B", "dual", "five", 5, "vllm-batched", "required"),
-        ("C", "target", "hundred", 100, "hf-persistent", "default"),
-        ("C", "serial", "hundred", 100, "vllm-batched", "required"),
-        ("C", "dual", "hundred", 100, "vllm-batched", "required"),
+        ("A", "dual", "smoke", 2, "vllm-batched", "separate-gate", None),
+        ("B", "dual", "five", 5, "vllm-batched", "required", "dual-batch"),
+        ("C", "target", "hundred", 100, "hf-persistent", "default", "target"),
+        ("C", "serial", "hundred", 100, "vllm-batched", "required", "serial"),
+        ("C", "dual", "hundred", 100, "vllm-batched", "required", "dual-batch"),
     ],
 )
 def test_d6_reuses_existing_runner_with_exact_stage_inputs(
-    tmp_path, stage, mode, workload, count, backend, overlap
+    tmp_path, stage, mode, workload, count, backend, overlap, performance_mode
 ):
     completed, calls = helper_run(tmp_path, stage, mode)
     assert completed.returncode == 0, completed.stderr
     assert calls[0] == f"run {mode} {workload} {count} {backend} {overlap}"
     assert any("--smoke" in row for row in calls) == (stage == "A")
     assert [row for row in calls if row.startswith("measure")] == (
-        [] if stage == "A" else [f"measure {mode}"]
+        [] if stage == "A" else [f"measure {performance_mode}"]
     )
+
+
+@pytest.mark.parametrize("stage", ["B", "C"])
+def test_dual_runtime_mode_maps_to_dual_batch_measurement(tmp_path, stage):
+    completed, calls = helper_run(tmp_path, stage, "dual")
+    assert completed.returncode == 0, completed.stderr
+    assert calls[0].startswith("run dual ")
+    assert [row for row in calls if row.startswith("measure")] == ["measure dual-batch"]
+    assert "--mode dual --request-count" in calls[-1]
 
 
 @pytest.mark.parametrize("stage,mode", [("A", "dual"), ("B", "dual"), ("C", "target")])
