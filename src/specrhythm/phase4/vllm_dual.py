@@ -1087,6 +1087,7 @@ class DualBatchRemoteProposer:
                 },
                 "request_count": len(self.requests),
                 "target_tp": self.tp_world_size,
+                **getattr(self, "rhythm_report_fields", {}),
             },
         )
 

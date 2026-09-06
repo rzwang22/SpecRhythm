@@ -32,7 +32,8 @@ PY
     SR_PHASE4_DRAFT_BACKEND=vllm-batched \
       phase4b2_run_mode serial "$sr4_dir" "$SR_PHASE4B_WORKLOAD" 100 "$SR_PHASE4B_REFERENCE" || return
   else
-    SR_PHASE4_DRAFT_BACKEND=vllm-batched SR_PHASE4B_DUAL_MICROBATCH_SIZE="$sr4_size" \
+    SR_PHASE4B_DUAL_RHYTHM=legacy \
+      SR_PHASE4_DRAFT_BACKEND=vllm-batched SR_PHASE4B_DUAL_MICROBATCH_SIZE="$sr4_size" \
       PHASE4B1_OVERLAP_REQUIREMENT=characterization \
       phase4b2_run_mode dual "$sr4_dir" "$SR_PHASE4B_WORKLOAD" 100 "$SR_PHASE4B_REFERENCE" || return
   fi

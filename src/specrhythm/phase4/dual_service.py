@@ -623,8 +623,13 @@ def run_dual_draft_service(
     transport_log_path: Path,
     ready_path: Path,
 ) -> None:
+    from specrhythm.phase4.dual_rhythm import load_assignment, selected_rhythm
     from specrhythm.phase4.vllm_draft_backend import selected_draft_backend
 
+    if selected_rhythm() == "pingpong":
+        if selected_draft_backend() != "vllm-batched":
+            raise ValueError("pingpong requires production vllm-batched Draft")
+        load_assignment()
     if selected_draft_backend() == "vllm-batched":
         from specrhythm.phase4.dual_batched_draft import serve_vllm_dual
 

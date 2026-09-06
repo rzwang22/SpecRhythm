@@ -44,6 +44,6 @@ jobs:
           ref: 752a3a504485790a2e8491cacbb35c137339ad34
           path: tmp/phase4b3-vllm-source
           sparse-checkout: vllm
-      - run: python -m pytest tests/test_phase4_vllm_draft.py tests/test_phase4_vllm_draft_source.py
+      - run: python -m pytest tests/test_phase4_vllm_draft.py tests/test_phase4_vllm_draft_source.py tests/test_phase4_pingpong_source.py
         env:
           SR_PHASE4B3_SOURCE_AUDIT: tmp/phase4b3-vllm-source

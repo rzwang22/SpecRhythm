@@ -400,6 +400,13 @@ class BatchedDualDraftController(AsyncDualDraftController):
 
 
 def serve_vllm_dual(config, *, socket_path, event_log_path, transport_log_path, ready_path):
+    from specrhythm.phase4.dual_rhythm import selected_rhythm
+
+    machine_class = BatchedDualDraftMachine
+    if selected_rhythm() == "pingpong":
+        from specrhythm.phase4.dual_pingpong_draft import PingPongDraftMachine
+
+        machine_class = PingPongDraftMachine
     report_path = ready_path.with_name("draft-backend-report.json")
     startup_path = ready_path.with_name("draft-startup.json")
     if any(Path(p).exists() for p in (report_path, startup_path, ready_path, socket_path)):
@@ -409,7 +416,7 @@ def serve_vllm_dual(config, *, socket_path, event_log_path, transport_log_path, 
         backend = VllmBatchedDraftBackend(config)
         try:
             write_immutable_report(startup_path, backend.provenance)
-            return BatchedDualDraftMachine(
+            return machine_class(
                 backend, candidate_budget=config.proposal_budget, report_path=report_path
             )
         except Exception:

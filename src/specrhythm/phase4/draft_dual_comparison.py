@@ -55,7 +55,7 @@ def positive(value):
     return type(value) in (int, float) and math.isfinite(value) and value > 0
 
 
-def _backend(directory, raw):
+def _backend(directory, raw, *, require_batching=True):
     path = directory / "draft-backend-report.json"
     value = read(path)
     ready = read(directory / "draft-service-ready.json")
@@ -80,7 +80,7 @@ def _backend(directory, raw):
         value.get("draft_batch_statistics_by_purpose", {}).get("proposal", {}).get("histogram", {})
     )
     require(
-        any(
+        not require_batching or any(
             int(size) > 1 and type(count) is int and count > 0 for size, count in histogram.items()
         ),
         "no actual multi-request Draft proposal forward",
@@ -236,7 +236,10 @@ def _dual_work(directory, raw, *, characterization=False):
     }
 
 
-def summarize_run(directory, mode, count, workload, *, smoke=False, characterization=False):
+def summarize_run(
+    directory, mode, count, workload, *, smoke=False, characterization=False,
+    singleton_cohort_smoke=False,
+):
     """Stop at the first material failure; never fabricate downstream failures."""
     result = {
         "schema_version": "specrhythm.phase4b3-d6-run.v1",
@@ -270,7 +273,14 @@ def summarize_run(directory, mode, count, workload, *, smoke=False, characteriza
             raw.get("request_count") == count and len(raw.get("outputs", [])) == count,
             "runtime completed request count differs",
         )
-        backend = _backend(directory, raw) if mode != "target" else None
+        require(
+            not singleton_cohort_smoke or (smoke and mode == "dual" and count == 2),
+            "singleton-cohort exception is limited to the two-request Dual smoke",
+        )
+        backend = (
+            _backend(directory, raw, require_batching=not singleton_cohort_smoke)
+            if mode != "target" else None
+        )
         if smoke:
             require(mode == "dual", "D6-A smoke is Dual-only")
             result.update(

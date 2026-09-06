@@ -226,13 +226,24 @@ phase4b1_run_mode () {
     return 2
   }
   if test "$phase4b1_mode" = dual; then
-    phase4b1_microbatch_size="$(python -m specrhythm.phase4.dual_microbatch)" || return
+    phase4b1_rhythm="$(python -m specrhythm.phase4.dual_rhythm)" || return
+    if test "$phase4b1_rhythm" = pingpong; then
+      phase4b1_microbatch_size="$phase4b1_count"
+    else
+      phase4b1_microbatch_size="$(python -m specrhythm.phase4.dual_microbatch)" || return
+    fi
   fi
   test ! -e "$phase4b1_dir" || {
     echo "refusing to reuse immutable run directory: $phase4b1_dir" >&2
     return 2
   }
   mkdir -p "$phase4b1_dir"
+  if test "$phase4b1_mode" = dual && test "$phase4b1_rhythm" = pingpong; then
+    export SR_PHASE4_DUAL_RHYTHM_MANIFEST="$phase4b1_dir/dual-rhythm.json"
+    python -m specrhythm.phase4.dual_rhythm \
+      --output "$SR_PHASE4_DUAL_RHYTHM_MANIFEST" --workload "$phase4b1_workload" \
+      --request-count "$phase4b1_count" || return
+  fi
   phase4b1_socket="/tmp/sr4b1-${SR_PHASE4B_COMMIT:0:8}-$(basename "$phase4b1_dir").sock"
   phase4b1_kind=stock
   test "$phase4b1_mode" = dual && phase4b1_kind=dual

@@ -25,6 +25,12 @@ from specrhythm.phase4.dual_correctness import (
 )
 from specrhythm.phase4.dual_microbatch import FIELDS, positive_size, scheduler_evidence
 from specrhythm.phase4.dual_overlap_characterization import characterize_overlap
+from specrhythm.phase4.dual_rhythm import (
+    LEGACY_CLASSES,
+    PINGPONG_CLASSES,
+    load_assignment,
+    selected_rhythm,
+)
 from specrhythm.phase4.dual_service import DualDraftClient
 from specrhythm.phase4.dual_terminal import build_terminal_reconciliation
 from specrhythm.phase4.dual_uuid import (
@@ -383,6 +389,24 @@ def run_resident_dual_batch(
 
     if request_count not in {2, 5, 100}:
         raise ValueError("Phase-4B.1 allows only 2, 5, or 100 requests")
+    rhythm = selected_rhythm()
+    scheduler_class, proposer_class = LEGACY_CLASSES
+    rhythm_evidence = {}
+    if rhythm == "pingpong":
+        from specrhythm.phase4.vllm_draft_backend import selected_draft_backend
+
+        if selected_draft_backend() != "vllm-batched" or test_coordination != "none":
+            raise ValueError("pingpong requires production Draft without test coordination")
+        assignment = load_assignment(workload=workload_path, count=request_count)
+        microbatch_size = len(assignment)
+        scheduler_class, proposer_class = PINGPONG_CLASSES
+        rhythm_evidence = {
+            "dual_rhythm": rhythm, "cohort_assignment": dict(assignment),
+            "rhythm_manifest_sha256": sha256_file(
+                Path(os.environ["SR_PHASE4_DUAL_RHYTHM_MANIFEST"])
+            ),
+            "scheduler_class": scheduler_class, "proposer_class": proposer_class,
+        }
     microbatch_size = positive_size(microbatch_size)
     if test_coordination not in {"none", "one-ready", "two-ready"}:
         raise ValueError("unknown test-only readiness coordination")
@@ -496,9 +520,9 @@ def run_resident_dual_batch(
         enforce_eager=config.enforce_eager,
         enable_prefix_caching=config.enable_prefix_caching,
         enable_dbo=False,
-        scheduler_cls="specrhythm.phase4.vllm_dual_scheduler.DualBatchScheduler",
+        scheduler_cls=scheduler_class,
         speculative_config={
-            "model": "specrhythm.phase4.vllm_dual.DualBatchRemoteProposer",
+            "model": proposer_class,
             "method": "custom_class",
             "num_speculative_tokens": config.proposal_budget,
         },
@@ -650,6 +674,7 @@ def run_resident_dual_batch(
     runtime.update(
         {
             **microbatch_evidence,
+            **rhythm_evidence,
             "dual_scheduler_constraints": (
                 scheduler_rows[0].get("dual_scheduler_constraints") if scheduler_rows else None
             ),
@@ -664,6 +689,7 @@ def run_resident_dual_batch(
     result = {
         "schema_version": "specrhythm.phase4b1-resident-dual-run.v1",
         **microbatch_evidence,
+        **rhythm_evidence,
         "overlap_characterization": overlap_characterization,
         "mode": "decode-only-dual-batch",
         "stage": "phase4b1-real-decode-only-dual-correctness",
