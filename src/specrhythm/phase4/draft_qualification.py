@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 
 from specrhythm.phase4.batched_draft_service import write_immutable_report
+from specrhythm.phase4.draft_admission import admit_device, runtime_errors, runtime_regime
 from specrhythm.phase4.draft_logits_contract import PATHS, classify_paths, load_probe_fixture
 from specrhythm.phase4.manifest import sha256_file
 
@@ -64,6 +65,14 @@ def qualify_probe_reports(reports):
             or diagnostic.get("observer_removed") is not True
         ):
             errors.append(f"{path}: structural diagnostic/cleanup did not pass")
+    runtime = runtime_regime(reports.get(PATHS[1], {}).get("runtime_provenance", {}))
+    errors.extend(runtime_errors(runtime))
+    for path in PATHS[1:]:
+        report = reports.get(path, {})
+        if runtime_regime(report.get("runtime_provenance", {})) != runtime:
+            errors.append(f"{path}: retained execution-regime properties differ")
+        if report.get("gpu_identity", {}).get("gpu_name") != runtime["gpu_name"]:
+            errors.append(f"{path}: retained GPU model identity differs")
     return {
         "schema_version": REGIME_SCHEMA,
         "valid": not errors,
@@ -75,6 +84,7 @@ def qualify_probe_reports(reports):
         "vllm_persistent_history_valid": equal[1],
         "run_identity": reports.get(PATHS[0], {}).get("run_identity"),
         "gpu_identity": reports.get(PATHS[0], {}).get("gpu_identity"),
+        "vllm_runtime_regime": runtime,
         "top1_pattern": result["top1_pattern"],
         "raw_logit_deltas": deltas,
         "fixture_sha256": result["fixture_sha256"],
@@ -152,11 +162,35 @@ def hf_diagnostics(comparisons):
 def qualify_d3(observation, backend, regime):
     errors = list(observation.get("errors", []))
     checks = observation.get("structural_checks", {})
-    for name in STRUCTURAL_CHECKS:
-        if checks.get(name) is not True:
-            errors.append(f"D3 structural gate failed: {name}")
+    started = observation.get("execution_started") is True
+    executed = observation.get("structural_checks_executed") is True
+    admission = observation.get("admission", {})
+    if admission.get("current_runtime_provenance"):
+        rebuilt = admit_device(
+            admission["current_runtime_provenance"], observation.get("run_identity", {}), regime
+        )
+        if rebuilt != admission:
+            errors.append("D3 device admission differs from its runtime evidence")
+        admitted = rebuilt["valid"]
+        if any(
+            admission["current_runtime_provenance"].get(key) != value
+            for key, value in backend.get("provenance", {}).items()
+        ):
+            errors.append("D3 current device/runtime evidence differs from backend provenance")
+    else:
+        admitted = False
+    if not admitted or observation.get("admission_valid") is not True:
+        if not errors:
+            errors.append("D3 admission failed before production replay")
+    if not started or not executed:
+        if not errors:
+            errors.append("D3 production structural validation was not executed to completion")
+    else:
+        for name in STRUCTURAL_CHECKS:
+            if checks.get(name) is not True:
+                errors.append(f"D3 structural gate failed: {name}")
     resources = backend.get("worker_resources", {})
-    if not (
+    if started and not (
         backend.get("execution_failed") is False
         and backend.get("backend_shutdown_complete") is True
         and backend.get("draft_live_requests_final") == 0
@@ -172,17 +206,18 @@ def qualify_d3(observation, backend, regime):
         .get("proposal", {})
         .get("histogram", {})
     )
-    if count not in (2, 4, 8) or histogram.get(str(count), 0) < 1:
+    if started and (count not in (2, 4, 8) or histogram.get(str(count), 0) < 1):
         errors.append("D3 did not execute the requested B2/B4/B8 proposal batch")
     if (
         observation.get("diagnostic_only") is not False
         or observation.get("materialization_observer_installed") is not False
     ):
         errors.append("D3 must be a fresh uninstrumented execution")
-    if observation.get("completed_requests") != count:
+    if started and executed and observation.get("completed_requests") != count:
         errors.append("D3 completed request count mismatch")
     if (
-        observation.get("runtime_batch_invariance", {}).get("batch_invariant_env_resolved")
+        started
+        and observation.get("runtime_batch_invariance", {}).get("batch_invariant_env_resolved")
         is not True
     ):
         errors.append("D3 worker batch-invariant mode is not resolved")
@@ -199,8 +234,8 @@ def qualify_d3(observation, backend, regime):
         and regime.get("vllm_batch_invariant_valid") is True
         and regime.get("vllm_persistent_history_valid") is True
     )
-    semantic = not errors
-    if not qualified:
+    semantic = not errors if started and executed else None
+    if not qualified and (started or not errors):
         errors.append("missing/incompatible cross-backend execution-regime qualification")
     return {
         "schema_version": D3_SCHEMA,
@@ -209,6 +244,20 @@ def qualify_d3(observation, backend, regime):
         "valid": not errors,
         "errors": errors,
         "vllm_semantic_valid": semantic,
+        "execution_started": started,
+        "admission_valid": admitted and observation.get("admission_valid") is True,
+        "structural_checks_executed": executed,
+        "admission": admission,
+        **{
+            key: admission.get(key)
+            for key in (
+                "current_device_binding_valid",
+                "historical_probe_gpu_uuid",
+                "current_gpu_uuid",
+                "same_physical_gpu",
+                "execution_regime_device_compatible",
+            )
+        },
         "vllm_batch_invariant_valid": qualified and regime["vllm_batch_invariant_valid"],
         "vllm_persistent_history_valid": qualified and regime["vllm_persistent_history_valid"],
         "cross_backend_divergence_qualified": qualified,
@@ -221,7 +270,7 @@ def qualify_d3(observation, backend, regime):
         "hf_proposal_equality_is_blocking": False,
         "performance_result": False,
         "run_identity": observation.get("run_identity"),
-        "structural_checks": checks,
+        "structural_checks": checks if executed else dict.fromkeys(STRUCTURAL_CHECKS, None),
         "regime_qualification": regime,
     }
 
@@ -234,8 +283,14 @@ def validate_d3_directory(root):
         "observation.json",
         "draft-backend-report.json",
         "regime-qualification.json",
-        "draft-startup.json",
-        "hf-oracle.json",
+        "admission.json",
+        *(
+            name
+            for name in ("draft-startup.json", "hf-oracle.json")
+            if report.get("execution_started") is True
+            or name in report.get("artifact_sha256", {})
+            or (root / name).exists()
+        ),
     ):
         if report.get("artifact_sha256", {}).get(name) != sha256_file(root / name):
             errors.append(f"D3 bound artifact changed: {name}")
@@ -244,6 +299,8 @@ def validate_d3_directory(root):
         read_json(root / "draft-backend-report.json"),
         read_json(root / "regime-qualification.json"),
     )
+    if read_json(root / "admission.json") != recomputed["admission"]:
+        errors.append("D3 admission artifact differs from observation")
     if any(report.get(k) != v for k, v in recomputed.items()):
         errors.append("D3 qualification differs from its underlying observations")
     errors.extend(recomputed["errors"])
@@ -257,11 +314,13 @@ def aggregate_directories(root):
         directory = root / name
         try:
             gate = read_json(directory / "gate.json")
-            startup = read_json(directory / "draft-startup.json")
-            backend = read_json(directory / "draft-backend-report.json")
             if name.startswith("D3"):
                 gate, invalid = validate_d3_directory(directory)
                 errors.extend(f"{name}: {e}" for e in invalid)
+                if invalid:
+                    gates[name] = {"gate": gate}
+                    hashes[f"{name}/gate.json"] = sha256_file(directory / "gate.json")
+                    continue
                 if gate.get("requested_batch_size") != int(name[-1]):
                     errors.append(f"{name}: wrong requested batch size")
             elif not (
@@ -277,6 +336,8 @@ def aggregate_directories(root):
                 or any(r.get("draft_proposals_exact") is not True for r in gate["comparisons"])
             ):
                 errors.append("D2: retained HF single-request gate did not pass")
+            startup = read_json(directory / "draft-startup.json")
+            backend = read_json(directory / "draft-backend-report.json")
             resources = backend.get("worker_resources", {})
             if not (
                 backend.get("execution_failed") is False
@@ -295,7 +356,7 @@ def aggregate_directories(root):
         except (OSError, ValueError, KeyError, TypeError) as error:
             errors.append(f"{name}: {error}")
     identity = gates.get("D3-B8", {}).get("gate", {}).get("run_identity")
-    if len(gates) == 5:
+    if len(gates) == 5 and not errors:
         base = gates["D3-B8"]["startup"]
         stable = (
             "model",
@@ -335,6 +396,10 @@ def aggregate_directories(root):
                     "d3_qualified",
                     "hf_draft_exact",
                     "hf_vllm_divergent_request_count",
+                    "execution_started",
+                    "admission_valid",
+                    "structural_checks_executed",
+                    "errors",
                 )
             }
             for name, entry in gates.items()

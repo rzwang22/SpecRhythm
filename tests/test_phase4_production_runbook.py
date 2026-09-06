@@ -56,6 +56,48 @@ def test_fresh_server_runbook_is_complete_and_non_exiting():
     subprocess.run(["bash", "-n", str(HELPER)], check=True)
 
 
+def test_admission_rerunbook_bootstraps_new_root_and_stops_after_d3():
+    text = (ROOT / "docs/phase4b3-device-admission-runbook.md").read_text()
+    blocks = re.findall(r"```bash\n(.*?)```", text, re.S)
+    assert len(blocks) >= 12
+    commands = "\n".join(blocks)
+    assert not re.search(r"(?m)^\s*set\s+-e|\bexit\b", commands)
+    for block in blocks:
+        subprocess.run(["bash", "-n"], input=block, text=True, check=True)
+        for code in re.findall(r"<<'PY'\n(.*?)\nPY", block, re.S):
+            ast.parse(code)
+    for required in (
+        "conda activate",
+        "git switch --detach",
+        "@DELIVERED_COMMIT@",
+        "--no-deps --no-build-isolation",
+        "SR_VLLM_ROOT",
+        "SR_VLLM_SOURCE",
+        "SR_DRAFT_MODEL",
+        "SR_TARGET_MODEL",
+        "SR_PHASE4B_CONFIG",
+        "--expect-state patched",
+        "SR_PHASE4B_ENVIRONMENT",
+        "SR_PHASE4B_TOPOLOGY",
+        "SR_PHASE4B3_PROBE_SOURCE",
+        "SR_PHASE4B3_BASELINE_ROOT",
+        "--gate D1",
+        "--gate D2",
+        "--request-count 2",
+        "--request-count 4",
+        "--request-count 8",
+        "draft_qualification aggregate",
+        "tar -czf",
+        "draft-admission-$(date",
+        "same_physical_gpu",
+        "structural_checks_executed",
+    ):
+        assert required in commands
+    assert "--diagnostic" not in commands
+    assert "phase4b3_run_serial" not in commands and "draft_comparison" not in commands
+    assert "--stage D4" not in commands and "--stage D5" not in commands
+
+
 @pytest.mark.parametrize("stage", ["D4", "D5"])
 def test_operator_helper_never_starts_gpu_after_failed_admission(tmp_path, stage):
     script = f'''

@@ -1,5 +1,7 @@
 # Phase 4B.3 production Draft: fresh-server D3 → D4 → D5
 
+For the current UUID admission correction, first use the [fresh-server D1–D3 rerunbook](phase4b3-device-admission-runbook.md) in a new root. That handoff stops at aggregate review. The complete progression reference below does not authorize skipping this rerun or automatically entering D4/D5.
+
 Operator execution only. The agent has run no GPU. Use a fresh interactive **Bash** shell after restarting AutoDL. Execute each block separately. If its printed `rc` is nonzero, stop manually and preserve the root; the commands keep the interactive shell open. The runbook never applies a patch, changes precision/kernels, runs Dual, or starts D6.
 
 The delivered copy replaces `@DELIVERED_COMMIT@` with the exact tested commit. The repository copy is a template because a commit cannot contain its own SHA. Existing inputs below are explicitly named, not inherited from previous shell exports. If a retained file was moved, change its path to that same artifact; do not substitute a different workload or reference.

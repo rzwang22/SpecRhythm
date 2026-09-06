@@ -14,6 +14,7 @@ from specrhythm.phase4.batched_draft_service import (
     BatchedDraftStateMachine,
     write_immutable_report,
 )
+from specrhythm.phase4.draft_admission import FLASH_IMPL, GPU_MODEL, MRV1, admit_device
 from specrhythm.phase4.draft_logits_contract import PATHS, load_probe_fixture, summarize_logits
 from specrhythm.phase4.draft_qualification import (
     D3_SCHEMA,
@@ -106,6 +107,54 @@ def test_serial_admission_binds_declared_workload_limits_before_execution(
         }
 
 
+def runtime_provenance():
+    return {
+        "gpu_uuid": "GPU-12345678-1234-1234-1234-123456789abc",
+        "gpu_name": GPU_MODEL,
+        "physical_gpu_id": 0,
+        "logical_cuda_index": 0,
+        "cuda_visible_devices": "0",
+        "world_size": 1,
+        "tensor_parallel_size": 1,
+        "global_rank": 0,
+        "startup_uuid_validation_count": 1,
+        "python_major_minor": [3, 11],
+        "python_version": "3.11.0",
+        "dtype": "bfloat16",
+        "runner_class": MRV1,
+        "enforce_eager": True,
+        "prefix_caching": False,
+        "cache_initialized": True,
+        "model_instance_count": 1,
+        "block_size": 16,
+        "kv_cache_group_count": 1,
+        "max_num_seqs": 128,
+        "max_num_batched_tokens": 4096,
+        "vllm_api": {"pinned": True},
+        "model": {"path": "/model"},
+        "tokenizer": {"path": "/model"},
+        "batch_invariance": {
+            "compute_capability": "8.0",
+            "dtype": "torch.bfloat16",
+            "batch_invariant_env_raw": "1",
+            "batch_invariant_requested": True,
+            "batch_invariant_env_resolved": True,
+            "batch_invariant_effective": True,
+            "batch_invariant_validation": {"valid": True, "reasons": []},
+            "cascade_attention_enabled": False,
+            "vllm_dbo_enabled": False,
+        },
+        "attention_implementations": [
+            {
+                "layer": "layer.0",
+                "implementation": FLASH_IMPL,
+                "flash_attention_version": 2,
+                "batch_invariant_enabled": True,
+            }
+        ],
+    }
+
+
 def probe_reports():
     rows = reports_for([16, 227, 227, 227])
     for value in rows.values():
@@ -120,6 +169,17 @@ def probe_reports():
             "all_structural_checks_passed": True,
             "observer_removed": True,
         }
+        value["runtime_provenance"] = runtime_provenance()
+        value["gpu_identity"] = {
+            k: runtime_provenance()[k]
+            for k in (
+                "gpu_uuid",
+                "gpu_name",
+                "physical_gpu_id",
+                "logical_cuda_index",
+                "cuda_visible_devices",
+            )
+        }
     return rows
 
 
@@ -128,11 +188,16 @@ def regime():
 
 
 def gate_inputs(count=8):
+    proof, runtime = regime(), runtime_provenance()
     observation = {
         "requested_batch_size": count,
         "completed_requests": count,
-        "run_identity": regime()["run_identity"],
-        "runtime_batch_invariance": {"batch_invariant_env_resolved": True},
+        "run_identity": proof["run_identity"],
+        "runtime_batch_invariance": runtime["batch_invariance"],
+        "execution_started": True,
+        "admission_valid": True,
+        "structural_checks_executed": True,
+        "admission": admit_device(runtime, proof["run_identity"], proof),
         "errors": [],
         "diagnostic_only": False,
         "materialization_observer_installed": False,
@@ -149,6 +214,7 @@ def gate_inputs(count=8):
         ],
     }
     backend = {
+        "provenance": runtime,
         "execution_failed": False,
         "backend_shutdown_complete": True,
         "draft_live_requests_final": 0,
@@ -360,34 +426,18 @@ def test_host_state_gate_detects_real_identity_frontier_and_owner_faults(phase4_
         state_snapshot(backend, machine, committed=True)
 
 
-def write_d3(directory, count=8):
+def write_d3(directory, count=8, *, current_uuid=None):
     observation, backend = gate_inputs(count)
-    startup = {
-        key: "same"
-        for key in (
-            "model",
-            "tokenizer",
-            "dtype",
-            "gpu_uuid",
-            "physical_gpu_id",
-            "logical_cuda_index",
-            "world_size",
-            "tensor_parallel_size",
-            "runner_class",
-            "vllm_api",
-            "enforce_eager",
-            "prefix_caching",
-        )
-    }
-    backend["provenance"] = startup
-    startup.update(
-        model={"path": "/model"}, tokenizer={"path": "/model"}, vllm_api={"pinned": True}
-    )
+    startup = backend["provenance"]
     proof = regime()
+    if current_uuid:
+        startup["gpu_uuid"] = current_uuid
+        observation["admission"] = admit_device(startup, proof["run_identity"], proof)
     for name, value in (
         ("observation.json", observation),
         ("draft-backend-report.json", backend),
         ("regime-qualification.json", proof),
+        ("admission.json", observation["admission"]),
         ("draft-startup.json", startup),
         ("hf-oracle.json", {"immutable": True}),
     ):
@@ -398,9 +448,9 @@ def write_d3(directory, count=8):
     return backend, startup
 
 
-def write_aggregate_inputs(tmp_path):
+def write_aggregate_inputs(tmp_path, *, current_uuid=None):
     for count in (2, 4, 8):
-        backend, startup = write_d3(tmp_path / f"D3-B{count}", count)
+        backend, startup = write_d3(tmp_path / f"D3-B{count}", count, current_uuid=current_uuid)
     for name in ("D1", "D2"):
         old = {
             "schema_version": "specrhythm.phase4b3-draft-gate.v1",

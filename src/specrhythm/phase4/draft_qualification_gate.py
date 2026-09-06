@@ -11,6 +11,7 @@ from specrhythm.phase4.batched_draft_service import (
     BatchedDraftStateMachine,
     write_immutable_report,
 )
+from specrhythm.phase4.draft_admission import admit_device, collect_runtime
 from specrhythm.phase4.draft_d3_diagnostics import assert_private_blocks
 from specrhythm.phase4.draft_gate import _hf_fixture, _proposal_row
 from specrhythm.phase4.draft_logits_contract import load_probe_fixture, require
@@ -264,11 +265,7 @@ def replay_production(machine, fixture, vocab_size, snapshot, progress=None):
     }
 
 
-def run_qualification(config, count, output, identity, regime):
-    require(
-        regime["valid"] and compatible_identity(identity, regime["run_identity"]),
-        "missing/incompatible qualified execution regime",
-    )
+def run_qualification(config, count, output, identity, regime, *, preflight_error=None):
     output.mkdir(parents=True, exist_ok=False)
     write_immutable_report(output / "regime-qualification.json", regime)
     observation = {
@@ -277,12 +274,37 @@ def run_qualification(config, count, output, identity, regime):
         "errors": [],
         "diagnostic_only": False,
         "materialization_observer_installed": False,
-        "structural_checks": dict.fromkeys(STRUCTURAL_CHECKS, False),
+        "execution_started": False,
+        "admission_valid": False,
+        "structural_checks_executed": False,
+        "structural_checks": dict.fromkeys(STRUCTURAL_CHECKS, None),
+        "admission": {
+            "schema_version": "specrhythm.phase4b3-draft-admission.v1",
+            "valid": False,
+            "errors": [],
+            "historical_probe_gpu_uuid": regime.get("gpu_identity", {}).get("gpu_uuid"),
+            **dict.fromkeys(
+                (
+                    "current_device_binding_valid",
+                    "current_gpu_uuid",
+                    "same_physical_gpu",
+                    "execution_regime_device_compatible",
+                    "execution_regime_compatible",
+                    "current_runtime_provenance",
+                ),
+                None,
+            ),
+        },
         "comparisons": [],
     }
     backend = None
     evidence = {}
     try:
+        require(preflight_error is None, preflight_error or "preflight failed")
+        require(
+            regime["valid"] and compatible_identity(identity, regime["run_identity"]),
+            "missing/incompatible qualified execution regime",
+        )
         from transformers import AutoTokenizer
 
         tokenizer = AutoTokenizer.from_pretrained(
@@ -295,31 +317,30 @@ def run_qualification(config, count, output, identity, regime):
         # Original HF fixture generation finishes/destroys its model first.
         backend = VllmBatchedDraftBackend(config)
         write_immutable_report(output / "draft-startup.json", backend.provenance)
+        runtime = collect_runtime(backend)
+        observation["runtime_batch_invariance"] = runtime["batch_invariance"]
+        observation["admission"] = admit_device(runtime, identity, regime)
+        observation["admission_valid"] = observation["admission"]["valid"]
         require(
-            backend.provenance["gpu_uuid"] == regime["gpu_identity"]["gpu_uuid"],
-            "qualification GPU UUID differs",
-        )
-        from specrhythm.phase4.batch_invariant import worker_batch_invariant_evidence
-
-        observation["runtime_batch_invariance"] = worker_batch_invariant_evidence(
-            backend.worker.executor.driver_worker.worker
-        )
-        require(
-            observation["runtime_batch_invariance"]["batch_invariant_env_resolved"] is True,
-            "production worker did not resolve batch-invariant mode",
+            observation["admission_valid"],
+            "D3 admission failed: " + "; ".join(observation["admission"]["errors"]),
         )
         machine = BatchedDraftStateMachine(backend)
         vocab = json.loads((config.draft.resolved_model_path / "config.json").read_text())[
             "vocab_size"
         ]
+        observation["execution_started"] = True
         observation.update(
             replay_production(machine, fixtures[0], vocab, state_snapshot, observation)
         )
-        machine.shutdown()
         observation["structural_checks"] = dict.fromkeys(STRUCTURAL_CHECKS, True)
+        observation["structural_checks_executed"] = True
+        machine.shutdown()
     except Exception as error:
         observation["errors"].append(f"{type(error).__name__}: {error}")
         observation["traceback"] = traceback.format_exc()
+        if not observation["admission"]["errors"] and not observation["admission_valid"]:
+            observation["admission"]["errors"] = list(observation["errors"])
     finally:
         if backend is not None:
             try:
@@ -330,6 +351,7 @@ def run_qualification(config, count, output, identity, regime):
             evidence = backend.report()
         write_immutable_report(output / "observation.json", observation)
         write_immutable_report(output / "draft-backend-report.json", evidence)
+        write_immutable_report(output / "admission.json", observation["admission"])
     result = qualify_d3(observation, evidence, regime)
     result["artifact_sha256"] = {p.name: sha256_file(p) for p in output.glob("*.json")}
     write_immutable_report(output / "gate.json", result)
@@ -347,9 +369,15 @@ def main():
     args = parser.parse_args()
     if not args.allow_gpu:
         parser.error("D3 requires operator --allow-gpu")
-    regime = load_probe_qualification(args.probe_root)
-    config, identity = preflight(args.config, args.expected_commit, load_probe_fixture())
-    result = run_qualification(config, args.request_count, args.output, identity, regime)
+    regime, identity, config, error = {}, {}, None, None
+    try:
+        regime = load_probe_qualification(args.probe_root)
+        config, identity = preflight(args.config, args.expected_commit, load_probe_fixture())
+    except Exception as exc:
+        error = f"preflight: {type(exc).__name__}: {exc}"
+    result = run_qualification(
+        config, args.request_count, args.output, identity, regime, preflight_error=error
+    )
     print(json.dumps({k: result[k] for k in ("d3_qualified", "hf_draft_exact", "errors")}))
     return 0 if result["d3_qualified"] else 1
 
