@@ -29,7 +29,7 @@ specrhythm = "specrhythm.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-"specrhythm.phase4" = ["vllm_draft_api.json"]
+"specrhythm.phase4" = ["vllm_draft_api.json", "d3_logits_probe_inputs.json"]
 
 [tool.pytest.ini_options]
 addopts = "-q"

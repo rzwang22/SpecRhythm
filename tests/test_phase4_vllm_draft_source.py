@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import hashlib
 import json
 import os
 import shutil
@@ -172,6 +173,28 @@ def test_pinned_row_reorder_precedes_prepare_and_raw_logits_state(source):
         isinstance(n, ast.Call) and ast.unparse(n.func).endswith("sample_tokens")
         for n in ast.walk(execute)
     )
+
+
+def test_probe_pins_batch_invariance_and_fa2_raw_execution_path(source):
+    from specrhythm.phase4.draft_logits_contract import load_probe_fixture
+
+    fixture = load_probe_fixture()
+    for path, digest in fixture["numerical_source_sha256"].items():
+        assert hashlib.sha256((source / path).read_bytes()).hexdigest() == digest
+    invariant = (source / "vllm/model_executor/layers/batch_invariant.py").read_text()
+    assert "current_platform.is_device_capability_family(80)" in invariant
+    assert '"aten::mm", mm_batch_invariant, "CUDA"' in invariant
+    assert '"aten::linear", linear_batch_invariant, "CUDA"' in invariant
+    linear = (source / "vllm/model_executor/layers/linear.py").read_text()
+    assert "if envs.VLLM_BATCH_INVARIANT and current_platform.is_cuda_alike():" in linear
+    assert "return linear_batch_invariant(x, layer.weight, bias)" in linear
+    attention = (source / "vllm/v1/attention/backends/flash_attn.py").read_text()
+    assert "def supports_batch_invariance(cls) -> bool:\n        return True" in attention
+    assert "if envs.VLLM_BATCH_INVARIANT:\n            max_num_splits = 1" in attention
+    assert "num_splits=attn_metadata.max_num_splits" in attention
+    interface = (source / "vllm/vllm_flash_attn/flash_attn_interface.py").read_text()
+    assert "if fa_version == 2:" in interface
+    assert "torch.ops._vllm_fa2_C.varlen_fwd(" in interface
 
 
 def test_worker_builds_real_scheduler_metadata_for_ragged_rebases(source, monkeypatch):
