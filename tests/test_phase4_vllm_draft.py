@@ -511,11 +511,11 @@ def test_correct_real_identity_contract(phase4_config):
     )
 
 
-def test_dual_rejects_new_backend_before_loading_model(monkeypatch, phase4_config, tmp_path):
+def test_dual_rejects_unknown_backend_before_loading_model(monkeypatch, phase4_config, tmp_path):
     from specrhythm.phase4.dual_service import run_dual_draft_service
 
-    monkeypatch.setenv("SR_PHASE4_DRAFT_BACKEND", "vllm-batched")
-    with pytest.raises(ValueError, match="Serial-only"):
+    monkeypatch.setenv("SR_PHASE4_DRAFT_BACKEND", "unknown")
+    with pytest.raises(ValueError, match="hf-persistent or vllm-batched"):
         run_dual_draft_service(
             phase4_config,
             socket_path=tmp_path / "socket",

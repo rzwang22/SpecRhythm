@@ -1,4 +1,4 @@
-"""Serial-only, batched greedy Draft with private persistent paged KV."""
+"""Batched greedy Draft with private persistent paged KV."""
 
 from __future__ import annotations
 
@@ -184,10 +184,17 @@ class VllmBatchedDraftBackend:
         refreshes = 0
         for plan in plans:
             state = self.states[plan.request_id]
+            terminal_tail = (
+                state.proposal is None
+                and not plan.proposal
+                and plan.terminal
+                and len(plan.target_tail) == 1
+                and plan.accepted == 0
+            )
             if (
                 state.next_round != plan.round_id
                 or state.prefix != plan.parent_prefix
-                or state.proposal != plan.proposal
+                or (state.proposal != plan.proposal and not terminal_tail)
             ):
                 raise ValueError("stale Draft commit proposal/prefix/round")
             if len(plan.final_prefix) > self.max_model_len:
