@@ -29,3 +29,21 @@ jobs:
       - run: python -m pip install '.[dev]'
       - run: specrhythm phase4-contract-dry-run --output /tmp/phase4-contract.json
       - run: python -m pytest -q tests/test_phase4.py
+
+  phase4b3-draft-source-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - run: python -m pip install '.[dev]'
+      - uses: actions/checkout@v7
+        with:
+          repository: vllm-project/vllm
+          ref: 752a3a504485790a2e8491cacbb35c137339ad34
+          path: tmp/phase4b3-vllm-source
+          sparse-checkout: vllm
+      - run: python -m pytest tests/test_phase4_vllm_draft.py tests/test_phase4_vllm_draft_source.py
+        env:
+          SR_PHASE4B3_SOURCE_AUDIT: tmp/phase4b3-vllm-source

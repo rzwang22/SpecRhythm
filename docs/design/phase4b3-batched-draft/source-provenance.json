@@ -1,0 +1,1326 @@
+{
+  "schema_version": 1,
+  "audit_date": "2026-09-06",
+  "scope": "Source audit and design only; no runtime implementation, GPU execution or server connection.",
+  "repositories": {
+    "SpecRhythm": {
+      "repo": "rzwang22/SpecRhythm",
+      "commit": "64031110e630b6643cc610620f05f8630e896c7c",
+      "source_root": "."
+    },
+    "MineDraft": {
+      "repo": "electron-shaders/MineDraft",
+      "commit": "272c8556797495fe9c9f6a3008337bcd5cc2d031",
+      "source_root": "tmp/repos/MineDraft"
+    },
+    "vllm092": {
+      "repo": "vllm-project/vllm",
+      "commit": "a5dd03c1ebc5e4f56f3c9d3dc0436e9c582c978f",
+      "source_root": "tmp/phase4b3-source-audit/vllm092"
+    },
+    "vllm025": {
+      "repo": "vllm-project/vllm",
+      "commit": "752a3a504485790a2e8491cacbb35c137339ad34",
+      "source_root": "tmp/phase4b3-source-audit/vllm025"
+    }
+  },
+  "acquisition": {
+    "MineDraft": "Existing clean Git checkout; remote main SHA checked.",
+    "vllm092": "Source tarball from GitHub codeload at exact commit; no install/import.",
+    "vllm025": "git archive of exact object from local Git repository; no checkout modification."
+  },
+  "old_class_definition_search": {
+    "root": "vllm025:vllm/",
+    "python_files_scanned": 1966,
+    "method": "Whole-tree class-definition text search, AST confirmation for candidate files; no module imports.",
+    "matches": {
+      "SpecDecodeWorker": [],
+      "MultiStepWorker": [],
+      "TP1DraftModelRunner": [],
+      "SmallerTpProposerWorker": [],
+      "Top1Proposer": [],
+      "SpeculativeProposals": []
+    }
+  },
+  "files": [
+    {
+      "source": "MineDraft",
+      "path": "minedraft/patching.py",
+      "sha256": "4fa8db38d599afd8b38b273457505860e723bc366ef01d38a11825755dbbe38d",
+      "line_count": 215,
+      "url": "https://github.com/electron-shaders/MineDraft/blob/272c8556797495fe9c9f6a3008337bcd5cc2d031/minedraft/patching.py",
+      "selected_symbols": []
+    },
+    {
+      "source": "MineDraft",
+      "path": "minedraft/plugin/config.py",
+      "sha256": "ffd71acb95344d45240117bf1ac175db0ab2c05eb574f7bf4d84f249ab02bca0",
+      "line_count": 203,
+      "url": "https://github.com/electron-shaders/MineDraft/blob/272c8556797495fe9c9f6a3008337bcd5cc2d031/minedraft/plugin/config.py",
+      "selected_symbols": []
+    },
+    {
+      "source": "MineDraft",
+      "path": "minedraft/plugin/core/scheduler.py",
+      "sha256": "353e86295ea2cc15bdf32fe7b1f76f4c97bde7fa05dd8ac7d39aa869a1669d5a",
+      "line_count": 988,
+      "url": "https://github.com/electron-shaders/MineDraft/blob/272c8556797495fe9c9f6a3008337bcd5cc2d031/minedraft/plugin/core/scheduler.py",
+      "selected_symbols": []
+    },
+    {
+      "source": "MineDraft",
+      "path": "minedraft/plugin/distributed/communication_op.py",
+      "sha256": "6c7e64efc159576c1aa14b290e67a553a0a9d874ec16ea55b9578d8e290dc11e",
+      "line_count": 43,
+      "url": "https://github.com/electron-shaders/MineDraft/blob/272c8556797495fe9c9f6a3008337bcd5cc2d031/minedraft/plugin/distributed/communication_op.py",
+      "selected_symbols": []
+    },
+    {
+      "source": "MineDraft",
+      "path": "minedraft/plugin/distributed/parallel_state.py",
+      "sha256": "1c274f98490a8a390c656b889c2ba33410b84381625f884115b91e82ec477759",
+      "line_count": 503,
+      "url": "https://github.com/electron-shaders/MineDraft/blob/272c8556797495fe9c9f6a3008337bcd5cc2d031/minedraft/plugin/distributed/parallel_state.py",
+      "selected_symbols": []
+    },
+    {
+      "source": "MineDraft",
+      "path": "minedraft/plugin/plugin.py",
+      "sha256": "6b3e54fd7452e18b4b3e778a7f9eafb82f2a5ecceefd638ec8308668ab7b26d5",
+      "line_count": 73,
+      "url": "https://github.com/electron-shaders/MineDraft/blob/272c8556797495fe9c9f6a3008337bcd5cc2d031/minedraft/plugin/plugin.py",
+      "selected_symbols": []
+    },
+    {
+      "source": "MineDraft",
+      "path": "minedraft/plugin/spec_decode/batch_expansion.py",
+      "sha256": "b763acd637e2765740f7bcb0adfaca24f78d335d2bd192fe7478ecd8b0f986d2",
+      "line_count": 103,
+      "url": "https://github.com/electron-shaders/MineDraft/blob/272c8556797495fe9c9f6a3008337bcd5cc2d031/minedraft/plugin/spec_decode/batch_expansion.py",
+      "selected_symbols": [
+        {
+          "name": "ParallelBatchExpansionTop1Scorer.start_score_proposals",
+          "line": 13,
+          "end_line": 39
+        },
+        {
+          "name": "ParallelBatchExpansionTop1Scorer.score_proposals",
+          "line": 42,
+          "end_line": 103
+        }
+      ]
+    },
+    {
+      "source": "MineDraft",
+      "path": "minedraft/plugin/spec_decode/mqa_scorer.py",
+      "sha256": "d194f417d415f0091c818f0948c99541e0439f8fa973293b13af4b1fdf10e32e",
+      "line_count": 345,
+      "url": "https://github.com/electron-shaders/MineDraft/blob/272c8556797495fe9c9f6a3008337bcd5cc2d031/minedraft/plugin/spec_decode/mqa_scorer.py",
+      "selected_symbols": [
+        {
+          "name": "MQAScorerPatch.score_proposals",
+          "line": 18,
+          "end_line": 172
+        },
+        {
+          "name": "ParallelMQAScorer.start_score_proposals",
+          "line": 177,
+          "end_line": 232
+        },
+        {
+          "name": "ParallelMQAScorer.score_proposals",
+          "line": 235,
+          "end_line": 345
+        }
+      ]
+    },
+    {
+      "source": "MineDraft",
+      "path": "minedraft/plugin/spec_decode/spec_decode_worker.py",
+      "sha256": "daf06f164809318380eda8524498983484ccfa0248f8318f8e6205c86b554d85",
+      "line_count": 1779,
+      "url": "https://github.com/electron-shaders/MineDraft/blob/272c8556797495fe9c9f6a3008337bcd5cc2d031/minedraft/plugin/spec_decode/spec_decode_worker.py",
+      "selected_symbols": [
+        {
+          "name": "SpecDecodeWorkerModulePatch",
+          "line": 55,
+          "end_line": 121
+        },
+        {
+          "name": "SpecDecodeWorkerModulePatch.create_spec_worker",
+          "line": 57,
+          "end_line": 121
+        },
+        {
+          "name": "SpecDecodeWorkerPatch",
+          "line": 124,
+          "end_line": 754
+        },
+        {
+          "name": "SpecDecodeWorkerPatch.create_worker",
+          "line": 130,
+          "end_line": 280
+        },
+        {
+          "name": "SpecDecodeWorkerPatch.execute_model",
+          "line": 328,
+          "end_line": 430
+        },
+        {
+          "name": "SpecDecodeWorkerPatch._run_speculative_decoding_step",
+          "line": 465,
+          "end_line": 574
+        },
+        {
+          "name": "SpecDecodeWorkerPatch._postprocess",
+          "line": 592,
+          "end_line": 615
+        },
+        {
+          "name": "ParallelSpecDecodeWorker",
+          "line": 757,
+          "end_line": 1779
+        },
+        {
+          "name": "ParallelSpecDecodeWorker.init_device",
+          "line": 769,
+          "end_line": 826
+        },
+        {
+          "name": "ParallelSpecDecodeWorker.initialize_cache",
+          "line": 856,
+          "end_line": 866
+        },
+        {
+          "name": "ParallelSpecDecodeWorker._split_batched_requests",
+          "line": 964,
+          "end_line": 1009
+        },
+        {
+          "name": "ParallelSpecDecodeWorker._update_execute_model_req",
+          "line": 1011,
+          "end_line": 1059
+        },
+        {
+          "name": "ParallelSpecDecodeWorker._prepare_previous_proposals",
+          "line": 1061,
+          "end_line": 1148
+        },
+        {
+          "name": "ParallelSpecDecodeWorker._run_speculative_decoding_step",
+          "line": 1225,
+          "end_line": 1516
+        },
+        {
+          "name": "ParallelSpecDecodeWorker._track_finished_requests",
+          "line": 1760,
+          "end_line": 1768
+        }
+      ]
+    },
+    {
+      "source": "MineDraft",
+      "path": "minedraft/plugin/spec_decode/tetris.py",
+      "sha256": "d6c54067577086a688930ded00820566e4566d425946cec04739b6f8682cba43",
+      "line_count": 19,
+      "url": "https://github.com/electron-shaders/MineDraft/blob/272c8556797495fe9c9f6a3008337bcd5cc2d031/minedraft/plugin/spec_decode/tetris.py",
+      "selected_symbols": []
+    },
+    {
+      "source": "MineDraft",
+      "path": "minedraft/plugin/spec_decode/top1_proposer.py",
+      "sha256": "106dc3cce2573f90c1f27f63e7080f1007f1692ef41637362efcc0c837fcb254",
+      "line_count": 145,
+      "url": "https://github.com/electron-shaders/MineDraft/blob/272c8556797495fe9c9f6a3008337bcd5cc2d031/minedraft/plugin/spec_decode/top1_proposer.py",
+      "selected_symbols": [
+        {
+          "name": "Top1ProposerPatch",
+          "line": 13,
+          "end_line": 145
+        },
+        {
+          "name": "Top1ProposerPatch.get_spec_proposals",
+          "line": 14,
+          "end_line": 81
+        }
+      ]
+    },
+    {
+      "source": "MineDraft",
+      "path": "minedraft/plugin/worker/model_runner.py",
+      "sha256": "f9bd29db1921a8904b1ebc587297a05acf895aaf5c92189549a0aae67cf8ec11",
+      "line_count": 241,
+      "url": "https://github.com/electron-shaders/MineDraft/blob/272c8556797495fe9c9f6a3008337bcd5cc2d031/minedraft/plugin/worker/model_runner.py",
+      "selected_symbols": [
+        {
+          "name": "ModelRunnerPatch.execute_model",
+          "line": 31,
+          "end_line": 241
+        }
+      ]
+    },
+    {
+      "source": "MineDraft",
+      "path": "minedraft/plugin/worker/worker_base.py",
+      "sha256": "f7427708e35245b62aa5cf576463c602b64d659b4880c7533f268d322af6bded",
+      "line_count": 207,
+      "url": "https://github.com/electron-shaders/MineDraft/blob/272c8556797495fe9c9f6a3008337bcd5cc2d031/minedraft/plugin/worker/worker_base.py",
+      "selected_symbols": [
+        {
+          "name": "LocalOrDistributedWorkerBasePatch.execute_model",
+          "line": 140,
+          "end_line": 207
+        }
+      ]
+    },
+    {
+      "source": "MineDraft",
+      "path": "scripts/experiment_1_parallel.sh",
+      "sha256": "59468bde49299345269fecb7466ceb10aa9dae7868d5f6a1128d752973157614",
+      "line_count": 167,
+      "url": "https://github.com/electron-shaders/MineDraft/blob/272c8556797495fe9c9f6a3008337bcd5cc2d031/scripts/experiment_1_parallel.sh",
+      "selected_symbols": []
+    },
+    {
+      "source": "SpecRhythm",
+      "path": "integrations/vllm/manage_patch.py",
+      "sha256": "d25360ebfab21f2b78cc4786b1fd0c56dab0f704dc9939bce8a03d2541a483bf",
+      "line_count": 481,
+      "url": "https://github.com/rzwang22/SpecRhythm/blob/64031110e630b6643cc610620f05f8630e896c7c/integrations/vllm/manage_patch.py",
+      "selected_symbols": []
+    },
+    {
+      "source": "SpecRhythm",
+      "path": "integrations/vllm/patches/0001-custom-proposer-request-and-verify-hooks.patch",
+      "sha256": "92a2505ee7880f44c258db5debbc94262b1272d2b98991231ad35da1e0933c95",
+      "line_count": 60,
+      "url": "https://github.com/rzwang22/SpecRhythm/blob/64031110e630b6643cc610620f05f8630e896c7c/integrations/vllm/patches/0001-custom-proposer-request-and-verify-hooks.patch",
+      "selected_symbols": []
+    },
+    {
+      "source": "SpecRhythm",
+      "path": "integrations/vllm/patches/0002-scheduler-request-admissibility-hook.patch",
+      "sha256": "5a6ca42c3c166d537328ca94f618fc247f93647b2e644eba1d347915b105bef5",
+      "line_count": 16,
+      "url": "https://github.com/rzwang22/SpecRhythm/blob/64031110e630b6643cc610620f05f8630e896c7c/integrations/vllm/patches/0002-scheduler-request-admissibility-hook.patch",
+      "selected_symbols": []
+    },
+    {
+      "source": "SpecRhythm",
+      "path": "integrations/vllm/patches/0003-target-forward-timing-observer.patch",
+      "sha256": "ecbff5e24341db7c3faa374d072803633d755ebc5c945219550087bca9bba7fe",
+      "line_count": 11,
+      "url": "https://github.com/rzwang22/SpecRhythm/blob/64031110e630b6643cc610620f05f8630e896c7c/integrations/vllm/patches/0003-target-forward-timing-observer.patch",
+      "selected_symbols": []
+    },
+    {
+      "source": "SpecRhythm",
+      "path": "integrations/vllm/patches/0004-gate3-numerical-observer.patch",
+      "sha256": "005432963a99d663f24867753315e002128661dde1a3d04be9b432d68ea7c7fc",
+      "line_count": 23,
+      "url": "https://github.com/rzwang22/SpecRhythm/blob/64031110e630b6643cc610620f05f8630e896c7c/integrations/vllm/patches/0004-gate3-numerical-observer.patch",
+      "selected_symbols": []
+    },
+    {
+      "source": "SpecRhythm",
+      "path": "integrations/vllm/patches/0005-dual-sampled-row-context.patch",
+      "sha256": "71815500dfeaebb0c50316618ff25a023815deea3bb1df4bf7076b4b50c5fabc",
+      "line_count": 68,
+      "url": "https://github.com/rzwang22/SpecRhythm/blob/64031110e630b6643cc610620f05f8630e896c7c/integrations/vllm/patches/0005-dual-sampled-row-context.patch",
+      "selected_symbols": []
+    },
+    {
+      "source": "SpecRhythm",
+      "path": "integrations/vllm/patches/README.md",
+      "sha256": "526f1a8f0a60dfcfdb33687b99ccd3fd477f2288910fdbe1c7cbf55aae1851d5",
+      "line_count": 76,
+      "url": "https://github.com/rzwang22/SpecRhythm/blob/64031110e630b6643cc610620f05f8630e896c7c/integrations/vllm/patches/README.md",
+      "selected_symbols": []
+    },
+    {
+      "source": "SpecRhythm",
+      "path": "src/specrhythm/phase4/decode_ready.py",
+      "sha256": "719adddbb66a6a4a1e59f3bef9aa715ae6daff46c8ddc6c14edb6b57a43102d1",
+      "line_count": 895,
+      "url": "https://github.com/rzwang22/SpecRhythm/blob/64031110e630b6643cc610620f05f8630e896c7c/src/specrhythm/phase4/decode_ready.py",
+      "selected_symbols": []
+    },
+    {
+      "source": "SpecRhythm",
+      "path": "src/specrhythm/phase4/draft_service.py",
+      "sha256": "aecdf9f27f753157eeaaabc5aa0cddd4c07597f9e2f260e47f2fcf6fce80fe18",
+      "line_count": 622,
+      "url": "https://github.com/rzwang22/SpecRhythm/blob/64031110e630b6643cc610620f05f8630e896c7c/src/specrhythm/phase4/draft_service.py",
+      "selected_symbols": [
+        {
+          "name": "DraftBackend.propose",
+          "line": 37,
+          "end_line": 39
+        },
+        {
+          "name": "DraftBackend.rollback",
+          "line": 41,
+          "end_line": 41
+        },
+        {
+          "name": "DraftBackend.append_target_token",
+          "line": 43,
+          "end_line": 43
+        },
+        {
+          "name": "DraftStateMachine",
+          "line": 63,
+          "end_line": 322
+        },
+        {
+          "name": "DraftStateMachine.batch_propose",
+          "line": 92,
+          "end_line": 155
+        },
+        {
+          "name": "DraftStateMachine.synchronize_and_batch_propose",
+          "line": 231,
+          "end_line": 268
+        },
+        {
+          "name": "HFPersistentDraftBackend",
+          "line": 335,
+          "end_line": 473
+        },
+        {
+          "name": "HFPersistentDraftBackend.propose",
+          "line": 414,
+          "end_line": 433
+        },
+        {
+          "name": "HFPersistentDraftBackend.rollback",
+          "line": 435,
+          "end_line": 447
+        },
+        {
+          "name": "HFPersistentDraftBackend.append_target_token",
+          "line": 449,
+          "end_line": 454
+        },
+        {
+          "name": "HFPersistentDraftBackend._append_token",
+          "line": 464,
+          "end_line": 473
+        }
+      ]
+    },
+    {
+      "source": "SpecRhythm",
+      "path": "src/specrhythm/phase4/dual_commit.py",
+      "sha256": "b260d7a96c98d0d4d19006bf0cc8d86232ac42ed7cc2d088bf016d01d78c26e2",
+      "line_count": 131,
+      "url": "https://github.com/rzwang22/SpecRhythm/blob/64031110e630b6643cc610620f05f8630e896c7c/src/specrhythm/phase4/dual_commit.py",
+      "selected_symbols": []
+    },
+    {
+      "source": "SpecRhythm",
+      "path": "src/specrhythm/phase4/dual_rows.py",
+      "sha256": "a695842bf30aa3c44b3290c02df06ab153d68b445c4beb56462e19d13894adcb",
+      "line_count": 116,
+      "url": "https://github.com/rzwang22/SpecRhythm/blob/64031110e630b6643cc610620f05f8630e896c7c/src/specrhythm/phase4/dual_rows.py",
+      "selected_symbols": []
+    },
+    {
+      "source": "SpecRhythm",
+      "path": "src/specrhythm/phase4/dual_service.py",
+      "sha256": "e0dcfb87e90d8f24de3e91481adc03b4af76a383c925e6a6a1a4749c5c87d8bb",
+      "line_count": 634,
+      "url": "https://github.com/rzwang22/SpecRhythm/blob/64031110e630b6643cc610620f05f8630e896c7c/src/specrhythm/phase4/dual_service.py",
+      "selected_symbols": [
+        {
+          "name": "DualDraftMachine",
+          "line": 46,
+          "end_line": 304
+        },
+        {
+          "name": "AsyncDualDraftController",
+          "line": 314,
+          "end_line": 480
+        },
+        {
+          "name": "AsyncDualDraftController._run",
+          "line": 428,
+          "end_line": 480
+        }
+      ]
+    },
+    {
+      "source": "SpecRhythm",
+      "path": "src/specrhythm/phase4/dual_uuid.py",
+      "sha256": "4e521d2d12dfe340d6e46657f64226feea698cfddc7f3635d6a8637de2f146d9",
+      "line_count": 179,
+      "url": "https://github.com/rzwang22/SpecRhythm/blob/64031110e630b6643cc610620f05f8630e896c7c/src/specrhythm/phase4/dual_uuid.py",
+      "selected_symbols": []
+    },
+    {
+      "source": "SpecRhythm",
+      "path": "src/specrhythm/phase4/performance_boundary.py",
+      "sha256": "b13f5ead232d008af6cc040d4a92d95b09215d7790e44dfc5f387e374d631379",
+      "line_count": 124,
+      "url": "https://github.com/rzwang22/SpecRhythm/blob/64031110e630b6643cc610620f05f8630e896c7c/src/specrhythm/phase4/performance_boundary.py",
+      "selected_symbols": []
+    },
+    {
+      "source": "SpecRhythm",
+      "path": "src/specrhythm/phase4/process_lifecycle.py",
+      "sha256": "b3d2c804444d8513d33128654c3f3c122bd7c625e1ca3c6bd1d02a1ba4cf2684",
+      "line_count": 503,
+      "url": "https://github.com/rzwang22/SpecRhythm/blob/64031110e630b6643cc610620f05f8630e896c7c/src/specrhythm/phase4/process_lifecycle.py",
+      "selected_symbols": []
+    },
+    {
+      "source": "SpecRhythm",
+      "path": "src/specrhythm/phase4/resident_setup.py",
+      "sha256": "25f73024c39a07ed0653d17364d970e91ec535b1fd6ba698468cd05445a92062",
+      "line_count": 785,
+      "url": "https://github.com/rzwang22/SpecRhythm/blob/64031110e630b6643cc610620f05f8630e896c7c/src/specrhythm/phase4/resident_setup.py",
+      "selected_symbols": []
+    },
+    {
+      "source": "SpecRhythm",
+      "path": "src/specrhythm/phase4/transport.py",
+      "sha256": "696876d87f033842b4cedf572229289dcc1899faf21611e8641e316101b518f6",
+      "line_count": 189,
+      "url": "https://github.com/rzwang22/SpecRhythm/blob/64031110e630b6643cc610620f05f8630e896c7c/src/specrhythm/phase4/transport.py",
+      "selected_symbols": []
+    },
+    {
+      "source": "SpecRhythm",
+      "path": "src/specrhythm/phase4/vllm_dual.py",
+      "sha256": "20be17c9a0cf2077dc2c921c8f7b617fc817d728156c2c2cdb7a4fe8b711b946",
+      "line_count": 1146,
+      "url": "https://github.com/rzwang22/SpecRhythm/blob/64031110e630b6643cc610620f05f8630e896c7c/src/specrhythm/phase4/vllm_dual.py",
+      "selected_symbols": [
+        {
+          "name": "DualBatchRemoteProposer.propose",
+          "line": 143,
+          "end_line": 227
+        }
+      ]
+    },
+    {
+      "source": "SpecRhythm",
+      "path": "src/specrhythm/phase4/vllm_remote.py",
+      "sha256": "d8e57ae9372391aae92c458f6ea0caa871740d3390761d45528775bdb1d18b4e",
+      "line_count": 965,
+      "url": "https://github.com/rzwang22/SpecRhythm/blob/64031110e630b6643cc610620f05f8630e896c7c/src/specrhythm/phase4/vllm_remote.py",
+      "selected_symbols": [
+        {
+          "name": "RemoteDraftProposer.propose",
+          "line": 153,
+          "end_line": 204
+        }
+      ]
+    },
+    {
+      "source": "vllm025",
+      "path": "vllm/config/speculative.py",
+      "sha256": "3f1abd1ca3042fba239e7bf98b08f645f3e950c16ab510fbc99a49c5c507721f",
+      "line_count": 1276,
+      "url": "https://github.com/vllm-project/vllm/blob/752a3a504485790a2e8491cacbb35c137339ad34/vllm/config/speculative.py",
+      "selected_symbols": [
+        {
+          "name": "SpeculativeConfig",
+          "line": 80,
+          "end_line": 1276
+        }
+      ]
+    },
+    {
+      "source": "vllm025",
+      "path": "vllm/engine/arg_utils.py",
+      "sha256": "3b3ffa6b403d34188c6d2fe7a2dc36debcee7402a17fc6a6145e885130f3dacd",
+      "line_count": 2716,
+      "url": "https://github.com/vllm-project/vllm/blob/752a3a504485790a2e8491cacbb35c137339ad34/vllm/engine/arg_utils.py",
+      "selected_symbols": [
+        {
+          "name": "EngineArgs.create_engine_config",
+          "line": 1818,
+          "end_line": 2367
+        }
+      ]
+    },
+    {
+      "source": "vllm025",
+      "path": "vllm/v1/core/kv_cache_manager.py",
+      "sha256": "be9c50918c8cd01736102de4020e2a9a8650675bcd4eb4227d40d2bede6bb853",
+      "line_count": 646,
+      "url": "https://github.com/vllm-project/vllm/blob/752a3a504485790a2e8491cacbb35c137339ad34/vllm/v1/core/kv_cache_manager.py",
+      "selected_symbols": [
+        {
+          "name": "KVCacheBlocks.get_block_ids",
+          "line": 62,
+          "end_line": 65
+        },
+        {
+          "name": "KVCacheBlocks.get_block_ids",
+          "line": 68,
+          "end_line": 71
+        },
+        {
+          "name": "KVCacheBlocks.get_block_ids",
+          "line": 73,
+          "end_line": 88
+        },
+        {
+          "name": "KVCacheManager",
+          "line": 114,
+          "end_line": 646
+        },
+        {
+          "name": "KVCacheManager.allocate_slots",
+          "line": 248,
+          "end_line": 464
+        },
+        {
+          "name": "KVCacheManager.free",
+          "line": 466,
+          "end_line": 474
+        },
+        {
+          "name": "KVCacheManager.get_block_ids",
+          "line": 596,
+          "end_line": 598
+        }
+      ]
+    },
+    {
+      "source": "vllm025",
+      "path": "vllm/v1/core/kv_cache_utils.py",
+      "sha256": "3ca561818019cef84c43c6d3839627145fd049f9479d40fc733ae142d6d71df3",
+      "line_count": 2229,
+      "url": "https://github.com/vllm-project/vllm/blob/752a3a504485790a2e8491cacbb35c137339ad34/vllm/v1/core/kv_cache_utils.py",
+      "selected_symbols": [
+        {
+          "name": "generate_scheduler_kv_cache_config",
+          "line": 1766,
+          "end_line": 1785
+        },
+        {
+          "name": "get_kv_cache_configs",
+          "line": 2005,
+          "end_line": 2153
+        }
+      ]
+    },
+    {
+      "source": "vllm025",
+      "path": "vllm/v1/core/sched/output.py",
+      "sha256": "f2816589726053556dc6eef90e09b901c51f1e08ba41c9b79106d9f4acb89f6d",
+      "line_count": 267,
+      "url": "https://github.com/vllm-project/vllm/blob/752a3a504485790a2e8491cacbb35c137339ad34/vllm/v1/core/sched/output.py",
+      "selected_symbols": [
+        {
+          "name": "NewRequestData",
+          "line": 31,
+          "end_line": 108
+        },
+        {
+          "name": "CachedRequestData",
+          "line": 112,
+          "end_line": 177
+        },
+        {
+          "name": "SchedulerOutput",
+          "line": 181,
+          "end_line": 259
+        }
+      ]
+    },
+    {
+      "source": "vllm025",
+      "path": "vllm/v1/core/sched/scheduler.py",
+      "sha256": "e25d4c9a95abdbe8e516714ed02574d929ca0d5e8c11c4cc73b84d3a3b905443",
+      "line_count": 2675,
+      "url": "https://github.com/vllm-project/vllm/blob/752a3a504485790a2e8491cacbb35c137339ad34/vllm/v1/core/sched/scheduler.py",
+      "selected_symbols": [
+        {
+          "name": "Scheduler",
+          "line": 68,
+          "end_line": 2675
+        },
+        {
+          "name": "Scheduler.update_from_output",
+          "line": 1499,
+          "end_line": 1851
+        },
+        {
+          "name": "Scheduler.update_draft_token_ids",
+          "line": 1948,
+          "end_line": 1968
+        }
+      ]
+    },
+    {
+      "source": "vllm025",
+      "path": "vllm/v1/engine/core.py",
+      "sha256": "27b23827a86fd488f1f7cc9a2722fe76d284087ca7cfefef5a30c5e74f21bc71",
+      "line_count": 2303,
+      "url": "https://github.com/vllm-project/vllm/blob/752a3a504485790a2e8491cacbb35c137339ad34/vllm/v1/engine/core.py",
+      "selected_symbols": [
+        {
+          "name": "EngineCore._initialize_kv_caches",
+          "line": 240,
+          "end_line": 348
+        }
+      ]
+    },
+    {
+      "source": "vllm025",
+      "path": "vllm/v1/executor/abstract.py",
+      "sha256": "419002195d13cf050c3ea9705d18a12456c890c27c470a1efadce7de27ded0b1",
+      "line_count": 380,
+      "url": "https://github.com/vllm-project/vllm/blob/752a3a504485790a2e8491cacbb35c137339ad34/vllm/v1/executor/abstract.py",
+      "selected_symbols": [
+        {
+          "name": "Executor.initialize_from_config",
+          "line": 118,
+          "end_line": 137
+        },
+        {
+          "name": "Executor.get_kv_cache_specs",
+          "line": 149,
+          "end_line": 150
+        },
+        {
+          "name": "Executor.execute_model",
+          "line": 210,
+          "end_line": 213
+        },
+        {
+          "name": "Executor.execute_model",
+          "line": 216,
+          "end_line": 219
+        },
+        {
+          "name": "Executor.execute_model",
+          "line": 221,
+          "end_line": 227
+        },
+        {
+          "name": "Executor.sample_tokens",
+          "line": 230,
+          "end_line": 233
+        },
+        {
+          "name": "Executor.sample_tokens",
+          "line": 236,
+          "end_line": 239
+        },
+        {
+          "name": "Executor.sample_tokens",
+          "line": 241,
+          "end_line": 247
+        }
+      ]
+    },
+    {
+      "source": "vllm025",
+      "path": "vllm/v1/executor/uniproc_executor.py",
+      "sha256": "4625c8e59aef1482600b02204701d348d7f716427581d3cf23b06bff9b056abe",
+      "line_count": 196,
+      "url": "https://github.com/vllm-project/vllm/blob/752a3a504485790a2e8491cacbb35c137339ad34/vllm/v1/executor/uniproc_executor.py",
+      "selected_symbols": [
+        {
+          "name": "UniProcExecutor",
+          "line": 45,
+          "end_line": 147
+        },
+        {
+          "name": "UniProcExecutor.execute_model",
+          "line": 108,
+          "end_line": 121
+        },
+        {
+          "name": "UniProcExecutor.sample_tokens",
+          "line": 123,
+          "end_line": 131
+        }
+      ]
+    },
+    {
+      "source": "vllm025",
+      "path": "vllm/v1/outputs.py",
+      "sha256": "1e87bf44162452c1908d3a5003685937dbdc56f5634e35e11ed7b6a5322a1c15",
+      "line_count": 348,
+      "url": "https://github.com/vllm-project/vllm/blob/752a3a504485790a2e8491cacbb35c137339ad34/vllm/v1/outputs.py",
+      "selected_symbols": [
+        {
+          "name": "DraftTokenIds",
+          "line": 311,
+          "end_line": 315
+        }
+      ]
+    },
+    {
+      "source": "vllm025",
+      "path": "vllm/v1/request.py",
+      "sha256": "06b1c6ad3cc0223c2036b4a2e317868fa4988391b4b024bc5e5f54672b7d2c80",
+      "line_count": 365,
+      "url": "https://github.com/vllm-project/vllm/blob/752a3a504485790a2e8491cacbb35c137339ad34/vllm/v1/request.py",
+      "selected_symbols": [
+        {
+          "name": "Request",
+          "line": 59,
+          "end_line": 320
+        }
+      ]
+    },
+    {
+      "source": "vllm025",
+      "path": "vllm/v1/spec_decode/custom_class_proposer.py",
+      "sha256": "86de6921a9108138fda118fa47cf7fde4c03bd2a447cbcf8efba53496b23e237",
+      "line_count": 73,
+      "url": "https://github.com/vllm-project/vllm/blob/752a3a504485790a2e8491cacbb35c137339ad34/vllm/v1/spec_decode/custom_class_proposer.py",
+      "selected_symbols": [
+        {
+          "name": "create_custom_proposer",
+          "line": 12,
+          "end_line": 73
+        }
+      ]
+    },
+    {
+      "source": "vllm025",
+      "path": "vllm/v1/spec_decode/draft_model.py",
+      "sha256": "6b884f49a75f01d1aa6b2d27159b63fa27f7ba7f0518d2810d1a5b565e14f026",
+      "line_count": 115,
+      "url": "https://github.com/vllm-project/vllm/blob/752a3a504485790a2e8491cacbb35c137339ad34/vllm/v1/spec_decode/draft_model.py",
+      "selected_symbols": [
+        {
+          "name": "DraftModelProposer",
+          "line": 19,
+          "end_line": 115
+        },
+        {
+          "name": "DraftModelProposer._raise_if_draft_tp_mismatch",
+          "line": 63,
+          "end_line": 78
+        }
+      ]
+    },
+    {
+      "source": "vllm025",
+      "path": "vllm/v1/spec_decode/llm_base_proposer.py",
+      "sha256": "873e18f36749cc4bf35e6cab4755763bfd773d773970b5a9a0bff81e66e65275",
+      "line_count": 1856,
+      "url": "https://github.com/vllm-project/vllm/blob/752a3a504485790a2e8491cacbb35c137339ad34/vllm/v1/spec_decode/llm_base_proposer.py",
+      "selected_symbols": [
+        {
+          "name": "SpecDecodeBaseProposer",
+          "line": 68,
+          "end_line": 1809
+        },
+        {
+          "name": "SpecDecodeBaseProposer.propose",
+          "line": 502,
+          "end_line": 767
+        },
+        {
+          "name": "SpecDecodeBaseProposer._update_positions_dependent_metadata",
+          "line": 769,
+          "end_line": 819
+        },
+        {
+          "name": "SpecDecodeBaseProposer.set_inputs_first_pass",
+          "line": 821,
+          "end_line": 960
+        },
+        {
+          "name": "SpecDecodeBaseProposer.prepare_next_token_ids_cpu",
+          "line": 1017,
+          "end_line": 1048
+        },
+        {
+          "name": "SpecDecodeBaseProposer.prepare_next_token_ids_padded",
+          "line": 1050,
+          "end_line": 1100
+        },
+        {
+          "name": "SpecDecodeBaseProposer.prepare_inputs_padded",
+          "line": 1102,
+          "end_line": 1162
+        },
+        {
+          "name": "SpecDecodeBaseProposer.prepare_inputs",
+          "line": 1164,
+          "end_line": 1269
+        }
+      ]
+    },
+    {
+      "source": "vllm025",
+      "path": "vllm/v1/spec_decode/metadata.py",
+      "sha256": "a6696487b3c8823c119f601de81504341bdefefe95bafe673c1f570ab2028da8",
+      "line_count": 66,
+      "url": "https://github.com/vllm-project/vllm/blob/752a3a504485790a2e8491cacbb35c137339ad34/vllm/v1/spec_decode/metadata.py",
+      "selected_symbols": []
+    },
+    {
+      "source": "vllm025",
+      "path": "vllm/v1/worker/block_table.py",
+      "sha256": "b3a6649b968fba0b48c333d7ac96e65cc713a86133cc7eef0a8399f5339ec600",
+      "line_count": 380,
+      "url": "https://github.com/vllm-project/vllm/blob/752a3a504485790a2e8491cacbb35c137339ad34/vllm/v1/worker/block_table.py",
+      "selected_symbols": [
+        {
+          "name": "BlockTable",
+          "line": 18,
+          "end_line": 220
+        },
+        {
+          "name": "MultiGroupBlockTable",
+          "line": 223,
+          "end_line": 322
+        }
+      ]
+    },
+    {
+      "source": "vllm025",
+      "path": "vllm/v1/worker/gpu/model_runner.py",
+      "sha256": "58f45c58969cdd9cba707863e82fefda818002de45c621032b58b6eb364deedf",
+      "line_count": 1608,
+      "url": "https://github.com/vllm-project/vllm/blob/752a3a504485790a2e8491cacbb35c137339ad34/vllm/v1/worker/gpu/model_runner.py",
+      "selected_symbols": [
+        {
+          "name": "GPUModelRunner",
+          "line": 120,
+          "end_line": 1597
+        },
+        {
+          "name": "GPUModelRunner.get_kv_cache_spec",
+          "line": 396,
+          "end_line": 397
+        },
+        {
+          "name": "GPUModelRunner.prepare_inputs",
+          "line": 840,
+          "end_line": 1019
+        },
+        {
+          "name": "GPUModelRunner.execute_model",
+          "line": 1114,
+          "end_line": 1354
+        },
+        {
+          "name": "GPUModelRunner.sample_tokens",
+          "line": 1358,
+          "end_line": 1494
+        },
+        {
+          "name": "ExecuteModelState",
+          "line": 1602,
+          "end_line": 1608
+        }
+      ]
+    },
+    {
+      "source": "vllm025",
+      "path": "vllm/v1/worker/gpu_input_batch.py",
+      "sha256": "de1ea4fc9d43fc6079dd375e407c2b6d93f5e1a11f49732d13654c41eaf30a65",
+      "line_count": 1127,
+      "url": "https://github.com/vllm-project/vllm/blob/752a3a504485790a2e8491cacbb35c137339ad34/vllm/v1/worker/gpu_input_batch.py",
+      "selected_symbols": []
+    },
+    {
+      "source": "vllm025",
+      "path": "vllm/v1/worker/gpu_model_runner.py",
+      "sha256": "6c92ded8468f44d6df863a617ce588f132fa6df7031feecc0cc421702a41610e",
+      "line_count": 7689,
+      "url": "https://github.com/vllm-project/vllm/blob/752a3a504485790a2e8491cacbb35c137339ad34/vllm/v1/worker/gpu_model_runner.py",
+      "selected_symbols": [
+        {
+          "name": "ExecuteModelState",
+          "line": 424,
+          "end_line": 437
+        },
+        {
+          "name": "GPUModelRunner",
+          "line": 440,
+          "end_line": 7672
+        },
+        {
+          "name": "GPUModelRunner._update_states",
+          "line": 1152,
+          "end_line": 1520
+        },
+        {
+          "name": "GPUModelRunner._update_streaming_request",
+          "line": 1580,
+          "end_line": 1613
+        },
+        {
+          "name": "GPUModelRunner.execute_model",
+          "line": 4070,
+          "end_line": 4438
+        },
+        {
+          "name": "GPUModelRunner.sample_tokens",
+          "line": 4456,
+          "end_line": 4743
+        },
+        {
+          "name": "GPUModelRunner.get_kv_cache_spec",
+          "line": 7561,
+          "end_line": 7598
+        }
+      ]
+    },
+    {
+      "source": "vllm025",
+      "path": "vllm/v1/worker/gpu_worker.py",
+      "sha256": "7e00284da7b453154af47300630483ed7ea5a5d79e724c5ee61d4a24edaf930e",
+      "line_count": 1295,
+      "url": "https://github.com/vllm-project/vllm/blob/752a3a504485790a2e8491cacbb35c137339ad34/vllm/v1/worker/gpu_worker.py",
+      "selected_symbols": [
+        {
+          "name": "Worker",
+          "line": 126,
+          "end_line": 1250
+        },
+        {
+          "name": "Worker.init_device",
+          "line": 279,
+          "end_line": 402
+        },
+        {
+          "name": "Worker.get_kv_cache_spec",
+          "line": 679,
+          "end_line": 680
+        },
+        {
+          "name": "Worker.initialize_from_config",
+          "line": 695,
+          "end_line": 721
+        },
+        {
+          "name": "Worker.sample_tokens",
+          "line": 948,
+          "end_line": 951
+        },
+        {
+          "name": "Worker.execute_model",
+          "line": 955,
+          "end_line": 1043
+        }
+      ]
+    },
+    {
+      "source": "vllm025",
+      "path": "vllm/v1/worker/worker_base.py",
+      "sha256": "7da44338c2645ebf03d23394e452b31a8e3da1011fd1b42fcfcccfe99551b3fe",
+      "line_count": 358,
+      "url": "https://github.com/vllm-project/vllm/blob/752a3a504485790a2e8491cacbb35c137339ad34/vllm/v1/worker/worker_base.py",
+      "selected_symbols": [
+        {
+          "name": "WorkerBase",
+          "line": 39,
+          "end_line": 184
+        },
+        {
+          "name": "WorkerBase.get_kv_cache_spec",
+          "line": 98,
+          "end_line": 100
+        },
+        {
+          "name": "WorkerBase.init_device",
+          "line": 114,
+          "end_line": 118
+        },
+        {
+          "name": "WorkerBase.execute_model",
+          "line": 142,
+          "end_line": 151
+        },
+        {
+          "name": "WorkerBase.sample_tokens",
+          "line": 153,
+          "end_line": 157
+        },
+        {
+          "name": "WorkerWrapperBase",
+          "line": 187,
+          "end_line": 358
+        },
+        {
+          "name": "WorkerWrapperBase.initialize_from_config",
+          "line": 321,
+          "end_line": 325
+        },
+        {
+          "name": "WorkerWrapperBase.init_device",
+          "line": 327,
+          "end_line": 331
+        },
+        {
+          "name": "WorkerWrapperBase.execute_model",
+          "line": 346,
+          "end_line": 351
+        }
+      ]
+    },
+    {
+      "source": "vllm092",
+      "path": "vllm/core/block_manager.py",
+      "sha256": "868cb6cf7c12835718419e526b07525ef9b39ec94a53aa3e6cdad1eaabe539aa",
+      "line_count": 525,
+      "url": "https://github.com/vllm-project/vllm/blob/a5dd03c1ebc5e4f56f3c9d3dc0436e9c582c978f/vllm/core/block_manager.py",
+      "selected_symbols": [
+        {
+          "name": "SelfAttnBlockSpaceManager.free",
+          "line": 254,
+          "end_line": 271
+        }
+      ]
+    },
+    {
+      "source": "vllm092",
+      "path": "vllm/engine/output_processor/multi_step.py",
+      "sha256": "69986d9db8a821ddca956ea745ce063c977f7c7b9b5ed68ba02c7965a6c86f30",
+      "line_count": 216,
+      "url": "https://github.com/vllm-project/vllm/blob/a5dd03c1ebc5e4f56f3c9d3dc0436e9c582c978f/vllm/engine/output_processor/multi_step.py",
+      "selected_symbols": []
+    },
+    {
+      "source": "vllm092",
+      "path": "vllm/spec_decode/draft_model_runner.py",
+      "sha256": "0824f8d352458bee7f4a655faad78df7cb1c0064bf79aa585ff347dd876404a2",
+      "line_count": 349,
+      "url": "https://github.com/vllm-project/vllm/blob/a5dd03c1ebc5e4f56f3c9d3dc0436e9c582c978f/vllm/spec_decode/draft_model_runner.py",
+      "selected_symbols": [
+        {
+          "name": "TP1DraftModelRunner",
+          "line": 40,
+          "end_line": 349
+        },
+        {
+          "name": "TP1DraftModelRunner._gpu_advance_step",
+          "line": 75,
+          "end_line": 132
+        },
+        {
+          "name": "TP1DraftModelRunner.supports_gpu_multi_step",
+          "line": 134,
+          "end_line": 159
+        },
+        {
+          "name": "TP1DraftModelRunner.execute_model",
+          "line": 166,
+          "end_line": 349
+        }
+      ]
+    },
+    {
+      "source": "vllm092",
+      "path": "vllm/spec_decode/multi_step_worker.py",
+      "sha256": "b4fc069e820a2ee52841e269aed3af11206f41f4a06ac27647cbdb3a7e9b8819",
+      "line_count": 423,
+      "url": "https://github.com/vllm-project/vllm/blob/a5dd03c1ebc5e4f56f3c9d3dc0436e9c582c978f/vllm/spec_decode/multi_step_worker.py",
+      "selected_symbols": [
+        {
+          "name": "MultiStepWorker",
+          "line": 26,
+          "end_line": 423
+        },
+        {
+          "name": "MultiStepWorker.init_device",
+          "line": 43,
+          "end_line": 50
+        },
+        {
+          "name": "MultiStepWorker.sampler_output",
+          "line": 65,
+          "end_line": 125
+        },
+        {
+          "name": "MultiStepWorker._expand_execute_model_request",
+          "line": 141,
+          "end_line": 200
+        },
+        {
+          "name": "MultiStepWorker.get_spec_proposals",
+          "line": 243,
+          "end_line": 252
+        },
+        {
+          "name": "MultiStepWorker._shallow_copy_seq_group_metadata",
+          "line": 291,
+          "end_line": 313
+        },
+        {
+          "name": "MultiStepWorker._copy_seq_metadata_excluding_last_token",
+          "line": 316,
+          "end_line": 355
+        },
+        {
+          "name": "MultiStepWorker._assert_enough_kv_space",
+          "line": 357,
+          "end_line": 390
+        }
+      ]
+    },
+    {
+      "source": "vllm092",
+      "path": "vllm/spec_decode/smaller_tp_proposer_worker.py",
+      "sha256": "f30d139c46eeb24e3dadfdc6a13219abc9a49588d84e4c57bb4f77aa1999bb3d",
+      "line_count": 196,
+      "url": "https://github.com/vllm-project/vllm/blob/a5dd03c1ebc5e4f56f3c9d3dc0436e9c582c978f/vllm/spec_decode/smaller_tp_proposer_worker.py",
+      "selected_symbols": [
+        {
+          "name": "SmallerTpProposerWorker",
+          "line": 27,
+          "end_line": 196
+        },
+        {
+          "name": "SmallerTpProposerWorker.init_device",
+          "line": 74,
+          "end_line": 88
+        },
+        {
+          "name": "SmallerTpProposerWorker.initialize_cache",
+          "line": 118,
+          "end_line": 124
+        },
+        {
+          "name": "SmallerTpProposerWorker.sampler_output",
+          "line": 126,
+          "end_line": 135
+        },
+        {
+          "name": "SmallerTpProposerWorker.get_spec_proposals",
+          "line": 137,
+          "end_line": 150
+        },
+        {
+          "name": "SmallerTpProposerWorker.execute_model",
+          "line": 159,
+          "end_line": 167
+        }
+      ]
+    },
+    {
+      "source": "vllm092",
+      "path": "vllm/spec_decode/spec_decode_worker.py",
+      "sha256": "43e84fb429552dfc8ef9c2099cba381564d3792f1f30c8e7e763eeafc938d32b",
+      "line_count": 1326,
+      "url": "https://github.com/vllm-project/vllm/blob/a5dd03c1ebc5e4f56f3c9d3dc0436e9c582c978f/vllm/spec_decode/spec_decode_worker.py",
+      "selected_symbols": [
+        {
+          "name": "create_spec_worker",
+          "line": 56,
+          "end_line": 115
+        },
+        {
+          "name": "SpecDecodeWorker",
+          "line": 120,
+          "end_line": 1291
+        },
+        {
+          "name": "SpecDecodeWorker.create_worker",
+          "line": 147,
+          "end_line": 259
+        },
+        {
+          "name": "SpecDecodeWorker.init_device",
+          "line": 345,
+          "end_line": 390
+        },
+        {
+          "name": "SpecDecodeWorker.initialize_cache",
+          "line": 442,
+          "end_line": 449
+        },
+        {
+          "name": "SpecDecodeWorker.execute_model",
+          "line": 455,
+          "end_line": 544
+        },
+        {
+          "name": "SpecDecodeWorker._run_speculative_decoding_step",
+          "line": 760,
+          "end_line": 836
+        },
+        {
+          "name": "SpecDecodeWorker._track_finished_requests",
+          "line": 1224,
+          "end_line": 1232
+        },
+        {
+          "name": "SpecDecodeWorker._track_sequences_with_bonus_tokens",
+          "line": 1234,
+          "end_line": 1249
+        }
+      ]
+    },
+    {
+      "source": "vllm092",
+      "path": "vllm/spec_decode/top1_proposer.py",
+      "sha256": "0a58efee88cb033a9530f51d2acc4849d4e8d9a17a8a8e3b815b0a529ab917d7",
+      "line_count": 275,
+      "url": "https://github.com/vllm-project/vllm/blob/a5dd03c1ebc5e4f56f3c9d3dc0436e9c582c978f/vllm/spec_decode/top1_proposer.py",
+      "selected_symbols": [
+        {
+          "name": "Top1Proposer",
+          "line": 16,
+          "end_line": 275
+        },
+        {
+          "name": "Top1Proposer.get_spec_proposals",
+          "line": 45,
+          "end_line": 115
+        }
+      ]
+    },
+    {
+      "source": "vllm092",
+      "path": "vllm/worker/cache_engine.py",
+      "sha256": "0acc96a3ddc4a12da1e952ab9fe2df80632512afd7f01e4cbb88ffa20eaa85a6",
+      "line_count": 145,
+      "url": "https://github.com/vllm-project/vllm/blob/a5dd03c1ebc5e4f56f3c9d3dc0436e9c582c978f/vllm/worker/cache_engine.py",
+      "selected_symbols": []
+    },
+    {
+      "source": "vllm092",
+      "path": "vllm/worker/model_runner.py",
+      "sha256": "e09cfbb977809540cb1a68d52bd1e8d8800e1ef8116af5359937f1750dd0853d",
+      "line_count": 2178,
+      "url": "https://github.com/vllm-project/vllm/blob/a5dd03c1ebc5e4f56f3c9d3dc0436e9c582c978f/vllm/worker/model_runner.py",
+      "selected_symbols": [
+        {
+          "name": "ModelRunner.execute_model",
+          "line": 1756,
+          "end_line": 1966
+        }
+      ]
+    },
+    {
+      "source": "vllm092",
+      "path": "vllm/worker/worker.py",
+      "sha256": "87de3a2c8fdc6b5af583e69bb4094cf364b5f53e0af23ffb40f908948b586605",
+      "line_count": 577,
+      "url": "https://github.com/vllm-project/vllm/blob/a5dd03c1ebc5e4f56f3c9d3dc0436e9c582c978f/vllm/worker/worker.py",
+      "selected_symbols": [
+        {
+          "name": "Worker",
+          "line": 39,
+          "end_line": 519
+        },
+        {
+          "name": "Worker.init_device",
+          "line": 169,
+          "end_line": 197
+        },
+        {
+          "name": "Worker.initialize_cache",
+          "line": 312,
+          "end_line": 335
+        }
+      ]
+    }
+  ]
+}

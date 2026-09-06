@@ -623,6 +623,10 @@ def run_dual_draft_service(
     transport_log_path: Path,
     ready_path: Path,
 ) -> None:
+    from specrhythm.phase4.vllm_draft_backend import selected_draft_backend
+
+    if selected_draft_backend() != "hf-persistent":
+        raise ValueError("vllm-batched Draft is Serial-only; Dual integration requires gate D6")
     backend = HFPersistentDraftBackend(config)
     machine = DualDraftMachine(backend, candidate_budget=config.proposal_budget)
     controller = AsyncDualDraftController(machine, CheckpointJsonl(event_log_path))

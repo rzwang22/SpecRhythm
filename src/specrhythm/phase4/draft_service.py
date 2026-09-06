@@ -613,6 +613,14 @@ def run_draft_service(
     event_log_path: Path,
     ready_path: Path,
 ) -> None:
+    from specrhythm.phase4.vllm_draft_backend import selected_draft_backend
+
+    if selected_draft_backend() == "vllm-batched":
+        from specrhythm.phase4.batched_draft_service import serve_batched_draft
+
+        return serve_batched_draft(
+            config, socket_path=socket_path, event_log_path=event_log_path, ready_path=ready_path
+        )
     backend = HFPersistentDraftBackend(config)
     server = DraftUnixServer(
         socket_path,

@@ -28,6 +28,9 @@ specrhythm = "specrhythm.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+"specrhythm.phase4" = ["vllm_draft_api.json"]
+
 [tool.pytest.ini_options]
 addopts = "-q"
 pythonpath = ["src"]
