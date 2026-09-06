@@ -69,6 +69,111 @@ def test_old_classes_absent_and_rebase_path_present(source):
     assert "State error: sample_tokens() must be called" in runner
 
 
+def test_pinned_non_spec_logits_select_final_token_in_current_input_order(source):
+    """Execute the pinned index expression with ragged/permuted CPU row sentinels.
+
+    Equal ID sets alone are insufficient: the hidden-state gather must select
+    each request's final scheduled token in the post-update InputBatch domain.
+    This is a source/CPU contract, not validation of CUDA tensor contents.
+    """
+    from specrhythm.phase4.draft_batch import mapped_rows
+
+    tree = ast.parse((source / "vllm/v1/worker/gpu_model_runner.py").read_text())
+    runner = next(
+        n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "GPUModelRunner"
+    )
+    methods = {n.name: n for n in runner.body if isinstance(n, ast.FunctionDef)}
+    branch = next(
+        n
+        for n in ast.walk(methods["_prepare_inputs"])
+        if isinstance(n, ast.If) and ast.unparse(n.test) == "not use_spec_decode"
+    )
+    index_expr = branch.body[0].value
+    assert ast.unparse(index_expr) == "query_start_loc[1:] - 1"
+    gathers = [
+        n.value
+        for n in ast.walk(methods["execute_model"])
+        if isinstance(n, ast.Assign)
+        and any(ast.unparse(t) == "sample_hidden_states" for t in n.targets)
+    ]
+    assert gathers and all(ast.unparse(n) == "hidden_states[logits_indices]" for n in gathers)
+
+    class Vector(list):
+        def __getitem__(self, key):
+            if isinstance(key, list):
+                return Vector(super(Vector, self).__getitem__(i) for i in key)
+            value = super().__getitem__(key)
+            return Vector(value) if isinstance(key, slice) else value
+
+        def __sub__(self, scalar):
+            return Vector(n - scalar for n in self)
+
+    for ids, lengths in [(["r7", "r1", "r4"], [1, 3, 2]), (["r1", "r7"], [1, 1])]:
+        starts, hidden = Vector([0]), Vector()
+        for rid, count in zip(ids, lengths):
+            hidden.extend(f"{rid}:{position}" for position in range(count))
+            starts.append(len(hidden))
+        indices = eval(
+            compile(ast.Expression(index_expr), "pinned-index", "eval"),
+            {
+                "query_start_loc": starts,
+            },
+        )
+        selected = eval(
+            compile(ast.Expression(gathers[0]), "pinned-gather", "eval"),
+            {
+                "hidden_states": hidden,
+                "logits_indices": indices,
+            },
+        )
+        assert mapped_rows(sorted(ids), ids, selected) == {
+            rid: f"{rid}:{count - 1}" for rid, count in zip(ids, lengths)
+        }
+
+
+def test_pinned_row_reorder_precedes_prepare_and_raw_logits_state(source):
+    tree = ast.parse((source / "vllm/v1/worker/gpu_model_runner.py").read_text())
+    runner = next(
+        n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "GPUModelRunner"
+    )
+    methods = {n.name: n for n in runner.body if isinstance(n, ast.FunctionDef)}
+
+    def call_line(method, name):
+        return min(
+            n.lineno
+            for n in ast.walk(method)
+            if isinstance(n, ast.Call) and ast.unparse(n.func) == name
+        )
+
+    update = methods["_update_states"]
+    assert call_line(update, "self.input_batch.condense") < call_line(
+        update, "self._may_reorder_batch"
+    )
+    assert call_line(update, "self._may_reorder_batch") < call_line(
+        update, "self.input_batch.refresh_metadata"
+    )
+    execute = methods["execute_model"]
+    names = [
+        "self._update_states",
+        "self._prepare_inputs",
+        "self._model_forward",
+        "self.model.compute_logits",
+        "ExecuteModelState",
+    ]
+    lines = [call_line(execute, name) for name in names]
+    assert lines == sorted(lines)
+    state = next(
+        n
+        for n in ast.walk(execute)
+        if isinstance(n, ast.Call) and ast.unparse(n.func) == "ExecuteModelState"
+    )
+    assert ast.unparse(state.args[1]) == "logits"
+    assert not any(
+        isinstance(n, ast.Call) and ast.unparse(n.func).endswith("sample_tokens")
+        for n in ast.walk(execute)
+    )
+
+
 def test_worker_builds_real_scheduler_metadata_for_ragged_rebases(source, monkeypatch):
     """Run adapter glue with the pinned real SchedulerOutput classes, CPU allocator/RPC."""
     from specrhythm.phase4.draft_batch import DraftMaterialization

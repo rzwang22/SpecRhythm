@@ -121,7 +121,9 @@ def _hf_fixture(config, groups, tokenizer) -> list[dict[str, Any]]:
     return fixtures
 
 
-def run_gate(config, gate: str, count: int, output: Path) -> dict:
+def run_gate(config, gate: str, count: int, output: Path, *, diagnostic: bool = False) -> dict:
+    if diagnostic and gate != "D3":
+        raise ValueError("materialization diagnostics are D3-only")
     if selected_draft_backend() != "vllm-batched":
         raise ValueError("D1–D3 require explicit SR_PHASE4_DRAFT_BACKEND=vllm-batched")
     if output.exists():
@@ -144,6 +146,7 @@ def run_gate(config, gate: str, count: int, output: Path) -> dict:
         fixtures = _hf_fixture(config, groups, tokenizer)
         write_immutable_report(output / "hf-oracle.json", {"fixtures": fixtures})
     backend = None
+    observer = None
     report = {
         "schema_version": "specrhythm.phase4b3-draft-gate.v1",
         "gate": gate,
@@ -154,6 +157,7 @@ def run_gate(config, gate: str, count: int, output: Path) -> dict:
         "hf_model_destroyed_before_vllm_construction": True,
         "performance_result": False,
         "comparisons": [],
+        "diagnostic_only": diagnostic,
     }
     try:
         backend = VllmBatchedDraftBackend(config)
@@ -166,7 +170,14 @@ def run_gate(config, gate: str, count: int, output: Path) -> dict:
         for fixture in fixtures:
             for rid, prefix in fixture["initial"].items():
                 machine.initialize(rid, prefix, token_prefix_hash(prefix))
+            if diagnostic:
+                from specrhythm.phase4.draft_d3_diagnostics import D3MaterializationDiagnostic
+
+                observer = D3MaterializationDiagnostic(backend)
+                observer.attach()
             for round_index, item in enumerate(fixture["rounds"]):
+                if observer is not None:
+                    observer.round = round_index
                 response = machine.batch_propose(item["proposals"])
                 actual = {
                     row["request_id"]: list(row["proposal_token_ids"])
@@ -200,6 +211,12 @@ def run_gate(config, gate: str, count: int, output: Path) -> dict:
         report["errors"].append(f"{type(error).__name__}: {error}")
         report["traceback"] = traceback.format_exc()
     finally:
+        if observer is not None:
+            try:
+                observer.close()
+            except Exception as error:
+                report["valid"] = False
+                report["errors"].append(f"diagnostic removal: {error}")
         if backend is not None:
             try:
                 backend.shutdown()
@@ -207,6 +224,10 @@ def run_gate(config, gate: str, count: int, output: Path) -> dict:
                 report["valid"] = False
                 report["errors"].append(f"shutdown: {error}")
             write_immutable_report(output / "draft-backend-report.json", backend.report())
+        if observer is not None:
+            write_immutable_report(
+                output / "draft-materialization-diagnostic.json", observer.report()
+            )
         write_immutable_report(output / "gate.json", report)
     return report
 
@@ -218,12 +239,25 @@ def main() -> int:
     parser.add_argument("--request-count", type=int, choices=(1, 2, 4, 8), default=1)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--allow-gpu", action="store_true")
+    parser.add_argument(
+        "--diagnostic",
+        action="store_true",
+        help="D3-only input/page/logit observations; not performance evidence",
+    )
     args = parser.parse_args()
     if not args.allow_gpu:
         parser.error("GPU execution requires the operator's explicit --allow-gpu")
     if args.gate == "D3" and args.request_count not in (2, 4, 8):
         parser.error("D3 requires --request-count 2, 4 or 8")
-    result = run_gate(load_phase4_config(args.config), args.gate, args.request_count, args.output)
+    if args.diagnostic and args.gate != "D3":
+        parser.error("--diagnostic is D3-only")
+    result = run_gate(
+        load_phase4_config(args.config),
+        args.gate,
+        args.request_count,
+        args.output,
+        diagnostic=args.diagnostic,
+    )
     print(json.dumps({"gate": args.gate, "valid": result["valid"], "errors": result["errors"]}))
     return 0 if result["valid"] else 1
 
