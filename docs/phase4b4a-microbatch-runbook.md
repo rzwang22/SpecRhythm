@@ -6,7 +6,7 @@ Run each Bash block separately in an interactive **Bash** shell. Every block
 prints `rc`; stop manually on any nonzero value and retain its artifacts.
 Do not retry into an existing root or continue to the next stage after failure.
 
-Use one fresh server and one commit for Target, Serial, and all six Dual cells.
+Use one fresh server and one commit for Target, Serial, and all seven Dual cells.
 Do not restart or change code/config/environment between cells. Target and Serial
 run once. Historical D6 numbers are context only, never the sweep controls.
 
@@ -185,7 +185,7 @@ write_immutable_report(root / 'preflight.json', {
     'evidence_sha256': {name: sha256_file(root / name) for name in
         ('environment.json', 'topology.json', 'installed-patch-check.json', 'patch-stage/vllm-patch-stack.json')},
     'draft_backend': 'vllm-batched', 'dual_uuid_query_mode': 'live',
-    'expected_measured_committed_tokens': 1487, 'microbatch_sweep': [2, 4, 8, 16, 32, 64],
+    'expected_measured_committed_tokens': 1487, 'microbatch_sweep': [2, 4, 8, 16, 32, 64, 100],
     'target_only_scope': 'existing DecodeReady Draft setup; no measured Draft proposals',
 })
 print('Preflight valid; no generation performed')
@@ -272,6 +272,20 @@ RC="$?"
 echo "Dual mb64 rc=$RC; stop manually if nonzero"
 ```
 
+## 16. Dual-vLLM microbatch=100
+
+```bash
+phase4b4_run dual 100
+RC="$?"
+echo "Dual mb100 rc=$RC; stop manually if nonzero"
+```
+
+N=100 is the same existing upper bound: schedule currently eligible requests
+without waiting to fill 100 or changing admission. Actual batches can be smaller.
+The generic positive-integer runtime also accepts 101, but it is outside this
+predefined seven-cell sweep. Endpoint observations use mb100 relative to mb2;
+2 and 100 are endpoints when identifying an intermediate peak.
+
 Each cell must return rc=0 and `qualification.json: valid=true`. Each completes
 100 requests and 1487 measured committed tokens; raw Target verification,
 acceptance/accounting, TP identity/consensus and Draft KV/process cleanup must be
@@ -279,7 +293,7 @@ valid. Requested and scheduler-loaded effective bounds must agree. Actual
 batches can be smaller. Poor throughput and valid zero overlap do not fail a
 cell. Default D6 overlap qualification remains unchanged outside this runbook.
 
-## 16. Offline sweep report and concise Markdown table
+## 17. Offline sweep report and concise Markdown table
 
 ```bash
 phase4b4_compare
@@ -293,7 +307,7 @@ RC="$?"
 echo "read concise sweep table rc=$RC"
 ```
 
-Columns are **2, 4, 8, 16, 32, 64**. Rows are throughput, makespan, TPOT mean,
+Columns are **2, 4, 8, 16, 32, 64, 100**. Rows are throughput, makespan, TPOT mean,
 Target forwards, Draft forwards, Draft batch p50/p90, verification batch p50/p90,
 Draft GPU event time, overlap ms, accepted length, Dual/Target throughput and
 Dual/Serial throughput. Same-session control metrics follow the table.
@@ -324,7 +338,7 @@ critical-path time saved. The current scope is a saturated corrected-100 burst
 with short outputs (maximum_new_tokens=16), without online arrivals, TTFT or SLO
 claims. No MineDraft, adaptive rhythm or next mechanism is implemented.
 
-## 17. Package every retained cell, including any failure
+## 18. Package every retained cell, including any failure
 
 ```bash
 if test ! -e "$SR_PHASE4B4_ROOT.tar.gz"; then

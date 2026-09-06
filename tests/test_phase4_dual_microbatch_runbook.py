@@ -19,7 +19,7 @@ HELPER = Path('integrations/vllm/phase4b4_microbatch_helpers.sh').resolve()
 def test_runbook_complete_safe_shell_and_embedded_python():
     text = RUNBOOK.read_text()
     blocks = re.findall(r'```bash\n(.*?)```', text, re.S)
-    assert len(blocks) == 18
+    assert len(blocks) == 19
     for block in blocks:
         p = subprocess.run(['bash', '-n'], input=block, text=True, capture_output=True)
         assert p.returncode == 0, p.stderr
@@ -32,12 +32,13 @@ def test_runbook_complete_safe_shell_and_embedded_python():
     assert 'SR_PHASE4_DUAL_UUID_QUERY_MODE=live' in text
     assert 'VLLM_BATCH_INVARIANT=1' in text and 'WORLD_SIZE=1' in text
     assert re.findall(r'^phase4b4_run (.*)$', text, re.M) == [
-        'target', 'serial', 'dual 2', 'dual 4', 'dual 8', 'dual 16', 'dual 32', 'dual 64']
+        'target', 'serial', 'dual 2', 'dual 4', 'dual 8', 'dual 16', 'dual 32',
+        'dual 64', 'dual 100']
     assert 'SR_D6_' not in text
 
 
 @pytest.mark.parametrize('mode,size', [('target', ''), ('serial', ''),
-                                     *[('dual', str(n)) for n in (2, 4, 8, 16, 32, 64)]])
+                                     *[('dual', str(n)) for n in (2, 4, 8, 16, 32, 64, 100)]])
 def test_sweep_real_runner_mode_and_measurement_mapping(tmp_path, mode, size):
     (tmp_path / 'preflight.json').write_text(json.dumps({
         'valid': True, 'errors': None, 'execution_git_commit': 'fixed'}))
@@ -96,4 +97,20 @@ def test_runbook_preflight_executes_cpu(tmp_path, monkeypatch, phase4_config):
     assert p.returncode == 0, p.stderr
     report = json.loads((root / 'preflight.json').read_text())
     assert report['valid'] and report['expected_measured_committed_tokens'] == 1487
-    assert report['microbatch_sweep'] == [2, 4, 8, 16, 32, 64]
+    assert report['microbatch_sweep'] == [2, 4, 8, 16, 32, 64, 100]
+
+
+def test_mb101_outside_predefined_sweep_before_launch(tmp_path):
+    from specrhythm.phase4.dual_microbatch import positive_size
+
+    assert positive_size('101') == 101
+    env = {**os.environ, 'HELPER': str(HELPER), 'PYTHON': sys.executable}
+    script = r'''
+source "$HELPER"
+python () { "$PYTHON" "$@"; }
+phase4b2_run_mode () { echo unexpected-runtime; return 90; }
+phase4b4_run dual 101
+'''
+    p = subprocess.run(['bash'], input=script, text=True, capture_output=True, env=env)
+    assert p.returncode == 2 and '2/4/8/16/32/64/100' in p.stderr
+    assert 'unexpected-runtime' not in p.stdout

@@ -8,7 +8,7 @@ phase4b4_run () {
     target|serial) ;;
     dual)
       sr4_size="$(SR_PHASE4B_DUAL_MICROBATCH_SIZE="$sr4_size" python -m specrhythm.phase4.dual_microbatch)" || return
-      case "$sr4_size" in 2|4|8|16|32|64) ;; *) echo "Use sweep sizes 2/4/8/16/32/64" >&2; return 2 ;; esac
+      case "$sr4_size" in 2|4|8|16|32|64|100) ;; *) echo "Use sweep sizes 2/4/8/16/32/64/100" >&2; return 2 ;; esac
       sr4_name="dual-mb$sr4_size"; sr4_perf=dual-batch
       sr4_args=(--microbatch-size "$sr4_size") ;;
     *) echo "Use target, serial, or dual N" >&2; return 2 ;;

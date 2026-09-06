@@ -156,15 +156,15 @@ def test_full_sweep_zero_overlap_and_slow_cell_valid(sweep):
     root, workload = sweep
     report = compare_sweep(root)
     assert report['valid'], report['errors']
-    assert 'Metric | 2 | 4 | 8 | 16 | 32 | 64' in render_sweep(report)
-    assert len(report['cells']) == 8
-    assert report['cells']['dual-mb64']['metrics']['observed_overlap_ms'] == 0
-    path = root / 'dual-mb64' / 'decode-performance.json'
+    assert 'Metric | 2 | 4 | 8 | 16 | 32 | 64 | 100' in render_sweep(report)
+    assert len(report['cells']) == 9
+    assert report['cells']['dual-mb100']['metrics']['observed_overlap_ms'] == 0
+    path = root / 'dual-mb100' / 'decode-performance.json'
     p = read(path)
     p['metrics']['aggregate_throughput_tokens_per_second'] = 0.001
     p['metrics']['decode_makespan_ms'] = 1e12
     write(path, p)
-    cell = summarize_cell(path.parent, 'dual', workload, 64)
+    cell = summarize_cell(path.parent, 'dual', workload, 100)
     assert cell['valid'], cell['errors']
     write(path.parent / 'qualification.json', cell)
     assert compare_sweep(root)['valid']
@@ -240,3 +240,30 @@ def test_offline_cli_writes_immutable_common_bound_sidecar(sweep, monkeypatch):
         directory / 'draft-backend-report.json')
     with pytest.raises(ValueError, match='fresh'):
         main()
+
+
+def test_seven_cell_set_and_mb100_endpoint_observations(sweep):
+    root, _ = sweep
+    assert SIZES == (2, 4, 8, 16, 32, 64, 100)
+    path = root / 'dual-mb100' / 'qualification.json'
+    cell = read(path)
+    cell['metrics']['throughput_tokens_per_second'] = 1e6
+    write(path, cell)
+    report = compare_sweep(root)
+    assert report['valid'], report['errors']
+    obs = report['observations']
+    assert obs['best_observed_microbatch'] == 100
+    assert obs['peak_is_intermediate'] is False
+    assert {'mb100_minus_mb2', 'draft_p50_mb2_mb100', 'verify_p50_mb2_mb100',
+            'mb100_over_serial_throughput'} <= obs.keys()
+    assert not any('mb64' in key for key in obs)
+    assert all(report['cells']['dual-mb100'][key] == 100 for key in FIELDS)
+    header = next(line for line in render_sweep(report).splitlines()
+                  if line.startswith('Metric |'))
+    assert len(header.split('|')) == 8
+    path = root / 'dual-mb64' / 'qualification.json'
+    cell = read(path)
+    cell['metrics']['throughput_tokens_per_second'] = 2e6
+    write(path, cell)
+    obs = compare_sweep(root)['observations']
+    assert obs['best_observed_microbatch'] == 64 and obs['peak_is_intermediate'] is True

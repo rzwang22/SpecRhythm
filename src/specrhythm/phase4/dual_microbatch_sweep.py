@@ -14,7 +14,7 @@ from specrhythm.phase4.manifest import sha256_file
 from specrhythm.phase4.stock_vllm import load_smoke_requests
 from specrhythm.phase4.transport import CheckpointJsonl
 
-SIZES = (2, 4, 8, 16, 32, 64)
+SIZES = (2, 4, 8, 16, 32, 64, 100)
 SCOPE = (
     "Saturated corrected-100 burst, short outputs (max_new_tokens=16); no online/TTFT/SLO claim."
 )
@@ -195,7 +195,7 @@ def compare_sweep(root):
                 )
             }
             c["dual_serial_work_exactly_matched"] = not any(c["dual_minus_serial_work"].values())
-        first, last = m["dual-mb2"], m["dual-mb64"]
+        first, last = m["dual-mb2"], m["dual-mb100"]
         historical = {"target_forward_count": 268, "draft_model_forward_count": 924}
         if (
             first["draft_batch_size"]["p50"] != 2
@@ -210,8 +210,8 @@ def compare_sweep(root):
         best = max(SIZES, key=lambda n: m[f"dual-mb{n}"]["throughput_tokens_per_second"])
         observations = {
             "best_observed_microbatch": best,
-            "peak_is_intermediate": best not in (2, 64),
-            "mb64_minus_mb2": {
+            "peak_is_intermediate": best not in (2, 100),
+            "mb100_minus_mb2": {
                 k: last[k] - first[k]
                 for k in (
                     "target_forward_count",
@@ -221,15 +221,15 @@ def compare_sweep(root):
                     "throughput_tokens_per_second",
                 )
             },
-            "draft_p50_mb2_mb64": [
+            "draft_p50_mb2_mb100": [
                 first["draft_batch_size"]["p50"],
                 last["draft_batch_size"]["p50"],
             ],
-            "verify_p50_mb2_mb64": [
+            "verify_p50_mb2_mb100": [
                 first["verification_batch_size"]["p50"],
                 last["verification_batch_size"]["p50"],
             ],
-            "mb64_over_serial_throughput": last["dual_over_serial_throughput"],
+            "mb100_over_serial_throughput": last["dual_over_serial_throughput"],
             "interpretation": "Descriptive single-session curve; no optimal policy established. "
             "Assess fragmentation recovery, any intermediate peak, and remaining Dual overhead "
             "against work differences before choosing the next mechanism.",
@@ -259,7 +259,8 @@ def render_sweep(report):
         "",
     ]
     lines.extend("WARNING: " + w for w in report["baseline_warnings"])
-    lines.extend(["", "Metric | 2 | 4 | 8 | 16 | 32 | 64", "--- | " + " | ".join(["---:"] * 6)])
+    lines.extend(["", "Metric | " + " | ".join(map(str, SIZES)),
+                  "--- | " + " | ".join(["---:"] * len(SIZES))])
     for label, key in TABLE:
         values = []
         for n in SIZES:

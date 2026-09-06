@@ -54,7 +54,7 @@ def test_default_is_two():
     assert inspect.signature(run_resident_dual_batch).parameters['microbatch_size'].default == 2
 
 
-@pytest.mark.parametrize('value', [None, '2', '4', '8', '16', '32', '64', '7'])
+@pytest.mark.parametrize('value', [None, '2', '4', '8', '16', '32', '64', '100', '101', '7'])
 @pytest.mark.parametrize('backend', ['hf-persistent', 'vllm-batched'])
 def test_dual_helper_default_and_explicit_values(tmp_path, monkeypatch, value, backend):
     monkeypatch.setenv('SR_PHASE4_DRAFT_BACKEND', backend)
@@ -84,8 +84,9 @@ def test_nondual_ignores_invalid_control(tmp_path, mode):
     assert '--microbatch-size' not in args
 
 
-@pytest.mark.parametrize('n', [2, 4, 8, 16, 32, 64])
-@pytest.mark.parametrize('ready_count', [1, 100])
+@pytest.mark.parametrize('n,ready_count', [
+    *[(n, r) for n in (2, 4, 8, 16, 32, 64, 100) for r in (1, 100)], (100, 101),
+])
 def test_runner_to_scheduler_upper_bound_without_waiting(
     scheduler, machine, monkeypatch, tmp_path, n, ready_count
 ):
@@ -100,7 +101,7 @@ def test_runner_to_scheduler_upper_bound_without_waiting(
             'transport_events_path', 'target_diagnostics_path', 'plugin_report_path',
             'microbatch_size', 'request_count')})
         instance = type(scheduler)()
-    prompts = {f'r{i}': (i + 1, 200) for i in range(100)}
+    prompts = {f'r{i}': (i + 1, 200) for i in range(max(100, ready_count))}
     instance.requests = {f'opaque-{i}': Request(f'opaque-{i}', p)
                          for i, p in enumerate(prompts.values())}
     instance.running = list(instance.requests.values())
