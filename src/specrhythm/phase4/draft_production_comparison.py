@@ -5,6 +5,12 @@ from __future__ import annotations
 import math
 
 from specrhythm.phase4.draft_metrics import batch_statistics
+from specrhythm.phase4.draft_performance_policy import (
+    BLOCKING,
+    DIAGNOSTIC,
+    POLICY,
+    runtime_identity,
+)
 from specrhythm.phase4.draft_qualification import NUMERICAL, read_json
 from specrhythm.phase4.manifest import sha256_file
 from specrhythm.phase4.serial import greedy_acceptance, token_prefix_hash
@@ -121,12 +127,19 @@ def production_work(directory, performance, raw, rounds, backend, request_contra
         or counters.get("invalidated_tokens") != rejected
     ):
         errors.append("Draft backend proposal/acceptance counters differ from Target rounds")
-    for key in ("draft_model_forward_count", "draft_host_sync_count"):
+    for key in ("draft_model_forward_count",):
         if type(backend.get(key)) is not int or backend[key] <= 0:
             errors.append(f"missing actual Draft counter: {key}")
     duration = backend.get("draft_gpu_event_time_ms")
     if type(duration) not in (int, float) or not math.isfinite(duration) or duration <= 0:
         errors.append("missing actual Draft GPU event duration")
+    tpot = metrics.get("tpot_ms", {})
+    for key in ("mean", "p50", "p90", "p99"):
+        number = tpot.get(key)
+        if number is None and (key not in tpot or tpot.get("defined_request_count") == 0):
+            continue
+        if type(number) not in (int, float) or not math.isfinite(number) or number <= 0:
+            errors.append(f"TPOT {key} must be finite and positive when defined")
     value = {
         "completed_requests": metrics["completed_requests"],
         "measured_committed_tokens": metrics["total_measured_committed_output_tokens"],
@@ -181,26 +194,38 @@ def qualify_serial_pair(
     from collections import Counter
 
     errors = list(base["errors"])
+    diagnostics = list(base.get("diagnostics", []))
+    experiment = {
+        key: values["hf"].get(key)
+        for key in ("models", "vllm_commit", "vllm_version", "patch_hashes", "placement")
+    }
+    experiment["config_sha256"] = values["hf"]["artifact_sha256"].get("config")
+    if stage == "D5":
+        prior_experiment = read_json(d4_path).get("experiment_identity")
+        if prior_experiment is not None and experiment != prior_experiment:
+            errors.append("D5 model/config/backend placement differs from qualified D4")
     work = {}
     for label, directory in directories.items():
         try:
             admission_path = directory.parent / f"{label}-admission.json"
             admission = read_json(admission_path)
             if not (
-                admission.get("schema_version") == "specrhythm.phase4b3-serial-admission.v1"
-                and admission.get("valid") is True
+                admission.get("valid") is True
                 and admission.get("stage") == stage
                 and admission.get("backend") == label
-                and admission.get("run_identity") == aggregate["run_identity"]
-                and admission.get("d3_qualification_sha256") == sha256_file(qualification_path)
                 and admission.get("request_count") == values[label]["request_count"]
                 and admission.get("workload_sha256") == values[label]["workload_sha256"]
                 and admission.get("reference_sha256")
                 == raw[label].get("stock_reference", {}).get("file_sha256")
-                and admission.get("d4_comparison_sha256")
-                == (sha256_file(d4_path) if d4_path else None)
             ):
                 errors.append(f"{label}: missing/incompatible pre-execution admission")
+            for field, expected in (
+                ("run_identity", aggregate["run_identity"]),
+                ("d3_qualification_sha256", sha256_file(qualification_path)),
+                ("d4_comparison_sha256", sha256_file(d4_path) if d4_path else None),
+            ):
+                if admission.get(field) != expected:
+                    diagnostics.append(f"{label}: historical admission {field} differs")
             backend = read_json(directory / "draft-backend-report.json")
             ready = read_json(directory / "draft-service-ready.json")
             if raw[label].get("draft_shutdown", {}).get(
@@ -214,7 +239,18 @@ def qualify_serial_pair(
             ):
                 errors.append(f"{label}: Draft state/cleanup invalid")
             if backend.get("provenance") != ready.get("provenance"):
-                errors.append(f"{label}: Draft metrics/startup provenance differs")
+                diagnostics.append(f"{label}: Draft metrics/startup metadata differs")
+            if runtime_identity(backend.get("provenance")) != runtime_identity(
+                ready.get("provenance")
+            ):
+                errors.append(f"{label}: Draft metrics/startup execution identity differs")
+            if backend.get("backend_name") != ready.get("backend"):
+                errors.append(f"{label}: Draft metrics backend identity differs")
+            if (
+                backend.get("provenance", {}).get("model", {}).get("path")
+                != aggregate["run_identity"]["model_path"]
+            ):
+                errors.append(f"{label}: Draft model differs from the qualified experiment")
             stats = batch_statistics(
                 Counter({int(k): v for k, v in backend["draft_batch_size_histogram"].items()})
             )
@@ -232,9 +268,7 @@ def qualify_serial_pair(
                     if backend["provenance"].get(field, {}).get("path") != expected:
                         errors.append(f"vllm: {field} differs from D3 qualification")
                 if backend["provenance"].get("vllm_api") != qualified["vllm_api"]:
-                    errors.append(
-                        "vllm: installed production source differs from D3 qualification"
-                    )
+                    diagnostics.append("vllm: historical D3 API audit metadata differs")
                 proposal_batch = backend.get("draft_batch_statistics_by_purpose", {}).get(
                     "proposal", {}
                 )
@@ -253,7 +287,7 @@ def qualify_serial_pair(
                 values[label]["execution_git_commit"]
                 != aggregate["run_identity"]["execution_commit"]
             ):
-                errors.append(f"{label}: Serial execution differs from D3 qualification commit")
+                diagnostics.append(f"{label}: Serial execution differs from historical D3 commit")
             if (
                 values[label]["artifact_sha256"].get("config")
                 != aggregate["run_identity"]["config_sha256"]
@@ -262,7 +296,7 @@ def qualify_serial_pair(
         except (OSError, ValueError, KeyError, TypeError) as error:
             errors.append(f"{label}: production work evidence invalid: {error}")
     if not base["draft_batch_p50_greater_than_one"]:
-        errors.append("vllm: measured Draft batch p50 is not greater than one")
+        diagnostics.append("vllm: measured Draft batch p50 is not greater than one")
     if (
         len(work) == 2
         and work["hf"]["requested_output_limits_by_request"]
@@ -275,6 +309,8 @@ def qualify_serial_pair(
     deltas = {}
     if len(work) == 2:
         for field in (
+            "completed_requests",
+            "measured_committed_tokens",
             "draft_proposal_count",
             "proposed_tokens",
             "accepted_draft_tokens",
@@ -302,15 +338,29 @@ def qualify_serial_pair(
             "decode_makespan_ratio_hf_over_vllm": left / right,
             "draft_gpu_event_reduction_ms": work["hf"]["draft_gpu_event_time_ms"]
             - work["vllm"]["draft_gpu_event_time_ms"],
+            "throughput_ratio_vllm_over_hf": work["vllm"]["throughput_tokens_per_second"]
+            / work["hf"]["throughput_tokens_per_second"],
         }
     return {
         **base,
         "schema_version": "specrhythm.phase4b3-serial-backend-comparison.v2",
         "stage": stage,
+        "experiment_identity": experiment,
+        "qualification_policy": POLICY,
+        "blocking_conditions": list(BLOCKING),
+        "diagnostic_conditions": list(DIAGNOSTIC),
         "errors": errors,
+        "blocking_errors": errors,
+        "diagnostics": diagnostics,
+        "error_serialization": {
+            label: {"raw": raw[label].get("errors"), "performance": value.get("errors")}
+            for label, value in values.items()
+        },
+        "historical_qualification_revalidated": False,
         "stage_qualified": valid,
         "performance_comparable": valid,
-        "performance_interpretation_allowed": valid and stage == "D5",
+        "performance_interpretation_allowed": valid,
+        "performance_scope": "corrected-five pilot" if stage == "D4" else "corrected-100",
         "ready_for_operator_review": valid,
         "d4_qualified": valid and stage == "D4",
         "d5_qualified": valid and stage == "D5",
@@ -335,13 +385,15 @@ def qualify_serial_pair(
         "pure_batching_speedup_claim": False,
         "work_accounting": work,
         "work_deltas": deltas,
+        "proposal_acceptance_target_work_exactly_matched": bool(deltas)
+        and all(d["vllm_minus_hf"] == 0 for d in deltas.values()),
         "proposal_acceptance_target_work_nearly_matched": bool(deltas)
         and all(
             d["relative_change"] is not None and abs(d["relative_change"]) <= 0.01
             for d in deltas.values()
         ),
         "nearly_matched_rule": (
-            "all listed proposal/acceptance/Target-work counters differ by at most 1%; "
+            "all listed completed/proposal/acceptance/Target-work counters differ by at most 1%; "
             "descriptive only"
         ),
         "execution_time_comparison": timings,

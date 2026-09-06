@@ -98,6 +98,46 @@ def test_admission_rerunbook_bootstraps_new_root_and_stops_after_d3():
     assert "--stage D4" not in commands and "--stage D5" not in commands
 
 
+def test_performance_runbook_only_recomputes_d4_and_launches_d5():
+    text = (ROOT / "docs/phase4b3-d4-offline-d5-runbook.md").read_text()
+    blocks = re.findall(r"```bash\n(.*?)```", text, re.S)
+    assert len(blocks) >= 12
+    commands = "\n".join(blocks)
+    assert not re.search(r"(?m)^\s*set\s+-e|\bexit\b", commands)
+    for block in blocks:
+        subprocess.run(["bash", "-n"], input=block, text=True, check=True)
+        for code in re.findall(r"<<'PY(?:CODE)?'\n(.*?)\nPY(?:CODE)?", block, re.S):
+            ast.parse(code)
+    for required in (
+        "conda activate",
+        "git switch --detach",
+        "@DELIVERED_COMMIT@",
+        "--no-deps --no-build-isolation",
+        "SR_PHASE4B3_RETAINED_ROOT",
+        'CUDA_VISIBLE_DEVICES="" python -m specrhythm.phase4.draft_comparison',
+        "--stage D4",
+        "comparison.previous-",
+        "require_performance_stage",
+        "SR_PHASE4B_ENVIRONMENT",
+        "SR_PHASE4B_TOPOLOGY",
+        "SR_PHASE4B_PATCH_MANIFEST",
+        "phase4b3_run_serial D5 hf",
+        "phase4b3_run_serial D5 vllm",
+        "phase4b3_compare_serial D5",
+        "tar -czf",
+    ):
+        assert required in commands
+    for forbidden in (
+        "phase4b3_run_serial D4",
+        "--allow-gpu",
+        "draft_qualification_gate",
+        "draft_logits_probe",
+        "draft_gate",
+        "--diagnostic",
+    ):
+        assert forbidden not in commands
+
+
 @pytest.mark.parametrize("stage", ["D4", "D5"])
 def test_operator_helper_never_starts_gpu_after_failed_admission(tmp_path, stage):
     script = f'''

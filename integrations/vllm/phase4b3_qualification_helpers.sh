@@ -15,7 +15,7 @@ phase4b3_run_serial () {
       sr3_count=100
       sr3_workload="$SR_PHASE4B_WORKLOAD"
       sr3_reference="$SR_PHASE4B_REFERENCE"
-      sr3_prior=(--d4 "$SR_PHASE4B3_ROOT/D4/comparison.json")
+      sr3_prior=(--d4 "${SR_PHASE4B3_D4_COMPARISON:-$SR_PHASE4B3_ROOT/D4/comparison.json}")
       ;;
     *) echo "Only qualified D4/D5 Serial is supported" >&2; return 2 ;;
   esac
@@ -28,11 +28,10 @@ phase4b3_run_serial () {
     echo "Preserve the old attempt and use a fresh result root" >&2
     return 2
   }
-  # This is a CPU check using the qualified production configuration. The actual
-  # backend selection below is separately recorded in the immutable admission.
+  # CPU admission reuses completed certificates without rerunning D1-D3 checks.
   CUDA_VISIBLE_DEVICES=0 SR_PHASE4_DRAFT_BACKEND=vllm-batched \
-    python -m specrhythm.phase4.draft_qualification prepare-serial \
-      --qualification "$SR_PHASE4B3_ROOT/qualification.json" \
+    python -m specrhythm.phase4.draft_performance_policy \
+      --qualification "${SR_PHASE4B3_QUALIFICATION:-$SR_PHASE4B3_ROOT/qualification.json}" \
       --stage "$sr3_stage" "${sr3_prior[@]}" --backend "$sr3_backend" \
       --expected-commit "$SR_PHASE4B_COMMIT" --config "$SR_PHASE4B_CONFIG" \
       --workload "$sr3_workload" --reference "$sr3_reference" \
@@ -52,11 +51,12 @@ phase4b3_compare_serial () {
   local sr3_prior=()
   case "$sr3_stage" in
     D4) sr3_count=5 ;;
-    D5) sr3_count=100; sr3_prior=(--d4 "$SR_PHASE4B3_ROOT/D4/comparison.json") ;;
+    D5) sr3_count=100
+      sr3_prior=(--d4 "${SR_PHASE4B3_D4_COMPARISON:-$SR_PHASE4B3_ROOT/D4/comparison.json}") ;;
     *) echo "Only D4/D5 comparisons are supported" >&2; return 2 ;;
   esac
   python -m specrhythm.phase4.draft_comparison \
-    --qualification "$SR_PHASE4B3_ROOT/qualification.json" \
+    --qualification "${SR_PHASE4B3_QUALIFICATION:-$SR_PHASE4B3_ROOT/qualification.json}" \
     --stage "$sr3_stage" "${sr3_prior[@]}" \
     --hf "$SR_PHASE4B3_ROOT/$sr3_stage/hf" \
     --vllm "$SR_PHASE4B3_ROOT/$sr3_stage/vllm" \

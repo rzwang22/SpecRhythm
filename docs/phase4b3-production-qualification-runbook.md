@@ -1,5 +1,7 @@
 # Phase 4B.3 production Draft: fresh-server D3 → D4 → D5
 
+Historical full-progression reference. For the already completed D4 pair, use [offline D4 → fresh D5](phase4b3-d4-offline-d5-runbook.md); do not rerun D1–D4.
+
 For the current UUID admission correction, first use the [fresh-server D1–D3 rerunbook](phase4b3-device-admission-runbook.md) in a new root. That handoff stops at aggregate review. The complete progression reference below does not authorize skipping this rerun or automatically entering D4/D5.
 
 Operator execution only. The agent has run no GPU. Use a fresh interactive **Bash** shell after restarting AutoDL. Execute each block separately. If its printed `rc` is nonzero, stop manually and preserve the root; the commands keep the interactive shell open. The runbook never applies a patch, changes precision/kernels, runs Dual, or starts D6.

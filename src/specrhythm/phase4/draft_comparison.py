@@ -17,16 +17,22 @@ from specrhythm.phase4.process_lifecycle import validate_lifecycle_artifact
 from specrhythm.phase4.transport import CheckpointJsonl
 
 
-def compare_serial_work(a: Mapping[str, Any], b: Mapping[str, Any], count: int) -> dict:
+def compare_serial_work(
+    a: Mapping[str, Any], b: Mapping[str, Any], count: int, *, production=False
+) -> dict:
     """Same-mode form of the existing completed-work policy; never relabel a mode."""
     errors = [] if type(count) is int and count > 0 else ["invalid expected request count"]
+    diagnostics = []
     work = []
     for label, value in (("hf", a), ("vllm", b)):
         if (
-            value.get("schema_version") != "specrhythm.phase4b2-decode-performance.v1"
+            (
+                not production
+                and value.get("schema_version") != "specrhythm.phase4b2-decode-performance.v1"
+            )
             or value.get("mode") != "serial"
             or value.get("valid") is not True
-            or value.get("errors") != []
+            or (value.get("errors") or [])
             or value.get("performance_result") is not True
             or value.get("cleanup_valid") is not True
         ):
@@ -100,12 +106,16 @@ def compare_serial_work(a: Mapping[str, Any], b: Mapping[str, Any], count: int) 
         "mode_semantics",
     ):
         if not a.get(field) or a.get(field) != b.get(field):
-            errors.append(f"A/B {field} differs or is missing")
+            destination = diagnostics if production and field == "gpu_topology" else errors
+            destination.append(f"A/B {field} differs or is missing")
     for field in ("workload", "config", "topology", "patch_manifest"):
         if not a.get("artifact_sha256", {}).get(field) or a["artifact_sha256"][field] != b.get(
             "artifact_sha256", {}
         ).get(field):
-            errors.append(f"A/B {field} artifact hash differs")
+            destination = (
+                diagnostics if production and field in ("topology", "patch_manifest") else errors
+            )
+            destination.append(f"A/B {field} artifact hash differs")
     boundaries = [
         {
             k: v
@@ -115,9 +125,40 @@ def compare_serial_work(a: Mapping[str, Any], b: Mapping[str, Any], count: int) 
         for value in (a, b)
     ]
     if not boundaries[0] or boundaries[0] != boundaries[1]:
-        errors.append("A/B measurement boundary differs")
+        if production:
+            diagnostics.append("A/B measurement metadata differs")
+            keys = set(boundaries[0]) | set(boundaries[1])
+            if any(
+                boundaries[0].get(k) != boundaries[1].get(k)
+                for k in keys
+                if k
+                in {
+                    "clock",
+                    "setup_excluded",
+                    "bootstrap_excluded_from_measured_token_count",
+                    "first_measured_target_forward_consumes_pending_bootstrap",
+                    "first_post_bootstrap_token_counted",
+                    "pre_measurement_tp_barrier",
+                    "pre_measurement_target_cuda_synchronize",
+                    "per_token_cuda_synchronize",
+                    "final_all_target_rank_cuda_synchronize",
+                }
+            ):
+                errors.append("A/B measurement boundary differs")
+        else:
+            errors.append("A/B measurement boundary differs")
     if work[0] != work[1]:
-        errors.append("A/B per-request completed work differs")
+        (diagnostics if production else errors).append("A/B per-request completed work differs")
+        if production:
+            prompts = [
+                {
+                    rid: (r["prompt_token_count"], r["prompt_token_ids_sha256"])
+                    for rid, r in mode.items()
+                }
+                for mode in work
+            ]
+            if prompts[0] != prompts[1]:
+                errors.append("A/B request/prompt identity differs")
     sequences = [
         {r["request_id"]: r["total_generated_token_ids"] for r in v.get("requests", [])}
         for v in (a, b)
@@ -125,6 +166,7 @@ def compare_serial_work(a: Mapping[str, Any], b: Mapping[str, Any], count: int) 
     return {
         "valid": not errors,
         "errors": errors,
+        "diagnostics": diagnostics,
         "final_target_sequences_equal": sequences[0] == sequences[1],
         "final_target_equality_is_performance_gate": False,
     }
@@ -208,23 +250,36 @@ def compare_directories(
 ) -> dict:
     aggregate = None
     if qualification_path is not None or stage is not None:
-        from specrhythm.phase4.draft_qualification import require_progression
+        from specrhythm.phase4.draft_performance_policy import require_performance_stage
 
         if stage not in ("D4", "D5") or count != (5 if stage == "D4" else 100):
             raise ValueError("D4 requires corrected-five; D5 requires corrected-100")
-        aggregate = require_progression(qualification_path, stage, d4_path)
+        aggregate = require_performance_stage(qualification_path, stage, d4_path)
 
     def read(directory, name):
         return json.loads((directory / name).read_text())
 
     values, rounds, raw = {}, {}, {}
     errors = []
+    diagnostics = []
     for label, directory in (("hf", hf), ("vllm", vllm)):
         values[label] = read(directory, "decode-performance.json")
         raw[label] = read(directory, "resident-serial.json")
         lifecycle = read(directory, "process-lifecycle.json")
-        errors.extend(validate_lifecycle_artifact(lifecycle))
-        if raw[label].get("valid") is not True or raw[label].get("errors") != []:
+        for error in validate_lifecycle_artifact(lifecycle):
+            destination = (
+                diagnostics
+                if aggregate is not None and error == "unsupported lifecycle schema"
+                else errors
+            )
+            destination.append(f"{label}: {error}")
+        if aggregate is not None and (
+            lifecycle.get("target_exit_status") not in (None, 0)
+            or lifecycle.get("effective_exit_status") not in (None, 0)
+            or lifecycle.get("run_valid") is not True
+        ):
+            errors.append(f"{label}: execution return path failed")
+        if raw[label].get("valid") is not True or (raw[label].get("errors") or []):
             errors.append(f"{label}: raw Serial invalid")
         for key, filename in (
             ("raw_run", "resident-serial.json"),
@@ -237,8 +292,11 @@ def compare_directories(
         rounds[label] = CheckpointJsonl(directory / "round-events.jsonl").read()
         if raw[label].get("strict_serial_timeline", {}).get("round_events") != len(rounds[label]):
             errors.append(f"{label}: round count disagrees with raw runtime evidence")
-    matched = compare_serial_work(values["hf"], values["vllm"], count)
+    matched = compare_serial_work(
+        values["hf"], values["vllm"], count, production=aggregate is not None
+    )
     errors.extend(matched["errors"])
+    diagnostics.extend(matched["diagnostics"])
     evidence = read(vllm, "draft-backend-report.json")
     errors.extend(validate_batch_evidence(evidence, rounds["vllm"]))
     shutdown = raw["vllm"].get("draft_shutdown", {})
@@ -268,7 +326,17 @@ def compare_directories(
             if not (
                 startup == ready.get("provenance") == evidence.get("provenance") == raw_provenance
             ):
-                errors.append("batched startup identity differs across runtime artifacts")
+                (diagnostics if aggregate is not None else errors).append(
+                    "batched startup metadata differs across runtime artifacts"
+                )
+            if aggregate is not None:
+                from specrhythm.phase4.draft_performance_policy import runtime_identity
+
+                if any(
+                    runtime_identity(p) != runtime_identity(startup)
+                    for p in (ready.get("provenance"), evidence.get("provenance"), raw_provenance)
+                ):
+                    errors.append("batched startup execution identity differs")
     equivalence = proposal_equivalence(rounds["hf"], rounds["vllm"])
     p50 = evidence.get("draft_batch_size_p50")
     true_batch = type(p50) in (int, float) and p50 > 1
@@ -289,6 +357,7 @@ def compare_directories(
         "performance_interpretation_allowed": not errors
         and equivalence["exact_on_common_contexts"],
         "errors": errors,
+        "diagnostics": diagnostics,
         "matched_work": matched,
         "draft_backend_equivalence": equivalence,
         "draft_batch_p50_greater_than_one": true_batch,

@@ -224,7 +224,7 @@ def test_qualified_d4_and_d5_preserve_divergence_and_report_work(tmp_path):
     assert d4["stage_qualified"], d4["errors"]
     assert not d4["hf_draft_exact"] and d4["hf_vllm_divergent_request_count"] == 5
     assert d4["hf_vllm_divergent_rounds"] == [0]
-    assert not d4["performance_interpretation_allowed"]
+    assert d4["performance_interpretation_allowed"]
     write(tmp_path / "D4/comparison.json", d4)
     assert require_progression(qualification, "D5", tmp_path / "D4/comparison.json")["valid"]
     pair(tmp_path, "D5", 100, qualification)
