@@ -203,7 +203,17 @@ def validate_batch_evidence(evidence, rounds) -> list[str]:
     return errors
 
 
-def compare_directories(hf: Path, vllm: Path, count: int) -> dict:
+def compare_directories(
+    hf: Path, vllm: Path, count: int, *, qualification_path=None, stage=None, d4_path=None
+) -> dict:
+    aggregate = None
+    if qualification_path is not None or stage is not None:
+        from specrhythm.phase4.draft_qualification import require_progression
+
+        if stage not in ("D4", "D5") or count != (5 if stage == "D4" else 100):
+            raise ValueError("D4 requires corrected-five; D5 requires corrected-100")
+        aggregate = require_progression(qualification_path, stage, d4_path)
+
     def read(directory, name):
         return json.loads((directory / name).read_text())
 
@@ -273,7 +283,7 @@ def compare_directories(hf: Path, vllm: Path, count: int) -> dict:
         + len(r["target_bonus_token_ids"])
         for r in rounds["hf"]
     )
-    return {
+    result = {
         "schema_version": "specrhythm.phase4b3-serial-backend-comparison.v1",
         "performance_comparable": not errors,
         "performance_interpretation_allowed": not errors
@@ -306,6 +316,21 @@ def compare_directories(hf: Path, vllm: Path, count: int) -> dict:
             "draft_startup": sha256_file(vllm / "draft-startup.json"),
         },
     }
+    if aggregate is not None:
+        from specrhythm.phase4.draft_production_comparison import qualify_serial_pair
+
+        return qualify_serial_pair(
+            result,
+            {"hf": hf, "vllm": vllm},
+            values,
+            raw,
+            rounds,
+            aggregate,
+            qualification_path,
+            stage,
+            d4_path,
+        )
+    return result
 
 
 def main() -> int:
@@ -314,10 +339,20 @@ def main() -> int:
     parser.add_argument("--vllm", type=Path, required=True)
     parser.add_argument("--request-count", type=int, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--qualification", type=Path, required=True)
+    parser.add_argument("--stage", choices=("D4", "D5"), required=True)
+    parser.add_argument("--d4", type=Path)
     args = parser.parse_args()
     if args.output.exists():
         raise FileExistsError("comparison output must be fresh")
-    report = compare_directories(args.hf, args.vllm, args.request_count)
+    report = compare_directories(
+        args.hf,
+        args.vllm,
+        args.request_count,
+        qualification_path=args.qualification,
+        stage=args.stage,
+        d4_path=args.d4,
+    )
     write_immutable_report(args.output, report)
     print(
         json.dumps(

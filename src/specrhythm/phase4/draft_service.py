@@ -621,6 +621,12 @@ def run_draft_service(
         return serve_batched_draft(
             config, socket_path=socket_path, event_log_path=event_log_path, ready_path=ready_path
         )
+    if os.environ.get("SR_PHASE4B3_HF_METRICS") == "1":
+        from specrhythm.phase4.draft_hf_metrics import serve_measured_hf
+
+        return serve_measured_hf(
+            config, socket_path=socket_path, event_log_path=event_log_path, ready_path=ready_path
+        )
     backend = HFPersistentDraftBackend(config)
     server = DraftUnixServer(
         socket_path,

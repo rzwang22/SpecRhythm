@@ -1,5 +1,7 @@
 # Phase 4B.3 Plan A — operator D1–D5 runbook
 
+This is the historical HF-exact v1 runbook. For the production-Draft policy decision and new D3→D4→D5 qualification, use [the v2 policy](phase4b3-production-qualification.md) and [complete fresh-server runbook](phase4b3-production-qualification-runbook.md). Historical v1 artifacts and their meanings remain unchanged.
+
 **Operator execution only. These commands were not run by the coding agent.** Use the delivered implementation commit on PR #4, which remains Draft/Open/unmerged. Retain all old A800 artifacts. Every attempt needs a fresh result root. Do not integrate Dual or vary UUID mode, model/config, proposal budget, logging, measurement boundary or scheduling during this experiment.
 
 The implementation is described in [phase4b3-plan-a-implementation.md](phase4b3-plan-a-implementation.md). The previous [design documents](design/phase4b3-batched-draft/README.md) remain unchanged. The new selector is `SR_PHASE4_DRAFT_BACKEND=hf-persistent|vllm-batched`, default `hf-persistent`. The new backend is **Serial-only**; Dual explicitly rejects this selection before loading a model.
