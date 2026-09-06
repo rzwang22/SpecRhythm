@@ -335,6 +335,10 @@ def build_decode_performance_result(
             ),
         },
     }
+    if mode == "dual-batch":
+        from specrhythm.phase4.dual_microbatch import FIELDS
+
+        result.update({key: raw[key] for key in FIELDS if key in raw})
     if terminal_revalidation is not None:
         result["terminal_state_reconciliation"] = {
             **terminal_revalidation["terminal_state_reconciliation"],
@@ -949,7 +953,11 @@ def _validate_mode_boundary(
         if not starts or any(not isinstance(value, int) or value < boundary for value in starts):
             errors.append("Dual initial proposal did not start after the boundary")
         overlaps = CheckpointJsonl(run_root / "overlap-events.jsonl").read()
-        if not any(int(row.get("overlap_duration_ns", 0)) > 0 for row in overlaps):
+        if raw.get("runtime_semantics", {}).get("overlap_requirement") == "characterization":
+            from specrhythm.phase4.dual_overlap_characterization import read_overlap
+
+            errors.extend(read_overlap(run_root, raw)["errors"])
+        elif not any(int(row.get("overlap_duration_ns", 0)) > 0 for row in overlaps):
             errors.append("Dual run has no physical Draft/Target overlap witness")
     return errors
 

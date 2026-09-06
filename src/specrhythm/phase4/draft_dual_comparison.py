@@ -184,8 +184,15 @@ def _draft_work(directory, mode, backend):
     }
 
 
-def _dual_work(directory, raw):
-    require(raw.get("overlap_gate", {}).get("valid") is True, "physical overlap gate failed")
+def _dual_work(directory, raw, *, characterization=False):
+    overlap = None
+    if characterization:
+        from specrhythm.phase4.dual_overlap_characterization import read_overlap
+
+        overlap = read_overlap(directory, raw)
+        require(overlap["valid"], str(overlap["errors"]))
+    else:
+        require(raw.get("overlap_gate", {}).get("valid") is True, "physical overlap gate failed")
     require(
         read(directory / "plugin-report.json").get("sampled_row_tp_consensus") is True,
         "Dual sampled-row TP consensus failed",
@@ -196,7 +203,7 @@ def _dual_work(directory, raw):
         for r in overlaps
         if r.get("overlap_duration_ns", 0) > 0 and r.get("host_interval")
     )
-    require(bool(intervals), "no observed physical Draft/Target overlap")
+    require(characterization or bool(intervals), "no observed physical Draft/Target overlap")
     # Union repeated witness intervals; never sum shared cohort rows as GPU savings.
     merged = []
     for start, end in intervals:
@@ -209,8 +216,12 @@ def _dual_work(directory, raw):
         verified.setdefault(row["verify_microbatch_id"], len(row["verify_request_ids"]))
     distribution = batch_statistics(Counter(verified.values()))
     return {
-        "physical_overlap_valid": True,
-        "observed_overlap_ms": sum(end - start for start, end in merged) / 1e6,
+        "physical_overlap_valid": overlap["physical_overlap_valid"] if overlap else True,
+        **({"overlap_evidence_valid": True} if overlap else {}),
+        "observed_overlap_ms": (
+            overlap["observed_overlap_ms"] if overlap
+            else sum(end - start for start, end in merged) / 1e6
+        ),
         "overlap_is_critical_path_time_saved": False,
         "draft_ready_cohorts": read(directory / "draft-backend-report.json").get(
             "dual_cohorts", []
@@ -225,7 +236,7 @@ def _dual_work(directory, raw):
     }
 
 
-def summarize_run(directory, mode, count, workload, *, smoke=False):
+def summarize_run(directory, mode, count, workload, *, smoke=False, characterization=False):
     """Stop at the first material failure; never fabricate downstream failures."""
     result = {
         "schema_version": "specrhythm.phase4b3-d6-run.v1",
@@ -358,7 +369,7 @@ def summarize_run(directory, mode, count, workload, *, smoke=False):
                 "existing shared DecodeReady setup retained; no measured Draft proposals"
             )
         if mode == "dual":
-            result["metrics"].update(_dual_work(directory, raw))
+            result["metrics"].update(_dual_work(directory, raw, characterization=characterization))
         result["experiment_identity"] = {
             key: performance.get(key)
             for key in (

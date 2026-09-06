@@ -25,6 +25,7 @@ from specrhythm.phase4.dual_commit import (
     dual_greedy_acceptance,
     load_dual_stop_policies,
 )
+from specrhythm.phase4.dual_microbatch import evidence
 from specrhythm.phase4.dual_rows import PhysicalTokenRows, align_sampled_rows
 from specrhythm.phase4.dual_service import DualDraftClient
 from specrhythm.phase4.manifest import atomic_write_json
@@ -1031,6 +1032,10 @@ class DualBatchRemoteProposer:
             self.report_path,
             {
                 "schema_version": "specrhythm.phase4b-dual-proposer-report.v1",
+                **evidence(
+                    int(os.environ.get("SR_PHASE4_DUAL_MICROBATCH_SIZE", "1")),
+                    int(os.environ.get("SR_PHASE4_DUAL_MICROBATCH_SIZE", "1")),
+                ),
                 "mode": "dual-batch",
                 "proposer_model_parameter_count": 0,
                 "proposal_generation_in_target_callback": False,

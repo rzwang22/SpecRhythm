@@ -24,6 +24,7 @@ from specrhythm.phase4.admissibility import (
     decision_event,
 )
 from specrhythm.phase4.dual import DualProposal
+from specrhythm.phase4.dual_microbatch import evidence
 from specrhythm.phase4.dual_service import DualDraftClient
 from specrhythm.phase4.request_identity import (
     FrozenPromptIdentityMap,
@@ -236,6 +237,15 @@ class DualBatchScheduler(Scheduler):
         self._dual_events.append(
             {
                 "schema_version": "specrhythm.phase4b-scheduler-cycle.v1",
+                **evidence(self._dual_microbatch_size, self._dual_microbatch_size),
+                "dual_scheduler_constraints": {
+                    "max_num_seqs": getattr(self, "max_num_running_reqs", None),
+                    "max_num_scheduled_tokens": getattr(self, "max_num_scheduled_tokens", None),
+                    "max_model_len": getattr(self, "max_model_len", None),
+                    "kv_cache_num_blocks": getattr(
+                        getattr(self, "kv_cache_config", None), "num_blocks", None
+                    ),
+                },
                 "cycle_id": self._dual_cycle_id,
                 "poll_start_ns": poll_start,
                 "poll_end_ns": time.monotonic_ns(),

@@ -215,8 +215,9 @@ phase4b1_run_mode () {
   phase4b1_coordination="${6:-none}"
   phase4b1_overlap_requirement="${PHASE4B1_OVERLAP_REQUIREMENT:-required}"
   test "$phase4b1_overlap_requirement" = required || \
-      test "$phase4b1_overlap_requirement" = separate-gate || {
-    echo "overlap requirement must be required or separate-gate" >&2
+      test "$phase4b1_overlap_requirement" = separate-gate || \
+      test "$phase4b1_overlap_requirement" = characterization || {
+    echo "overlap requirement must be required, separate-gate or characterization" >&2
     return 2
   }
   test "$phase4b1_mode" = target || test "$phase4b1_mode" = serial || \
@@ -224,6 +225,9 @@ phase4b1_run_mode () {
     echo "mode must be target, serial, or dual" >&2
     return 2
   }
+  if test "$phase4b1_mode" = dual; then
+    phase4b1_microbatch_size="$(python -m specrhythm.phase4.dual_microbatch)" || return
+  fi
   test ! -e "$phase4b1_dir" || {
     echo "refusing to reuse immutable run directory: $phase4b1_dir" >&2
     return 2
@@ -331,7 +335,7 @@ phase4b1_run_mode () {
       --cycle-events "$phase4b1_dir/cycle-events.jsonl"
       --overlap-events "$phase4b1_dir/overlap-events.jsonl"
       --runtime-manifest "$phase4b1_dir/runtime-manifest.json"
-      --microbatch-size 2 --test-coordination "$phase4b1_coordination"
+      --microbatch-size "$phase4b1_microbatch_size" --test-coordination "$phase4b1_coordination"
       --overlap-requirement "$phase4b1_overlap_requirement"
       --output "$phase4b1_dir/resident-dual.json"
     )

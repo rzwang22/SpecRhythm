@@ -821,9 +821,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     phase4b1_dual_run.add_argument(
         "--overlap-requirement",
-        choices=("required", "separate-gate"),
+        choices=("required", "separate-gate", "characterization"),
         default="required",
-        help="keep physical overlap mandatory or report it for a separate gate",
+        help=("require overlap, defer its gate, or allow structurally valid "
+              "zero-overlap characterization"),
     )
     phase4b1_dual_run.add_argument(
         "--phase4b2-performance",

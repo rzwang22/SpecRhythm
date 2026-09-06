@@ -23,6 +23,8 @@ from specrhythm.phase4.dual_correctness import (
     validate_round_accounting,
     validate_scheduler_cycles,
 )
+from specrhythm.phase4.dual_microbatch import FIELDS, positive_size, scheduler_evidence
+from specrhythm.phase4.dual_overlap_characterization import characterize_overlap
 from specrhythm.phase4.dual_service import DualDraftClient
 from specrhythm.phase4.dual_terminal import build_terminal_reconciliation
 from specrhythm.phase4.dual_uuid import (
@@ -381,11 +383,10 @@ def run_resident_dual_batch(
 
     if request_count not in {2, 5, 100}:
         raise ValueError("Phase-4B.1 allows only 2, 5, or 100 requests")
-    if microbatch_size < 1:
-        raise ValueError("Dual microbatch size must be positive")
+    microbatch_size = positive_size(microbatch_size)
     if test_coordination not in {"none", "one-ready", "two-ready"}:
         raise ValueError("unknown test-only readiness coordination")
-    if overlap_requirement not in {"required", "separate-gate"}:
+    if overlap_requirement not in {"required", "separate-gate", "characterization"}:
         raise ValueError("unknown overlap requirement")
     artifacts = (
         context_path,
@@ -587,9 +588,22 @@ def run_resident_dual_batch(
         for event in reconciliation["events"]:
             CheckpointJsonl(request_state_events_path).append(event)
         state_rows = [*state_rows, *reconciliation["events"]]
+    microbatch_evidence = dict(zip(FIELDS, (microbatch_size, None)))
+    microbatch_errors = []
+    try:
+        microbatch_evidence = scheduler_evidence(scheduler_rows, microbatch_size)
+        if any(plugin_report.get(key) != microbatch_size for key in FIELDS):
+            raise ValueError("Dual plugin microbatch differs from scheduler/runner")
+    except ValueError as error:
+        microbatch_errors.append(str(error))
+    overlap_characterization = (
+        characterize_overlap(draft_rows, verification_rows, overlap_rows, worker_ranks)
+        if overlap_requirement == "characterization" else None
+    )
     overlap_errors = validate_overlap_witness(overlap_rows)
     errors = [
         *reconciliation_errors,
+        *microbatch_errors,
         *validate_request_state_events(state_rows),
         *validate_proposal_lifecycle_events(lifecycle_rows),
         *validate_scheduler_cycles(
@@ -603,6 +617,8 @@ def run_resident_dual_batch(
     ]
     if overlap_requirement == "required":
         errors.extend(overlap_errors)
+    if overlap_characterization is not None:
+        errors.extend(overlap_characterization["errors"])
     measurement_start_ns = manifest.measurement_start_ns
     for row in lifecycle_rows:
         if (
@@ -633,6 +649,10 @@ def run_resident_dual_batch(
     )
     runtime.update(
         {
+            **microbatch_evidence,
+            "dual_scheduler_constraints": (
+                scheduler_rows[0].get("dual_scheduler_constraints") if scheduler_rows else None
+            ),
             "stage": "phase4b1-real-decode-only-dual-correctness",
             "performance_result": False,
             "decode_ready_manifest_sha256": manifest.manifest_sha256,
@@ -643,6 +663,8 @@ def run_resident_dual_batch(
     atomic_write_json(runtime_manifest_path, runtime)
     result = {
         "schema_version": "specrhythm.phase4b1-resident-dual-run.v1",
+        **microbatch_evidence,
+        "overlap_characterization": overlap_characterization,
         "mode": "decode-only-dual-batch",
         "stage": "phase4b1-real-decode-only-dual-correctness",
         "valid": not errors,
