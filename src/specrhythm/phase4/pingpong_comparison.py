@@ -61,9 +61,52 @@ def union_intervals(intervals):
     return merged
 
 
+def terminal_states(directory, assignment):
+    states = jsonl(directory, "request-state-events")
+    state_errors = validate_request_state_events(states)
+    require(not state_errors, "request lifecycle invalid: " + "; ".join(state_errors))
+    terminal = {r["request_id"]: r for r in states if r["destination_state"] == "TERMINAL"}
+    require(
+        bool(assignment) and set(terminal) == set(assignment), "requests did not all terminate"
+    )
+    return terminal
+
+
+def smoke_execution_window(directory, plugin, assignment):
+    # Both starts are real TP-published setup boundaries preceding initial Draft
+    # proposals. Smoke has no formal decode-performance measurement artifact.
+    start_field = "performance_measurement_start_ns"
+    if plugin.get(start_field) is None:
+        start_field = "measurement_start_ns"
+    boundary = plugin.get(start_field)
+    require(
+        type(boundary) is int and boundary >= 0,
+        "smoke lacks a valid runtime setup/decode start timestamp",
+    )
+    terminal = terminal_states(directory, assignment)
+    require(
+        all(type(r["timestamp_ns"]) is int and r["timestamp_ns"] > boundary
+            for r in terminal.values()),
+        "smoke request TERMINAL timestamp must follow the runtime start",
+    )
+    # Guaranteed nonempty by exact terminal membership, independent of whether
+    # completion used a verified proposal or a proposal-free Target tail.
+    return {
+        "scope": "structural smoke execution; not formal performance measurement",
+        "start_ns": boundary,
+        "end_ns": max(r["timestamp_ns"] for r in terminal.values()),
+        "start_source": "plugin-report.json:" + start_field,
+        "end_source": "request-state-events.jsonl:latest TERMINAL timestamp_ns",
+        "terminal_request_count": len(terminal),
+    }
+
+
 def validate_cohort_execution(assignment, cycles, works, drafts, verifies, commits, boundary):
     """Join new policy evidence to actual work; no numerical-equality gate."""
-    require(bool(cycles) and bool(works) and bool(verifies), "missing pingpong execution evidence")
+    require(set(assignment.values()) == set(COHORTS), "pingpong requires nonempty A and B cohorts")
+    require(bool(cycles), "missing pingpong scheduler cycle evidence")
+    require(bool(works), "missing pingpong Draft work evidence")
+    require(bool(verifies), "missing pingpong Target verification evidence")
     scheduled = {}
     selected_cycles = []
     previous = None
@@ -182,6 +225,7 @@ def validate_cohort_execution(assignment, cycles, works, drafts, verifies, commi
         "both cohorts must publish initial proposals",
     )
     require(
+        # initial_groups covers A/B above, and verifies is mandatory/nonempty.
         max(w["host_end_ns"] for w in works if w["operation"] == "propose_only")
         <= min(v["verify_host_start_ns"] for v in verifies),
         "initial pipeline fill incomplete",
@@ -193,6 +237,10 @@ def validate_cohort_execution(assignment, cycles, works, drafts, verifies, commi
 
     verified = {}
     for row in verifies:
+        require(
+            bool(row.get("target_rank_intervals")),
+            "Target verification lacks mandatory TP rank timing intervals",
+        )
         c = cohort_for(assignment, row["verify_request_ids"])
         require(
             row["logical_cohort"] == c and scheduled.get(row["proposal_id"]) == c,
@@ -237,7 +285,11 @@ def validate_cohort_execution(assignment, cycles, works, drafts, verifies, commi
     return selected_cycles
 
 
-def pingpong_metrics(directory, raw, assignment, boundary, end):
+def pingpong_metrics(directory, raw, assignment, boundary, end, *, smoke=False):
+    require(
+        type(boundary) is int and type(end) is int and 0 <= boundary < end,
+        "PingPong execution interval requires ordered runtime timestamps",
+    )
     cycles = [r for r in jsonl(directory, "scheduler-events") if "cycle_id" in r]
     drafts, verifies = (
         jsonl(directory, "draft-work-events"),
@@ -252,14 +304,11 @@ def pingpong_metrics(directory, raw, assignment, boundary, end):
     selected = validate_cohort_execution(
         assignment, cycles, works, drafts, verifies, jsonl(directory, "proposal-events"), boundary
     )
-    states = jsonl(directory, "request-state-events")
-    require(not validate_request_state_events(states), "request lifecycle invalid")
+    terminal = terminal_states(directory, assignment)
     require(
         not validate_proposal_lifecycle_events(jsonl(directory, "proposal-lifecycle-events")),
         "proposal/version lifecycle invalid",
     )
-    terminal = {r["request_id"]: r for r in states if r["destination_state"] == "TERMINAL"}
-    require(set(terminal) == set(assignment), "requests did not all terminate")
     tail_commits = [
         r
         for r in jsonl(directory, "timing-events")
@@ -286,6 +335,7 @@ def pingpong_metrics(directory, raw, assignment, boundary, end):
     )
     require(overlap["valid"], str(overlap["errors"]))
     physical = target_batches(jsonl(directory, "target-diagnostics"), boundary)
+    require(bool(physical), "missing Target forward evidence after PingPong execution start")
     # Include proposal-free Target tails in the no-concurrency check.
     for (a, b), ids in physical.items():
         cohort = cohort_for(assignment, ids)
@@ -328,6 +378,7 @@ def pingpong_metrics(directory, raw, assignment, boundary, end):
             == backend["draft_model_forward_count_by_purpose"].get(p, 0),
             "cohort Draft forward accounting differs from actual backend",
         )
+    # Assignment has nonempty A/B and every member has a validated terminal event.
     drain_start = min(
         max(terminal[r]["timestamp_ns"] for r in assignment if assignment[r] == c) for c in COHORTS
     )
@@ -397,13 +448,22 @@ def pingpong_metrics(directory, raw, assignment, boundary, end):
             **overlap,
             "overlap_interval_count": len(merged),
             "cross_cohort_intersection_count": len(set(intersections)),
-            "overlap_fraction_of_makespan": sum(b - a for a, b in merged) / (end - boundary),
+            "overlap_fraction_of_makespan": (
+                None if smoke else sum(b - a for a, b in merged) / (end - boundary)
+            ),
+            **({"overlap_fraction_of_structural_execution":
+                sum(b - a for a, b in merged) / (end - boundary)} if smoke else {}),
             "pipeline_fill_ms": (min(a for a, _ in physical) - boundary) / 1e6,
             "pipeline_drain_ms": max(0, end - drain_start) / 1e6,
             "fill_scope": (
+                "runtime decode start to first Target forward; structural smoke fill"
+                if smoke else
                 "measurement start to first Target forward; both initial proposals included"
             ),
             "drain_scope": (
+                "first cohort fully terminal to last request TERMINAL; structural smoke drain; "
+                "subsequent Draft synchronization/cleanup excluded"
+                if smoke else
                 "first cohort fully terminal to measured end; "
                 "terminal sync after end remains cleanup"
             ),
@@ -484,17 +544,20 @@ def qualify(directory, workload, count, *, smoke=False):
                 "raw completion/token accounting invalid",
             )
         if smoke:
-            boundary = plugin["performance_measurement_start_ns"]
-            end = max(
-                r["timestamp_ns"]
-                for r in jsonl(directory, "timing-events")
-                if r.get("event") == "measured-token-commit"
-            )
+            window = smoke_execution_window(directory, plugin, assignment)
+            boundary, end = window["start_ns"], window["end_ns"]
+            result["structural_execution_window"] = window
             result["metrics"].update(_target_work(directory, boundary, set(assignment)))
+            result["metrics"]["target_work_scope"] = (
+                "structural smoke rank-0 physical forwards after runtime decode start; "
+                "including Target-only tails; TP replicas not multiplied"
+            )
         else:
             measurement = read(directory / "decode-performance.json")["measurement"]
             boundary, end = measurement["measurement_start_ns"], measurement["measurement_end_ns"]
-        result["pingpong"] = pingpong_metrics(directory, raw, assignment, boundary, end)
+        result["pingpong"] = pingpong_metrics(
+            directory, raw, assignment, boundary, end, smoke=smoke
+        )
         if count == 5:
             require(
                 result["pingpong"]["pipeline"]["physical_overlap_valid"],
@@ -515,7 +578,12 @@ def qualify(directory, workload, count, *, smoke=False):
                 ).values()
             )
         )
-    except (OSError, ValueError, TypeError, KeyError, RuntimeError) as error:
+    except KeyError as error:
+        result.update(
+            valid=False, performance_result=False,
+            errors=[f"missing mandatory PingPong evidence field: {error.args[0]}"],
+        )
+    except (OSError, ValueError, TypeError, RuntimeError) as error:
         result.update(valid=False, performance_result=False, errors=[str(error)])
     return result
 

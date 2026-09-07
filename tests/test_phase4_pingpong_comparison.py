@@ -9,16 +9,19 @@ from test_phase4_draft_production_comparison import append_rows
 from test_phase4_dual_microbatch_sweep import evidence as _evidence
 from test_phase4_dual_microbatch_sweep import sweep as _sweep
 
-from specrhythm.phase4.dual_rhythm import balanced_assignment
+from specrhythm.phase4.dual_rhythm import balanced_assignment, write_assignment
+from specrhythm.phase4.manifest import sha256_file
 from specrhythm.phase4.pingpong_comparison import (
     CELLS,
     compare,
     pingpong_metrics,
+    qualify,
     qualify_control,
     render,
     validate_cohort_execution,
 )
 from specrhythm.phase4.serial import token_prefix_hash
+from specrhythm.phase4.transport import CheckpointJsonl
 
 evidence = _evidence
 sweep = _sweep
@@ -334,6 +337,333 @@ def metrics_fixture(directory):
     return a, boundary, 147
 
 
+@pytest.fixture
+def singleton_smoke(evidence):
+    """Full offline qualification: A1/B1, verified terminal commits, no timing commits."""
+    from test_phase4_batch_invariant import diagnostic
+
+    from specrhythm.phase4.transport import CheckpointJsonl
+
+    root, _ = evidence
+    directory = root / "dual"
+    backend_path = directory / "draft-backend-report.json"
+    backend = json.loads(backend_path.read_text())
+    assignment, boundary, _ = metrics_fixture(directory)
+    backend.update(json.loads(backend_path.read_text()))
+    backend["draft_retired_request_count"] = 2
+    backend["draft_batch_statistics_by_purpose"]["proposal"]["histogram"] = {"1": 4}
+    backend["draft_batch_size_p50"] = 1
+    backend_path.write_text(json.dumps(backend))
+    workload = root / "smoke.jsonl"
+    workload.write_text("\n".join(json.dumps({
+        "request_id": rid,
+        "prompt_token_ids": [i + 1],
+        "prompt_length": 1,
+        "task_class": "code",
+        "prompt_text": "<|im_start|>user\ntest<|im_start|>assistant",
+        "maximum_new_tokens": 3,
+        "sampling_seed": 1664,
+        "tokenizer_fingerprint": "frozen",
+    }) for i, rid in enumerate(assignment)))
+    write_assignment(directory / "dual-rhythm.json", workload, 2)
+    raw_path = directory / "resident-dual.json"
+    raw = json.loads(raw_path.read_text())
+    raw.update(
+        dual_rhythm="pingpong", cohort_assignment=dict(assignment), request_count=2,
+        outputs=[{
+            "request_id": rid, "generated_tokens": 3,
+            "generated_token_ids": [10, 99, 99], "finish_reason": "length",
+        } for rid in assignment],
+    )
+    raw["draft_shutdown"]["draft_backend_report_sha256"] = sha256_file(backend_path)
+    raw_path.write_text(json.dumps(raw))
+    runtime_path = directory / "runtime-manifest.json"
+    runtime = json.loads(runtime_path.read_text())
+    runtime["git_commit"] = "9d176939673661a0621a28cc2ddccf6700a70afc"
+    runtime_path.write_text(json.dumps(runtime))
+    (directory / "plugin-report.json").write_text(json.dumps({
+        "dual_rhythm": "pingpong", "sampled_row_tp_consensus": True,
+        "measurement_start_ns": boundary,
+        "performance_measurement_start_ns": boundary,
+    }))
+    target_path = directory / "target-diagnostics.jsonl"
+    append_rows(target_path, [
+        {**diagnostic(), **r} for r in CheckpointJsonl(target_path).read()
+    ])
+    # The smoke helper never creates a formal decode performance report.
+    (directory / "decode-performance.json").unlink()
+    return directory, workload
+
+
+def test_two_singleton_smoke_qualifies_without_performance_commit_events(singleton_smoke):
+    directory, workload = singleton_smoke
+    result = qualify(directory, workload, 2, smoke=True)
+    assert result["valid"], result["errors"]
+    assert not result["performance_result"]
+    assert result["metrics"]["completed_requests"] == 2
+    assert result["pingpong"]["initial_cohort_sizes"] == {"A": 1, "B": 1}
+    assert result["execution_git_commit"] == "9d176939673661a0621a28cc2ddccf6700a70afc"
+    assert not CheckpointJsonl(directory / "timing-events.jsonl").read()
+    window = result["structural_execution_window"]
+    assert (window["start_ns"], window["end_ns"], window["terminal_request_count"]) == (1, 146, 2)
+    assert "TERMINAL" in window["end_source"]
+    pipeline = result["pingpong"]["pipeline"]
+    assert pipeline["overlap_fraction_of_makespan"] is None
+    assert pipeline["overlap_fraction_of_structural_execution"] == 20 / 145
+    assert pipeline["pipeline_fill_ms"] == 39 / 1e6
+    assert pipeline["pipeline_drain_ms"] == 30 / 1e6
+    assert "structural smoke" in pipeline["fill_scope"]
+    assert "structural smoke" in pipeline["drain_scope"]
+
+
+@pytest.mark.parametrize("performance_start", [None, "missing"])
+def test_smoke_uses_recorded_correctness_start_without_performance_start(
+    singleton_smoke, performance_start
+):
+    directory, workload = singleton_smoke
+    path = directory / "plugin-report.json"
+    plugin = json.loads(path.read_text())
+    plugin["performance_measurement_start_ns"] = performance_start
+    if performance_start == "missing":
+        del plugin["performance_measurement_start_ns"]
+    path.write_text(json.dumps(plugin))
+    result = qualify(directory, workload, 2, smoke=True)
+    assert result["valid"], result["errors"]
+    assert result["structural_execution_window"]["start_source"].endswith(
+        ":measurement_start_ns"
+    )
+
+
+@pytest.mark.parametrize("event_time", [50, 1000])
+def test_smoke_end_ignores_optional_performance_commit_timestamps(singleton_smoke, event_time):
+    directory, workload = singleton_smoke
+    append_rows(directory / "timing-events.jsonl", [
+        {"event": "measured-token-commit", "timestamp_ns": event_time}
+    ])
+    result = qualify(directory, workload, 2, smoke=True)
+    assert result["valid"], result["errors"]
+    assert result["structural_execution_window"]["end_ns"] == 146
+
+
+def test_smoke_cli_requalifies_retained_inputs_without_rewriting_them(singleton_smoke):
+    import subprocess
+    import sys
+
+    directory, workload = singleton_smoke
+    (directory / "qualification.json").write_text(json.dumps({
+        "valid": False, "errors": ["max() arg is an empty sequence"],
+    }))
+    before = {p: sha256_file(p) for p in directory.iterdir() if p.is_file()}
+    output = directory / "qualification-smoke-requalified.json"
+    run = subprocess.run([
+        sys.executable, "-m", "specrhythm.phase4.pingpong_comparison", "validate",
+        "--run-root", str(directory), "--workload", str(workload),
+        "--request-count", "2", "--smoke", "--output", str(output),
+    ], capture_output=True, text=True, timeout=30)
+    assert run.returncode == 0, run.stdout + run.stderr
+    assert json.loads(output.read_text())["valid"]
+    assert all(sha256_file(p) == digest for p, digest in before.items())
+
+
+@pytest.mark.parametrize("failure, expected", [
+    ("states", "request state evidence is empty"),
+    ("terminal", "not TERMINAL"),
+    ("member", "requests did not all terminate"),
+    ("timestamp", "state timestamps are not strictly monotonic"),
+    ("start", "smoke lacks a valid runtime setup/decode start timestamp"),
+    ("reversed", "TERMINAL timestamp must follow the runtime start"),
+    ("rank_empty", "mandatory TP rank timing intervals"),
+    ("rank_missing", "mandatory TP rank timing intervals"),
+    ("rank_field", "missing mandatory PingPong evidence field: host_start_ns"),
+    ("verifies", "missing pingpong Target verification evidence"),
+    ("cycles", "missing pingpong scheduler cycle evidence"),
+    ("target", "no measured Target forward evidence"),
+    ("initial", "both cohorts must publish initial proposals"),
+])
+def test_smoke_missing_mandatory_evidence_has_material_error(singleton_smoke, failure, expected):
+    directory, workload = singleton_smoke
+    names = {
+        "states": "request-state-events", "terminal": "request-state-events",
+        "member": "request-state-events", "timestamp": "request-state-events",
+        "rank_empty": "verification-events", "rank_missing": "verification-events",
+        "rank_field": "verification-events", "verifies": "verification-events",
+        "cycles": "scheduler-events", "target": "target-diagnostics",
+    }
+    if failure in names:
+        path = directory / (names[failure] + ".jsonl")
+        rows = CheckpointJsonl(path).read()
+        if failure in ("states", "verifies", "cycles", "target"):
+            rows = []
+        elif failure == "terminal":
+            rows = [r for r in rows if r["destination_state"] != "TERMINAL"]
+        elif failure == "member":
+            rows = [r for r in rows if r["request_id"] != "b"]
+        elif failure == "timestamp":
+            rows[-1]["timestamp_ns"] = None
+        elif failure == "rank_empty":
+            rows[0]["target_rank_intervals"] = []
+        elif failure == "rank_missing":
+            del rows[0]["target_rank_intervals"]
+        else:
+            del rows[0]["target_rank_intervals"][0]["host_start_ns"]
+        append_rows(path, rows)
+    elif failure == "initial":
+        path = directory / "draft-work-events.jsonl"
+        rows = CheckpointJsonl(path).read()
+        for row in rows:
+            if row["result"].get("proposal"):
+                row["result"]["proposal"]["round_id"] = 1
+        append_rows(path, rows)
+    else:
+        path = directory / "plugin-report.json"
+        plugin = json.loads(path.read_text())
+        plugin["performance_measurement_start_ns"] = 200 if failure == "reversed" else "bad"
+        path.write_text(json.dumps(plugin))
+    result = qualify(directory, workload, 2, smoke=True)
+    assert not result["valid"] and not result["performance_result"]
+    assert expected in result["errors"][0]
+    assert "empty sequence" not in result["errors"][0]
+
+
+def test_initial_work_and_empty_cohort_reject_before_reductions():
+    args = list(execution())
+    args[2] = []
+    with pytest.raises(ValueError, match="missing pingpong Draft work evidence"):
+        validate_cohort_execution(*args)
+    args = list(execution())
+    args[0] = {"a": "A", "b": "A"}
+    with pytest.raises(ValueError, match="nonempty A and B"):
+        validate_cohort_execution(*args)
+    args = list(execution())
+    # Valid, nonempty work on A alone cannot stand in for initial work on B.
+    args[2] = [w for w in args[2] if w["logical_cohort"] == "A"]
+    with pytest.raises(ValueError, match="missing initial proposals for one cohort"):
+        validate_cohort_execution(*args)
+
+
+def test_metrics_missing_target_forwards_has_domain_error(tmp_path):
+    assignment, boundary, end = metrics_fixture(tmp_path)
+    append_rows(tmp_path / "target-diagnostics.jsonl", [])
+    with pytest.raises(ValueError, match="missing Target forward evidence"):
+        pingpong_metrics(tmp_path, {}, assignment, boundary, end)
+
+
+def test_smoke_optional_empty_overlap_waits_clipping_and_statistics(singleton_smoke):
+    from collections import Counter
+
+    from specrhythm.phase4.draft_metrics import batch_statistics
+    from specrhythm.phase4.dual_runner import build_cycle_and_overlap_events
+
+    directory, workload = singleton_smoke
+    path = directory / "draft-work-events.jsonl"
+    drafts = CheckpointJsonl(path).read()
+    for row in drafts:
+        interval = row["result"].get("draft_gpu_interval")
+        if interval:
+            # Short, recorded model forwards inside each host work interval;
+            # no intersection with any Target interval in this CPU fixture.
+            interval["host_end_ns"] = interval["host_start_ns"] + 1
+            interval["cuda_elapsed_ns"] = 1
+    append_rows(path, drafts)
+    _, overlaps = build_cycle_and_overlap_events(
+        drafts, CheckpointJsonl(directory / "verification-events.jsonl").read()
+    )
+    append_rows(directory / "overlap-events.jsonl", overlaps)
+    result = qualify(directory, workload, 2, smoke=True)
+    assert result["valid"], result["errors"]
+    pipeline = result["pingpong"]["pipeline"]
+    assert not pipeline["physical_overlap_valid"]
+    assert pipeline["overlap_interval_count"] == pipeline["cross_cohort_intersection_count"] == 0
+    assert pipeline["observed_overlap_ms"] == pipeline["target_waiting_for_draft_ms"] == 0
+    assert pipeline["target_waiting_for_draft_count"] == 0
+    assert pipeline["draft_waiting_for_target_ms"] is None
+    assert result["pingpong"]["capacity_clipped_cohorts"] == []
+    stats = batch_statistics(Counter())
+    assert stats["count"] == 0
+    assert all(stats[k] is None for k in ("min", "max", "p10", "p50", "p90", "mean"))
+
+
+@pytest.mark.parametrize("count", [5, 100])
+def test_formal_runs_still_require_real_multi_request_draft_forward(singleton_smoke, count):
+    directory, workload = singleton_smoke
+    raw_path = directory / "resident-dual.json"
+    backend_path = directory / "draft-backend-report.json"
+    raw, backend = json.loads(raw_path.read_text()), json.loads(backend_path.read_text())
+    raw.update(request_count=count, outputs=[raw["outputs"][0]] * count)
+    backend["draft_retired_request_count"] = count
+    backend_path.write_text(json.dumps(backend))
+    raw["draft_shutdown"]["draft_backend_report_sha256"] = sha256_file(backend_path)
+    raw_path.write_text(json.dumps(raw))
+    result = qualify(directory, workload, count)
+    assert not result["valid"]
+    assert result["errors"] == ["no actual multi-request Draft proposal forward"]
+
+
+@pytest.mark.parametrize("count, overlap, valid", [(5, True, True), (5, False, False),
+                                                  (100, True, True), (100, False, True)])
+def test_formal_boundary_and_overlap_policy_unchanged(
+    singleton_smoke, monkeypatch, count, overlap, valid
+):
+    """Isolate the formal qualifier's boundary/gate wiring after shared material checks."""
+    import specrhythm.phase4.pingpong_comparison as module
+
+    directory, workload = singleton_smoke
+    requests = []
+    template = json.loads(workload.read_text().splitlines()[0])
+    for i in range(count):
+        requests.append({
+            **template, "request_id": f"r{i}", "maximum_new_tokens": 16,
+            "task_class": "code" if i < count * 0.6 else (
+                "chat" if i < count * 0.8 else "summarization"
+            ),
+        })
+    workload.write_text("\n".join(json.dumps(r) for r in requests))
+    (directory / "dual-rhythm.json").unlink()
+    write_assignment(directory / "dual-rhythm.json", workload, count)
+    raw_path = directory / "resident-dual.json"
+    raw = json.loads(raw_path.read_text())
+    raw.update(
+        request_count=count, cohort_assignment=dict(balanced_assignment(r["request_id"]
+                                                                       for r in requests)),
+        outputs=[{**raw["outputs"][0], "request_id": r["request_id"], "finish_reason": "stop"}
+                 for r in requests],
+    )
+    raw_path.write_text(json.dumps(raw))
+    performance = directory / "decode-performance.json"
+    performance.write_text(json.dumps({"measurement": {
+        "measurement_start_ns": 7, "measurement_end_ns": 145,
+    }}))
+
+    measured_tokens = 1487
+
+    def summary(*args, **kwargs):
+        assert not kwargs["smoke"] and not kwargs["singleton_cohort_smoke"]
+        return {"valid": True, "errors": [], "performance_result": True,
+                "metrics": {"measured_committed_tokens": measured_tokens}}
+
+    def metrics(directory, raw, assignment, boundary, end, *, smoke=False):
+        assert (boundary, end) == (7, 145)  # Not plugin start=1 / last TERMINAL=146.
+        assert not smoke
+        return {"pipeline": {"physical_overlap_valid": overlap}}
+
+    monkeypatch.setattr(module, "summarize_run", summary)
+    monkeypatch.setattr(module, "pingpong_metrics", metrics)
+    result = qualify(directory, workload, count)
+    assert result["valid"] is valid, result["errors"]
+    assert "structural_execution_window" not in result
+    if not valid:
+        assert result["errors"] == ["corrected-5 requires physical cross-cohort overlap"]
+    if count == 100:
+        measured_tokens = 1486
+        result = qualify(directory, workload, count)
+        assert result["errors"] == ["corrected-100 output limit/token accounting differs"]
+        measured_tokens = 1487
+    # Formal qualification must never fall back to smoke terminal boundaries.
+    performance.unlink()
+    result = qualify(directory, workload, count)
+    assert not result["valid"] and "decode-performance.json" in result["errors"][0]
+
+
 def test_full_metrics_artifact_join_counts_actual_intersections_once(tmp_path):
     assignment, boundary, end = metrics_fixture(tmp_path)
     result = pingpong_metrics(tmp_path, {}, assignment, boundary, end)
@@ -344,6 +674,8 @@ def test_full_metrics_artifact_join_counts_actual_intersections_once(tmp_path):
     assert result["pipeline"]["observed_overlap_ms"] == 20 / 1e6
     assert result["pipeline"]["pipeline_fill_ms"] == 39 / 1e6
     assert result["pipeline"]["pipeline_drain_ms"] == 31 / 1e6
+    assert result["pipeline"]["overlap_fraction_of_makespan"] == 20 / (end - boundary)
+    assert "overlap_fraction_of_structural_execution" not in result["pipeline"]
     assert result["pipeline"]["cycles_with_both_stages_active"] == 2
     assert result["pipeline"]["cycles_with_only_one_stage_active"] == 2
     assert result["pipeline"]["draft_waiting_for_target_ms"] is None
