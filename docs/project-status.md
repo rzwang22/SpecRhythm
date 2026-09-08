@@ -1,6 +1,6 @@
 # SpecRhythm project status
 
-Last updated: 2026-09-05
+Last updated: 2026-09-09
 
 Maintenance rule: every code-changing PR updates this file with its scope, status, evidence,
 known limitations, and next gate before that PR is considered complete.
@@ -35,6 +35,63 @@ claims.
 | [#2 simulator-semantics-v0.2](https://github.com/rzwang22/SpecRhythm/pull/2) | frozen draft; Phase 2 complete, not merged | proposal lifecycle, deterministic tree oracle, tree-aware allocators, base-preserving residual controls, Phase-2 nested search pools and common-snapshot oracle replay, path-aware eager and accounting | pure-Python proxy and oracle upper bounds only; no deployable oracle, measured search cost, GPU integration, or performance claim |
 | [#3 gpu-integration-v0.1](https://github.com/rzwang22/SpecRhythm/pull/3) | draft; Phase 3B.1 and corrected-20 Phase 3C.2 complete; Phase 3C.3 corrected-100 awaiting server run | hardened multi-rank primitives, corrected R3-real traces, common-prefix replay, request-bootstrap statistics, 2x shell decomposition and diagnostic learned ranker | user-run 3×A800 correctness artifacts plus Mac CPU tests; no packed-tree/serving engine, Dual-Batch, SLO, calibrated latency or speedup claim |
 | [#4 vllm-serving-v0.1](https://github.com/rzwang22/SpecRhythm/pull/4) | draft; Gate1/Gate2 Outcome A; Gate3 numerical qualification complete; Phase 4B.2 infrastructure implemented, A800 run pending | resident Target/Serial/Dual correctness, frozen Gate3 localization, post-setup performance boundary, exact commit accounting and cross-mode metric gate | no GPU performance result yet; no tolerance, packed tree, eager, KVConnector, SLO or goodput claim |
+
+## Phase S: Serving Workloads & Arrival Replay
+
+**S0 — Mixed Real-Text Workload Foundation** adds independent versioned serving
+requests, source acquisition/locking, deterministic selection, real Qwen3
+tokenization, timestamp-only Mooncake composition, full read-only validation and
+sealed review artifacts. Work started from verified branch head
+`0684a29800519c02a7b3c2558952ad344b17a9bd` on `codex/vllm-serving-v0.1` with a clean
+tree; PR #4 remains Draft/Open/unmerged. The Phase 4 entries below record the
+earlier resident work; S0 changes none of its execution or historical evidence.
+
+The real main1000 quotas are chat/code/summary/reasoning 300/300/200/200;
+calibration200 is 50 per class, with joint deduplication before splitting.
+Selection seed is 1664, independent class-slot seed 1665, thinking is disabled,
+natural EOS is enabled and full template token counts obey the 4096 context
+constraint including a four-token reserve. The source lock pins all original
+train files, Mooncake trace and remote tokenizer by commit and file SHA256.
+No source answers, synthetic replacements, Mooncake anonymous lengths or prefix
+identities become request content.
+
+Local Python 3.11 real-data construction and independent full validation are
+**PASS**, with 1000/200 requests and source/artifact hashes unchanged across
+validation. Separate-directory rebuilding also produces identical JSONL and
+core manifest. Semantic workload SHA256 is
+`05b5f2efad0a4ac1771c9a18d847c08d95d360432e1c9cfa55a82ba2f63cba02`.
+Server-local Qwen3-0.6B/Qwen3-32B tokenizer alignment is **PENDING**; the local
+remote-tokenizer build is not server acceptance. Synthetic fixture tests are
+separate and default CI downloads no dataset or model. Linux Python 3.9/3.12
+retain the full suite; Python 3.11 additionally exercises the S0 CLI/contracts.
+
+S0 local checks: 62 fixture tests pass on Python 3.9.6 and 3.11.15; the final
+Python 3.9 full suite passes 1425 tests with 3 skips, and the Phase 4 suite passes
+1182 with 2 skips, with the pinned vLLM source audit enabled. Ruff, compileall,
+staged diff checks and all eight runbook Bash blocks/embedded Python pass.
+Linux CI results for the delivered commit are linked from PR #4.
+
+See [S0 design](phase-s0-workload-design.md) for source mappings, algorithms,
+schema/hash contracts and the real-data summary, and [S0 CPU runbook](phase-s0-workload-runbook.md)
+for exact server paths, fetch/import, full validation, dual-tokenizer checking,
+rebuild and review bundle commands. Real data and generated workloads stay outside
+Git. The coding agent performed no GPU execution, model inference or AutoDL
+connection. The next step is server CPU data acceptance and twenty-prompt review.
+
+| Stage | Scope | Status |
+| --- | --- | --- |
+| S0 | Four-class real-text construction and validation | Implemented; local real build PASS; server data acceptance pending |
+| S1 | Long-output resident three-mode baseline and general result validation | Future; not started |
+| S2 | Target dynamic arrival, queueing and streaming timestamps | Future; not started |
+| S3 | Serial and dynamic PingPong join/leave/setup | Future; not started |
+| S4 | SLO and load calibration on the independent calibration set | Future; not started |
+| S5 | Formal 1000-request serving comparison | Future; not started |
+
+Phase 4C retains its Dual-Eager name. The existing Phase 4 primary evaluation is
+resident decode-only; no runner consumes the new arrival field yet. Dynamic
+mixed prefill/decode, calibrated SLO, PD/KV handoff and a new GPU performance claim
+are outside S0. `slo_policy_ref=null` / `calibration_status=pending` is not an
+accepted calibrated experiment. Stop after S0 for data acceptance.
 
 ## Phase 4A.0–4A.1: vLLM freeze and Serial Disaggregated correctness
 
