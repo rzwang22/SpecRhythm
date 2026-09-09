@@ -16,6 +16,14 @@ from specrhythm.phase4.manifest import atomic_write_json, sha256_file
 from specrhythm.phase4.owned_processes import OwnedProcesses, process_table
 from specrhythm.phase4.process_lifecycle import run_owned_target
 from specrhythm.serving.common import DataError, read_json, require
+from specrhythm.serving.s1_policy import (
+    COMPARISON_SCHEMA,
+    G0_SCHEMA,
+    RESULT_SCHEMA,
+    environment_evidence,
+    policy_fields,
+    validate_policy,
+)
 from specrhythm.serving.s1_preflight import (
     clean_environment,
     prepare,
@@ -45,10 +53,20 @@ def child_command(*args):
 
 def run_plan(gate):
     if gate == "G1":
-        return [("raw-target", 0), ("target", 0), ("serial", 0), ("pingpong", 0), ("pingpong", 1)]
+        return [("target", 0), ("serial", 0), ("pingpong", 0), ("pingpong", 1)]
     if gate == "G2":
         return [(mode, 0) for mode in MODES]
     return [(mode, index) for index, order in enumerate(ROTATION) for mode in order]
+
+
+def validate_root_policy(root, selected):
+    """Reject old roots before launcher/status files can be written or engines started."""
+    g0 = read_json(root / "g0.json")
+    validate_policy(g0, G0_SCHEMA)
+    require(g0.get("valid") is True, "S1-P G0 did not pass")
+    for gate in SUBSET if selected == "all" else (selected,):
+        manifest, _ = load_execution(root / SUBSET[gate] / "execution-manifest.json")
+        require(manifest["execution"] == g0["execution"], "G0/manifest execution identity differs")
 
 
 def previous_completed(attempts, execution_sha256):
@@ -172,6 +190,7 @@ def run_attempt(root, gate, mode, repeat, manifest_path):
     atomic_write_json(
         root / "stage.json",
         {
+            **policy_fields(),
             "gate": gate,
             "mode": mode,
             "repeat": repeat,
@@ -230,6 +249,7 @@ def run_attempt(root, gate, mode, repeat, manifest_path):
                 directory / "draft-owner.json",
                 {
                     "root_pid": draft.pid,
+                    "launch_environment": {**environment_evidence(), "CUDA_VISIBLE_DEVICES": "0"},
                     "observed": list(owner.observed.values()),
                     "target_token": draft_token,
                     "draft_socket": str(socket),
@@ -273,11 +293,13 @@ def run_attempt(root, gate, mode, repeat, manifest_path):
         write_once(
             directory / "command.json",
             {
+                **policy_fields(),
                 "argv": command,
                 "mode": mode,
                 "execution_sha256": manifest["manifest_sha256"],
                 "fresh_engine_lifecycle": True,
                 "timeout_seconds": 14400,
+                "launch_environment": environment_evidence(),
             },
         )
         rc, lifecycle = run_owned_target(
@@ -317,7 +339,10 @@ def run_attempt(root, gate, mode, repeat, manifest_path):
     if mode == "raw-target":
         raw = read_json(directory / "raw.json") if (directory / "raw.json").is_file() else {}
         report = {
+            "schema_version": RESULT_SCHEMA,
+            **policy_fields(),
             "valid": rc == 0 and lifecycle["run_valid"] and raw.get("valid") is True,
+            "errors": raw.get("errors", []),
             "mode": mode,
             "execution_sha256": manifest["manifest_sha256"],
             "raw_reference": raw,
@@ -341,6 +366,7 @@ def require_previous_gate(root, gate):
     previous = {"G2": "G1", "G3": "G2"}.get(gate)
     if previous:
         report = read_json(root / previous / "comparison.json")
+        validate_policy(report, COMPARISON_SCHEMA)
         require(report["valid"], "previous S1 gate did not pass", gate=previous)
         for path, checksum in report["run_seals"].items():
             directory = root / path
@@ -356,7 +382,7 @@ def offline_comparison(root, gate):
     """Independent read-only requalification; this path never dispatches a GPU child."""
     manifest_path = root / SUBSET[gate] / "execution-manifest.json"
     manifest, _ = load_execution(manifest_path, verify_parent=True)
-    reports, seals, raw_reference = {mode: [] for mode in MODES}, {}, None
+    reports, seals = {mode: [] for mode in MODES}, {}
     for mode, repeat in run_plan(gate):
         done = previous_completed(
             (root / gate / f"{repeat}-{mode}").glob("attempt-*"), manifest["manifest_sha256"]
@@ -369,18 +395,15 @@ def offline_comparison(root, gate):
         )
         directory, result = done
         seals[str(directory.relative_to(root))] = sha256_file(directory / "seal.json")
-        if mode == "raw-target":
-            raw_reference = result["raw_reference"]
-        else:
-            recomputed = inspect_run(manifest_path, directory, mode)
-            require(
-                recomputed == result,
-                "offline run requalification differs from sealed result",
-                directory=str(directory),
-                errors=recomputed["errors"],
-            )
-            reports[mode].append(recomputed)
-    result = compare_results(reports, raw_reference=raw_reference)
+        recomputed = inspect_run(manifest_path, directory, mode)
+        require(
+            recomputed == result,
+            "offline run requalification differs from sealed result",
+            directory=str(directory),
+            errors=recomputed["errors"],
+        )
+        reports[mode].append(recomputed)
+    result = compare_results(reports)
     result.update(gate=gate, run_seals=seals, run_order=run_plan(gate))
     return json.loads(json.dumps(result))
 
@@ -417,6 +440,7 @@ def gate_capacity(root, gate, manifest_path):
             actual[path] = checks
             valid &= all(c["available_blocks"] >= c["required_blocks"] for c in checks)
     report = {
+        **policy_fields(),
         "valid": bool(valid),
         "gate": gate,
         "status": "READY" if valid else "BLOCKED",
@@ -438,31 +462,30 @@ def gate_capacity(root, gate, manifest_path):
 
 
 def gate(root, selected):
+    validate_root_policy(root, selected)
     stages = ("G1", "G2", "G3") if selected == "all" else (selected,)
     for current in stages:
         require_previous_gate(root, current)
         manifest_path = root / SUBSET[current] / "execution-manifest.json"
         gate_capacity(root, current, manifest_path)
         reports = {mode: [] for mode in MODES}
-        raw_reference, seals = None, {}
+        seals = {}
         for mode, repeat in run_plan(current):
             directory, result = run_attempt(root, current, mode, repeat, manifest_path)
             seals[str(directory.relative_to(root))] = sha256_file(directory / "seal.json")
-            if mode == "raw-target":
-                raw_reference = result["raw_reference"]
-            else:
-                reports[mode].append(result)
-            # Stop at the first complete triangle that diverges, before more repeats.
+            reports[mode].append(result)
+            # Stop on invalid runs or input/config mismatch, never independent output differences.
             if all(reports.values()):
-                interim = compare_results(reports, raw_reference=raw_reference)
+                interim = compare_results(reports)
                 if not interim["valid"]:
                     write_once(
                         root / current / f"failed-comparison-{uuid.uuid4().hex[:8]}.json", interim
                     )
                     raise DataError(
-                        "S1 exact triangle failed; no later gate", errors=interim["errors"]
+                        "S1-P execution/input qualification failed; no later gate",
+                        errors=interim["errors"],
                     )
-        comparison = compare_results(reports, raw_reference=raw_reference)
+        comparison = compare_results(reports)
         comparison["run_seals"] = seals
         comparison["gate"] = current
         comparison["run_order"] = run_plan(current)
@@ -475,7 +498,9 @@ def gate(root, selected):
         else:
             write_once(destination, comparison)
         require(comparison["valid"], "S1 gate comparison failed")
-        atomic_write_json(root / "stage.json", {"gate": current, "state": "PASS"})
+        atomic_write_json(
+            root / "stage.json", {**policy_fields(), "gate": current, "state": "PASS"}
+        )
     return 0
 
 
@@ -493,6 +518,7 @@ def launcher_alive(root):
 
 
 def start(root, selected):
+    validate_root_policy(root, selected)
     require(not launcher_alive(root), "S1 launcher already running")
     attempt = uuid.uuid4().hex[:12]
     log = root / f"launcher-{attempt}.log"
@@ -518,6 +544,7 @@ def supervise(root, selected, launch_id):
         atomic_write_json(
             root / "launcher.json",
             {
+                **policy_fields(),
                 "pid": os.getpid(),
                 "start_identity": identity["start_identity"],
                 "launch_id": launch_id,
@@ -532,6 +559,7 @@ def supervise(root, selected, launch_id):
             atomic_write_json(
                 root / "stage.json",
                 {
+                    **policy_fields(),
                     "state": getattr(error, "details", {}).get("status", "FAILED"),
                     "error": str(error),
                     "details": getattr(error, "details", {}),
@@ -542,7 +570,9 @@ def supervise(root, selected, launch_id):
                 flush=True,
             )
         finally:
-            value = {"launch_id": launch_id, "exit_code": status, "gate": selected}
+            value = {
+                **policy_fields(), "launch_id": launch_id, "exit_code": status, "gate": selected
+            }
             write_once(root / f"exit-code-{launch_id}.json", value)
             atomic_write_json(root / "exit-code.json", value)
         return status
@@ -588,6 +618,8 @@ def main(argv=None):
             return prepare(root, args.s0.resolve(), args.vllm_source)
         if args.command in ("start", "resume"):
             return start(root, args.gate)
+        if args.command in ("supervise", "gate", "child", "draft-child"):
+            validate_root_policy(root, args.gate)
         if args.command == "supervise":
             return supervise(root, args.gate, args.launch_id)
         if args.command == "gate":
@@ -610,6 +642,8 @@ def main(argv=None):
             result = run_consumer(args.mode, args.manifest, args.directory, root)
             return 0 if result.get("valid") else 1
         if args.command == "draft-child":
+            load_execution(args.manifest, verify_parent=True)
+            environment_evidence()
             from specrhythm.phase4.batched_draft_service import serve_batched_draft
             from specrhythm.phase4.config import load_phase4_config
             from specrhythm.phase4.dual_service import run_dual_draft_service

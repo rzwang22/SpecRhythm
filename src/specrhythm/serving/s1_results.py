@@ -1,4 +1,4 @@
-"""Exact S1 three-consumer validation and decode-only evidence, independent of old gates."""
+"""S1-P internal execution validation and resident decode-only performance observations."""
 
 from __future__ import annotations
 
@@ -17,9 +17,15 @@ from specrhythm.phase4.process_lifecycle import validate_lifecycle_artifact
 from specrhythm.phase4.serial import token_prefix_hash
 from specrhythm.phase4.vllm_diagnostics import validate_target_diagnostic
 from specrhythm.serving.common import integer, read_json, require
+from specrhythm.serving.s1_policy import (
+    COMPARISON_SCHEMA,
+    EFFECTIVE_SCHEMA,
+    RESULT_SCHEMA,
+    SEAL_SCHEMA,
+    policy_fields,
+    validate_policy,
+)
 from specrhythm.serving.s1_workload import MODES, PROFILE_ENV, load_execution, write_once
-
-RESULT_SCHEMA = "specrhythm.s1-result.v1"
 
 
 def jsonl(directory, name, *, optional=False):
@@ -323,12 +329,24 @@ def workload_metrics(requests, start, end):
         selected = [r for r in requests if task == "overall" or r["task_class"] == task]
         n = len(selected)
         classes[task] = {
+            "completed_requests": n,
             "output_length": distribution(r["generated_tokens"] for r in selected),
+            "generated_tokens": sum(r["generated_tokens"] for r in selected),
+            "untimed_bootstrap_tokens": sum(r["untimed_output_tokens"] for r in selected),
+            "eos_terminated_requests": sum(r["eos_terminated"] for r in selected),
+            "max_token_terminated_requests": sum(r["max_token_termination"] for r in selected),
+            "setup_terminal_requests": sum(r["terminal_in_setup"] for r in selected),
             "eos_ratio": sum(r["eos_terminated"] for r in selected) / n if n else None,
             "cap_ratio": sum(r["max_token_termination"] for r in selected) / n if n else None,
             "timed_committed_tokens": sum(r["timed_committed_tokens"] for r in selected),
         }
     return {
+        "completed_requests": len(requests),
+        "generated_tokens": classes["overall"]["generated_tokens"],
+        "untimed_bootstrap_tokens": classes["overall"]["untimed_bootstrap_tokens"],
+        "setup_terminal_requests": classes["overall"]["setup_terminal_requests"],
+        "eos_terminated_requests": classes["overall"]["eos_terminated_requests"],
+        "max_token_terminated_requests": classes["overall"]["max_token_terminated_requests"],
         "decode_makespan_ms": makespan,
         "timed_committed_tokens": timed,
         "throughput_tokens_per_second": timed / (makespan / 1000) if timed else None,
@@ -350,6 +368,7 @@ def inspect_run(manifest_path: Path, directory: Path, mode: str):
     }
     report = {
         "schema_version": RESULT_SCHEMA,
+        **policy_fields(),
         "mode": mode,
         "valid": False,
         "performance_result": False,
@@ -359,6 +378,7 @@ def inspect_run(manifest_path: Path, directory: Path, mode: str):
         "logical_sha256": manifest["logical_sha256"],
         "arrival_replay_enabled": False,
         "execution_git_commit": manifest["execution"]["git_commit"],
+        "execution_configuration": manifest["execution"],
         "checks": checks,
         "requests": [],
         "errors": [],
@@ -377,8 +397,16 @@ def inspect_run(manifest_path: Path, directory: Path, mode: str):
             and lifecycle.get("target_exit_status") == 0,
             "owned execution/cleanup invalid",
         )
+        exit_code = read_json(directory / "exit-code.json")
+        require(
+            exit_code.get("effective_exit_code") == 0
+            and exit_code.get("coordinator_exit_code") == 0,
+            "nonzero owned execution exit code",
+            exit_code=exit_code,
+        )
         checks["lifecycle"]["valid"] = True
         effective = read_json(directory / "s1-effective-runtime.json")
+        validate_policy(effective, EFFECTIVE_SCHEMA)
         require(
             effective["execution_sha256"] == manifest["manifest_sha256"],
             "effective runtime execution identity mismatch",
@@ -509,6 +537,8 @@ def inspect_run(manifest_path: Path, directory: Path, mode: str):
                 "Target_physical_forwards": forwards,
                 "Target_forward_count": len(forwards),
                 "Target_query_tokens": sum(r["Q"] for r in forwards),
+                "Target_batch_B": distribution(r["B"] for r in forwards),
+                "Target_query_Q": distribution(r["Q"] for r in forwards),
                 "Target_prefill_forwards": None,
                 "Target_prefill_status": "untimed; chunked prefill not fully captured",
                 "Target_host_interval_union_ms": interval_duration(
@@ -759,176 +789,175 @@ def round_differences(first, repeated):
     return differences
 
 
-def compare_results(results, *, raw_reference=None):
-    require(set(results) == set(MODES) and all(results.values()), "three S1 modes are required")
+def compare_results(results):
+    """Compare input identity and actual rates; never compare independent output sequences."""
+    require(set(results) == set(MODES) and all(results.values()), "three S1-P modes are required")
     baseline = results["target"][0]
-    expected = {r["request_id"]: r for r in baseline["requests"]}
-    errors, divergences, rounds = [], [], []
+    expected = {r["request_id"] for r in baseline["requests"]}
+    errors, observations = [], {}
     for mode, runs in results.items():
+        observations[mode] = []
         for index, result in enumerate(runs):
-            if result.get("valid") is not True or not all(
-                result["checks"][k]["valid"] for k in ("correctness", "measurement", "lifecycle")
+            validate_policy(result, RESULT_SCHEMA)
+            if result.get("mode") != mode or result.get("valid") is not True or result.get(
+                "errors"
+            ) or not all(
+                result["checks"][k]["valid"] is True and not result["checks"][k].get("errors")
+                for k in ("correctness", "measurement", "lifecycle")
             ):
                 errors.append(f"{mode}/{index}: invalid execution evidence")
-            if result["execution_sha256"] != baseline["execution_sha256"]:
-                errors.append(f"{mode}/{index}: execution/config identity differs")
+            if (
+                result["execution_sha256"] != baseline["execution_sha256"]
+                or result.get("logical_sha256") != baseline.get("logical_sha256")
+            ):
+                errors.append(f"{mode}/{index}: execution/config/input identity differs")
             if result.get("effective_runtime", {}).get("sampling") != baseline.get(
                 "effective_runtime", {}
             ).get("sampling"):
                 errors.append(f"{mode}/{index}: effective sampling differs")
-            actual = {r["request_id"]: r for r in result["requests"]}
-            if set(actual) != set(expected) or len(actual) != len(result["requests"]):
+            actual = {r["request_id"] for r in result["requests"]}
+            if actual != expected or len(actual) != len(result["requests"]):
                 errors.append(f"{mode}/{index}: completed request set differs")
-            for rid in sorted(set(actual) & set(expected)):
-                difference = first_divergence(expected[rid], actual[rid])
-                if difference:
-                    position = difference.get("position", -1)
-                    relevant = [r for r in result["round_semantics"] if r["request_id"] == rid]
-                    divergences.append(
-                        {
-                            "mode": mode,
-                            "repeat": index,
-                            "request_id": rid,
-                            **difference,
-                            "round_prefix_evidence": relevant,
-                            "generated_prefix": actual[rid]["generated_token_ids"][:position],
-                        }
-                    )
-                if (
-                    actual[rid]["timed_committed_tokens"]
-                    != expected[rid]["timed_committed_tokens"]
-                ):
-                    errors.append(f"{mode}/{index}/{rid}: measured output work differs")
-            rounds.append(
+            # This is within-run metric accounting, not equality with another run's output.
+            metrics = result["metrics"]
+            timed = sum(r["timed_committed_tokens"] for r in result["requests"])
+            try:
+                verify_finite_metrics(metrics)
+                require(timed == metrics["timed_committed_tokens"], "timed token metric differs")
+                rate = timed / (metrics["decode_makespan_ms"] / 1000) if timed else None
+                require(
+                    metrics["throughput_tokens_per_second"] == rate,
+                    "throughput does not use this run's actual timed tokens",
+                )
+            except (ValueError, TypeError, ZeroDivisionError) as error:
+                errors.append(f"{mode}/{index}: invalid measurement: {error}")
+            observations[mode].append(
                 {
-                    "mode": mode,
                     "repeat": index,
-                    "round_semantics_equal_to_first_mode_run": result["round_semantics"]
-                    == runs[0]["round_semantics"],
-                    "round_semantics": result["round_semantics"],
-                    "differences": round_differences(
-                        runs[0]["round_semantics"], result["round_semantics"]
-                    ),
+                    "metrics": metrics,
+                    "request_output_lengths": [
+                        {k: r[k] for k in (
+                            "request_id", "task_class", "generated_tokens",
+                            "untimed_output_tokens", "timed_committed_tokens",
+                            "finish_reason", "stop_reason", "terminal_in_setup",
+                        )}
+                        for r in result["requests"]
+                    ],
+                    "work": result.get("work"),
+                    "overlap": result.get("overlap"),
+                    "resources": result.get("resources"),
+                    "effective_runtime": result.get("effective_runtime"),
+                    "execution_configuration": result.get("execution_configuration"),
                 }
             )
-    if raw_reference is not None:
-        require(
-            raw_reference.get("valid") is True and raw_reference["repeated_run_deterministic"],
-            "smoke raw Target reference is invalid",
-        )
-        for raw_run in raw_reference["runs"]:
-            by_id = {r["request_id"]: r for r in raw_run}
-            if set(by_id) != set(expected) or len(by_id) != len(raw_run):
-                errors.append("raw Target reference request set differs")
-            for rid in set(by_id) & set(expected):
-                for field in ("generated_token_ids", "finish_reason", "stop_reason"):
-                    if by_id[rid][field] != expected[rid][field]:
-                        errors.append(f"raw Target reference differs: {rid}/{field}")
-    if divergences:
-        errors.append("exact generated output/termination divergence")
-    changed_rounds = [r for r in rounds if not r["round_semantics_equal_to_first_mode_run"]]
-    # Round differences are retained for review; full token inequality always blocks above.
     aggregation = {}
     for mode, runs in results.items():
-        if all(r.get("performance_result") for r in runs):
+        if not errors and all(r.get("performance_result") for r in runs):
             aggregation[mode] = {
                 k: {
                     "raw": [r["metrics"][k] for r in runs],
                     "median": statistics.median(r["metrics"][k] for r in runs),
                     "population_stdev": statistics.pstdev(r["metrics"][k] for r in runs),
                 }
-                for k in ("decode_makespan_ms", "throughput_tokens_per_second")
+                for k in (
+                    "decode_makespan_ms", "throughput_tokens_per_second",
+                    "generated_tokens", "timed_committed_tokens", "untimed_bootstrap_tokens",
+                )
             }
-    speedup = None
+    ratios = None
     if not errors and set(aggregation) == set(MODES):
-        speedup = {
+        ratios = {
             mode: {
                 "median_makespan_ratio": aggregation["target"]["decode_makespan_ms"]["median"]
                 / aggregation[mode]["decode_makespan_ms"]["median"],
                 "median_throughput_ratio": aggregation[mode]["throughput_tokens_per_second"][
                     "median"
-                ]
-                / aggregation["target"]["throughput_tokens_per_second"]["median"],
+                ] / aggregation["target"]["throughput_tokens_per_second"]["median"],
+                "target_timed_tokens_by_repeat": aggregation["target"]["timed_committed_tokens"][
+                    "raw"
+                ],
+                "mode_timed_tokens_by_repeat": aggregation[mode]["timed_committed_tokens"]["raw"],
+                "throughput_above_target": aggregation[mode]["throughput_tokens_per_second"][
+                    "median"
+                ] > aggregation["target"]["throughput_tokens_per_second"]["median"],
             }
             for mode in MODES
         }
+    counts = [r["metrics"]["timed_committed_tokens"] for runs in results.values() for r in runs]
     return {
-        "schema_version": "specrhythm.s1-comparison.v1",
+        "schema_version": COMPARISON_SCHEMA,
+        **policy_fields(),
+        "execution_sha256": baseline["execution_sha256"],
+        "logical_sha256": baseline.get("logical_sha256"),
         "valid": not errors,
         "errors": errors,
-        "divergences": divergences,
         "repeatability": {
-            "exact_tokens_and_termination": not divergences and not errors,
-            "round_differences": changed_rounds,
-            "round_order_policy": (
-                "compare stable request/round; cross-request interleaving ignored"
-            ),
-            "round_difference_explanation": (
-                "Full output/validity check failed; round differences do not waive that failure."
-                if changed_rounds and errors
-                else "Final tokens match. See per-request/round differences: changed proposal "
-                "IDs/lengths or acceptance shift verification boundaries. Scheduling root cause "
-                "requires retained cohort/scheduler records; it is not inferred from event order."
-                if changed_rounds
-                else None
-            ),
+            "performed": False,
+            "status": "NOT_REQUIRED",
+            "exact_tokens_and_termination": None,
+            "round_comparison_performed": False,
         },
-        "raw_reference_checked": raw_reference is not None,
+        "raw_reference_checked": False,
         "metrics": aggregation,
+        "observations": observations,
         "matched_work": {
-            "exact_timed_output_equal": not errors,
-            "raw_by_mode": {
-                mode: [
-                    {
-                        "timed_committed_tokens": r["metrics"]["timed_committed_tokens"],
-                        **{
-                            k: r.get("work", {}).get(k)
-                            for k in (
-                                "verification_rounds",
-                                "proposed_tokens",
-                                "accepted_tokens",
-                                "rejected_tokens",
-                                "Target_forward_count",
-                                "Target_query_tokens",
-                            )
-                        },
-                    }
-                    for r in runs
-                ]
-                for mode, runs in results.items()
-            },
-            "interpretation": "Compare actual B, Q, proposal/acceptance work and time together",
+            "status": "NOT_ASSESSED",
+            "exact_timed_output_equal": None,
+            "equal_timed_token_counts": len(set(counts)) == 1,
+            "interpretation": (
+                "Equal budgets or token counts do not prove equal sequences or computation. "
+                "Compare each run's actual tokens, B, Q, proposal/acceptance work and time."
+            ),
         },
-        "speedup": speedup,
-        "label": "production vLLM Batched Draft end-to-end improvement",
+        "performance_ratios": ratios,
+        "ratio_interpretation": (
+            "Ratios of mode-level medians, using each run's actual timed tok/s. "
+            "Makespan ratios are accompanied by actual output counts, not equal-work speedup."
+        ),
+        "label": "resident decode-only three-mode performance observation",
         "pure_batching_claim": False,
+        "end_to_end_improvement_claim": False,
         "new_serving_SLO_result": False,
     }
 
 
 def seal_run(directory, report):
+    validate_policy(report, RESULT_SCHEMA)
     write_once(directory / "result.json", report)
     write_once(
         directory / "seal.json",
         {
-            p.name: sha256_file(p)
-            for p in sorted(directory.iterdir())
-            if p.is_file() and p.name != "seal.json"
+            "schema_version": SEAL_SCHEMA,
+            **policy_fields(),
+            "execution_sha256": report["execution_sha256"],
+            "files": {
+                p.name: sha256_file(p)
+                for p in sorted(directory.iterdir())
+                if p.is_file() and p.name != "seal.json"
+            },
         },
     )
 
 
 def verify_seal(directory):
     sealed = read_json(directory / "seal.json")
+    validate_policy(sealed, SEAL_SCHEMA)
+    inventory = sealed["files"]
     require(
-        set(sealed)
+        set(inventory)
         == {p.name for p in directory.iterdir() if p.is_file() and p.name != "seal.json"},
         "sealed run file inventory changed",
     )
-    for name, checksum in sealed.items():
+    for name, checksum in inventory.items():
         require(
             Path(name).name == name and sha256_file(directory / name) == checksum,
             "sealed run checksum mismatch",
             file=name,
         )
-    return read_json(directory / "result.json")
+    report = read_json(directory / "result.json")
+    validate_policy(report, RESULT_SCHEMA)
+    require(
+        report["execution_sha256"] == sealed["execution_sha256"],
+        "sealed policy/execution identity differs",
+    )
+    return report

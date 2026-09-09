@@ -11,10 +11,11 @@ from pathlib import Path
 
 from specrhythm.phase4.manifest import sha256_file
 from specrhythm.serving.common import digest, integer, read_json, require
+from specrhythm.serving.s1_policy import EXECUTION_SCHEMA, policy_fields, validate_policy
 from specrhythm.serving.schema import ServingWorkloadRequest, load_requests
 
 PROFILE_ENV = "SR_S1_EXECUTION_MANIFEST"
-SCHEMA = "specrhythm.s1-execution.v1"
+SCHEMA = EXECUTION_SCHEMA
 S0_COMMIT = "0dd5750384eb63bd4d2ef3b32163d819862e0fbd"
 FROZEN = {
     "main1000.jsonl": "19979cc335b48a2a5c2d64e2a18c29b0b523d9a970733f4c6744eb5cea4779ef",
@@ -138,6 +139,7 @@ def create_manifest(directory, subset, rows, parent, execution):
     }
     value = {
         "schema_version": SCHEMA,
+        **policy_fields(),
         "logical": logical,
         "logical_sha256": digest(logical),
         "parent": parent,
@@ -153,7 +155,7 @@ def create_manifest(directory, subset, rows, parent, execution):
 
 def load_execution(path: Path, *, verify_parent=False):
     value = read_json(path)
-    require(value.get("schema_version") == SCHEMA, "unsupported S1 execution schema")
+    validate_policy(value, SCHEMA)
     require(
         value.get("manifest_sha256")
         == digest({k: v for k, v in value.items() if k != "manifest_sha256"}),
@@ -307,9 +309,11 @@ def require_reference_or_s1(reference_path, performance):
 
 def pending_reference_comparison():
     return {
+        **policy_fields(),
         "performed": False,
+        "status": "NOT_REQUIRED",
         "all_sequences_equal": None,
         "valid": None,
         "errors": [],
-        "reason": "S1 exact comparison required after independent runs",
+        "reason": "S1-P qualifies each run internally; independent output equality not required",
     }

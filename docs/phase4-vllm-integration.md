@@ -3,18 +3,21 @@
 Phase 4 is a stacked Draft PR based on the frozen Phase 3 branch. It does not change simulator
 policies or reinterpret Phase 3 full-context measurements as serving latency.
 
-## Phase S1 opt-in integration
+## Phase S1-P opt-in integration
 
 The [S1 profile](phase-s1-design.md) connects the accepted four-class
 `ServingWorkloadRequest` data to the real resident Target, Serial and fixed-cohort
-PingPong consumers, with an ordinary raw Target reference on smoke4. It is enabled
+PingPong consumers. S1-P removes raw Target from the default smoke4 gate. It is enabled
 only by `SR_S1_EXECUTION_MANIFEST` through the [S1 server helper](phase-s1-runbook.md).
 Legacy SmokeRequest classes/mixtures, corrected-5/100 gates, old fixed-token performance
 comparison and the five vLLM patches keep their contracts. S1 uses a separate
 [execution/result schema](phase-s1-schema.md), natural EOS, actual 512/1024 caps and
-an exact three-mode comparator. No arrival admission, scheduling optimization, Eager
-or KVConnector is added. S1 implementation/CPU evidence is separate from its GPU
-qualification, which remains PENDING.
+the versioned `s1-performance-v1` comparator. Independent output equality is not
+required; each run's token/termination/KV/measurement/cleanup validity remains strict.
+Actual tok/s ratios use each run's own timed tokens, with output counts beside makespan
+ratios. No arrival admission, scheduling optimization, Eager or KVConnector is added.
+S1-P implementation/CPU evidence is separate from its GPU qualification, which remains
+PENDING. Old-policy roots remain unchanged; prepare a fresh S1-P G0 before G1.
 
 ## Phase 4B status
 

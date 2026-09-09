@@ -33,6 +33,13 @@ from specrhythm.phase4.stock_vllm import load_smoke_requests
 from specrhythm.phase4.vllm_diagnostics import DIAGNOSTIC_SCHEMA
 from specrhythm.serving.common import REQUEST_SCHEMA, TASKS, digest, read_json, text_hash
 from specrhythm.serving.s1_cli import previous_completed, run_plan, start
+from specrhythm.serving.s1_policy import (
+    EFFECTIVE_SCHEMA,
+    G0_SCHEMA,
+    REQUIRED_ENVIRONMENT,
+    RESULT_SCHEMA,
+    policy_fields,
+)
 from specrhythm.serving.s1_preflight import capacity_estimate, clean_environment
 from specrhythm.serving.s1_results import (
     compare_results,
@@ -137,6 +144,7 @@ def execution(tmp_path, rows=None):
     }
     value = {
         "schema_version": SCHEMA,
+        **policy_fields(),
         "logical": logical,
         "logical_sha256": digest(logical),
         "request_ids_sha256": digest(ids),
@@ -370,6 +378,11 @@ def test_actual_consumer_entry_receives_s1_manifest_and_full_budgets(
     from specrhythm.phase4 import dual_runner, resident_runner, serial_runner, stock_vllm
     from specrhythm.serving import s1_runtime
 
+    for key, value in REQUIRED_ENVIRONMENT.items():
+        monkeypatch.setenv(key, value)
+    for key in ("USE_TORCH", "USE_TF", "USE_FLAX"):
+        monkeypatch.delenv(key, raising=False)
+
     path, manifest, rows = execution(
         tmp_path / "profile", [request(i, 512 if i % 2 == 0 else 1024) for i in range(4)]
     )
@@ -392,7 +405,12 @@ def test_actual_consumer_entry_receives_s1_manifest_and_full_budgets(
         actual = load_runtime_requests(kwargs["workload_path"], kwargs["request_count"])
         assert [r.maximum_new_tokens for r in actual] == [512, 1024, 512, 1024]
         captured.append(kwargs)
-        return {"valid": True, "repeated_run_deterministic": True, "synthetic_CPU_contract": True}
+        return {
+            "valid": True,
+            "repeated_run_deterministic": False,
+            "runs": [outputs(rows, [[100 + i, 999] for i in range(4)])],
+            "synthetic_CPU_contract": True,
+        }
 
     monkeypatch.setattr(module, name, fake)
     if mode == "raw-target":
@@ -404,6 +422,8 @@ def test_actual_consumer_entry_receives_s1_manifest_and_full_budgets(
         assert captured[0]["phase4b2_performance"] is True
     if mode in ("target", "serial"):
         assert captured[0]["reference_path"] is None
+    if mode == "raw-target":
+        assert captured[0]["compare_repeated_outputs"] is False
 
 
 def test_round_terminal_truncation_no_fixed_plus_one():
@@ -449,11 +469,15 @@ def synthetic_result(mode="target"):
         bootstrap_token_ids=[1],
         final_prefix_sha256="a" * 64,
         timed_committed_tokens=1,
+        untimed_output_tokens=1,
+        terminal_in_setup=False,
         decode_barrier_to_completion_ms=1,
         eos_terminated=False,
         max_token_termination=True,
     )
     return dict(
+        schema_version=RESULT_SCHEMA,
+        **policy_fields(),
         mode=mode,
         valid=True,
         performance_result=True,
@@ -466,15 +490,11 @@ def synthetic_result(mode="target"):
 
 
 @pytest.mark.parametrize(
-    "fault", [None, "tokens", "termination", "lifecycle", "missing", "identity", "work"]
+    "fault", [None, "lifecycle", "missing", "identity", "work"]
 )
-def test_three_mode_comparator_requires_exactness_and_validity(fault):
+def test_three_mode_comparator_retains_validity_and_internal_metric_accounting(fault):
     results = {mode: [synthetic_result(mode)] for mode in ("target", "serial", "pingpong")}
     bad = results["pingpong"][0]
-    if fault == "tokens":
-        bad["requests"][0]["generated_token_ids"][-1] = 3
-    if fault == "termination":
-        bad["requests"][0]["finish_reason"] = "stop"
     if fault == "lifecycle":
         bad["checks"]["lifecycle"]["valid"] = False
     if fault == "missing":
@@ -485,9 +505,9 @@ def test_three_mode_comparator_requires_exactness_and_validity(fault):
         bad["requests"][0]["timed_committed_tokens"] = 1487
     report = compare_results(results)
     assert report["valid"] is (fault is None)
-    assert (report["speedup"] is not None) is (fault is None)
-    if fault == "tokens":
-        assert report["divergences"][0]["position"] == 1
+    assert (report["performance_ratios"] is not None) is (fault is None)
+    assert report["repeatability"]["exact_tokens_and_termination"] is None
+    assert report["matched_work"]["exact_timed_output_equal"] is None
 
 
 def test_rotation_and_environment_disable_inference_flags_cleared(monkeypatch):
@@ -497,6 +517,7 @@ def test_rotation_and_environment_disable_inference_flags_cleared(monkeypatch):
     env = clean_environment("pingpong")
     assert "USE_TORCH" not in env and "SR_PHASE4_NUMERICAL_PLAN" not in env
     assert env["SR_PHASE4_DUAL_UUID_QUERY_MODE"] == "live"
+    assert all(env[k] == v for k, v in REQUIRED_ENVIRONMENT.items())
     assert run_plan("G3") == [
         ("target", 0),
         ("serial", 0),
@@ -509,6 +530,7 @@ def test_rotation_and_environment_disable_inference_flags_cleared(monkeypatch):
         ("serial", 2),
     ]
     assert run_plan("G1").count(("pingpong", 1)) == 1
+    assert run_plan("G1") == [("target", 0), ("serial", 0), ("pingpong", 0), ("pingpong", 1)]
 
 
 def test_capacity_rejects_without_reducing_work():
@@ -535,6 +557,11 @@ def test_seal_resume_detects_mutation_and_never_reuses_incomplete(tmp_path):
 
 
 def test_launcher_detaches_and_records_real_exit_status(tmp_path, monkeypatch):
+    _, manifest, _ = execution(tmp_path / "s1-smoke4")
+    write_once(tmp_path / "g0.json", {
+        "schema_version": G0_SCHEMA, **policy_fields(),
+        "valid": True, "execution": manifest["execution"],
+    })
     launched = []
 
     def fake(command, **kwargs):
@@ -582,7 +609,10 @@ def test_cli_cpu_help_does_not_import_inference():
     assert "torch" not in sys.modules and "vllm" not in sys.modules
 
 
-def native_artifacts(tmp_path, monkeypatch, mode="target", zero=False, speculative=False):
+def native_artifacts(
+    tmp_path, monkeypatch, mode="target", zero=False, speculative=False,
+    *, token_offset=0, setup_terminal=(), eos_finish=(),
+):
     """Synthetic native-schema artifacts: validators run normally; only S0 parent is fake."""
     from specrhythm.phase4.draft_metrics import DraftMetrics
     from specrhythm.serving import s1_results
@@ -595,9 +625,13 @@ def native_artifacts(tmp_path, monkeypatch, mode="target", zero=False, speculati
     monkeypatch.setenv(PROFILE_ENV, str(path))
     run = tmp_path / "run"
     run.mkdir()
-    bootstraps = [999] * 4 if zero else [100 + i for i in range(4)]
+    terminal = set(range(4)) if zero else set(setup_terminal)
+    bootstraps = [999 if i in terminal else 100 + token_offset + i for i in range(4)]
     ready = ready_manifest(definitions, manifest, bootstraps)
-    final_tokens = [[b] if zero else [b, 200 + i] for i, b in enumerate(bootstraps)]
+    final_tokens = [
+        [b] if i in terminal else [b, 999 if i in eos_finish else 200 + token_offset + i]
+        for i, b in enumerate(bootstraps)
+    ]
     if speculative:
         final_tokens = [tokens + [300 + i] for i, tokens in enumerate(final_tokens)]
     raw = dict(
@@ -619,8 +653,13 @@ def native_artifacts(tmp_path, monkeypatch, mode="target", zero=False, speculati
     write_once(run / "decode-ready-manifest.json", ready.to_dict())
     write_once(run / "setup-ready.json", dict(global_decode_ready=True, ready_published_ns=90))
     write_once(
-        run / "s1-effective-runtime.json", dict(execution_sha256=manifest["manifest_sha256"])
+        run / "s1-effective-runtime.json",
+        dict(
+            schema_version=EFFECTIVE_SCHEMA, **policy_fields(),
+            execution_sha256=manifest["manifest_sha256"],
+        ),
     )
+    write_once(run / "exit-code.json", dict(effective_exit_code=0, coordinator_exit_code=0))
     write_once(
         run / "process-lifecycle.json",
         dict(
@@ -700,16 +739,19 @@ def native_artifacts(tmp_path, monkeypatch, mode="target", zero=False, speculati
                 event="measured-token-commit",
                 timestamp_ns=400,
                 request_id=r.request_id,
-                token_ids=[200 + i],
+                token_ids=final_tokens[i][1:],
                 source="target-tail",
                 per_token_cuda_synchronize=False,
             )
             for i, r in enumerate(definitions)
+            if i not in terminal
         )
     dump_rows(run / "timing-events.jsonl", timing)
     diagnostics = []
     if not zero:
         for i, r in enumerate(definitions):
+            if i in terminal:
+                continue
             prefix = [*r.prompt_token_ids, bootstraps[i]]
             diagnostics.append(
                 dict(
@@ -769,7 +811,7 @@ def native_artifacts(tmp_path, monkeypatch, mode="target", zero=False, speculati
             prefix = [*r.prompt_token_ids, *final_tokens[i]]
             transitions = (
                 [("BOOTSTRAP", "TERMINAL")]
-                if zero
+                if i in terminal
                 else [
                     ("BOOTSTRAP", "DRAFT_READY"),
                     ("DRAFT_READY", "TARGET_TAIL_READY"),
@@ -792,13 +834,13 @@ def native_artifacts(tmp_path, monkeypatch, mode="target", zero=False, speculati
                 )
                 for j, (a, b) in enumerate(transitions)
             )
-            if not zero:
+            if i not in terminal:
                 drafts.append(
                     dict(
                         operation="finish_tail",
                         success=True,
                         request_id=r.request_id,
-                        result=dict(committed_token_ids=[200 + i]),
+                        result=dict(committed_token_ids=final_tokens[i][1:]),
                     )
                 )
         dump_rows(run / "request-state-events.jsonl", states)
@@ -976,7 +1018,10 @@ def test_resume_cleans_interruption_before_skipping_older_pass(tmp_path, monkeyp
     good.mkdir(parents=True)
     interrupted.mkdir()
     write_once(good / "process-lifecycle.json", dict(owned_cleanup_completed=True))
-    seal_run(good, dict(valid=True, execution_sha256=manifest["manifest_sha256"]))
+    seal_run(good, dict(
+        schema_version=RESULT_SCHEMA, **policy_fields(),
+        valid=True, execution_sha256=manifest["manifest_sha256"],
+    ))
     marker = interrupted / "partial.json"
     marker.write_text("partial GPU evidence retained")
     before = sha256_file(marker)

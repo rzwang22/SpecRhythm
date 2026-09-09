@@ -34,7 +34,7 @@ claims.
 | [#1 workload-v0.1](https://github.com/rzwang22/SpecRhythm/pull/1) | merged | strict Mooncake replay, R3 proxy config, validator, manifest, fixture tests and docs | workload plumbing only; proxy payload and illustrative acceptance |
 | [#2 simulator-semantics-v0.2](https://github.com/rzwang22/SpecRhythm/pull/2) | frozen draft; Phase 2 complete, not merged | proposal lifecycle, deterministic tree oracle, tree-aware allocators, base-preserving residual controls, Phase-2 nested search pools and common-snapshot oracle replay, path-aware eager and accounting | pure-Python proxy and oracle upper bounds only; no deployable oracle, measured search cost, GPU integration, or performance claim |
 | [#3 gpu-integration-v0.1](https://github.com/rzwang22/SpecRhythm/pull/3) | draft; Phase 3B.1 and corrected-20 Phase 3C.2 complete; Phase 3C.3 corrected-100 awaiting server run | hardened multi-rank primitives, corrected R3-real traces, common-prefix replay, request-bootstrap statistics, 2x shell decomposition and diagnostic learned ranker | user-run 3×A800 correctness artifacts plus Mac CPU tests; no packed-tree/serving engine, Dual-Batch, SLO, calibrated latency or speedup claim |
-| [#4 vllm-serving-v0.1](https://github.com/rzwang22/SpecRhythm/pull/4) | Draft/Open/unmerged; historical Phase4 qualifications retained; S0 CLOSED/PASS; S1 implementation and CPU contracts delivered, GPU PENDING | explicit four-class long-output resident Target/Serial/PingPong profile, exact comparison, capacity gates and owned launch/resume | no new S1 GPU correctness/overlap/performance result; no dynamic serving/SLO or equal-total-GPU claim |
+| [#4 vllm-serving-v0.1](https://github.com/rzwang22/SpecRhythm/pull/4) | Draft/Open/unmerged; historical Phase4 qualifications retained; S0 CLOSED/PASS; S1-P performance policy implemented, CPU/CI validation recorded below, GPU PENDING | explicit four-class resident Target/Serial/PingPong profile, per-run validity, capacity gates and owned launch/resume | no new S1 GPU correctness/overlap/performance result; no dynamic serving/SLO or equal-total-GPU claim |
 
 ## Phase S: Serving Workloads & Arrival Replay
 
@@ -85,7 +85,7 @@ server reports and the assistant's review of all twenty full prompts. S0 is
 | Stage | Scope | Status |
 | --- | --- | --- |
 | S0 | Four-class real-text construction and validation | CLOSED/PASS; server machine/tokenizer/rebuild evidence and assistant content review accepted |
-| S1 | Long-output resident three-mode baseline and general result validation | Implemented; CPU contracts PASS; Linux CI tracked on PR #4; GPU G0–G3 PENDING |
+| S1 / S1-P | Resident three-mode performance qualification | Previous GPU gate stopped by old exact-output policy; S1-P cancels cross-run equality, CPU/CI recorded below; fresh GPU G0–G3 PENDING |
 | S2 | Target dynamic arrival, queueing and streaming timestamps | Future; not started |
 | S3 | Serial and dynamic PingPong join/leave/setup | Future; not started |
 | S4 | SLO and load calibration on the independent calibration set | Future; not started |
@@ -97,49 +97,60 @@ mixed prefill/decode, calibrated SLO, PD/KV handoff and a new GPU performance cl
 are outside S0/S1. `slo_policy_ref=null` / `calibration_status=pending` is not an
 accepted calibrated experiment.
 
-### S1 implementation handoff
+### S1-P implementation handoff
 
-S1 began at clean `0dd5750384eb63bd4d2ef3b32163d819862e0fbd` on the existing branch.
-The opt-in `SR_S1_EXECUTION_MANIFEST` adapter connects ServingWorkloadRequest to
-all three real resident consumers and the raw Target reference entry. Legacy
-loader classes/counts, corrected-5/100 measurements, old five-mode comparison,
-existing PingPong scheduling and the vLLM five-patch stack retain their contracts.
-The selected first-per-class subsets are frozen at 4/20/100 requests; no arrival
-replay or full-1000 resident run occurs. Budgets stay 512/1024 including actual
-untimed bootstrap, with natural EOS and no minimum length. Independent validation
-requires exact raw/resident smoke reference and three-mode outputs, clean lifecycle,
-real token accounting and valid measurement; no numerical waiver or speedup gate.
+S0 is **CLOSED / PASS** with its original sealed inputs and the assistant review
+scope preserved. S1-P starts at clean `cd36d18c63ac706548fabccb4e5cf6e0f15e5897` on
+`codex/vllm-serving-v0.1`; PR #4 remains Draft/Open/unmerged. PR #2/#3 are untouched.
+The operator reports that the previous raw Target attempt-002 completed two real
+runs but the old gate rejected `repeated_run_deterministic=false`. That old policy
+result stays unchanged at `/root/autodl-tmp/SpecRhythm-data/results/phase-s1/cd36d18-20260909T110103Z-1489`.
+It is background evidence, not an automatically completed S1-P gate. S1-D is cancelled.
 
-S1 reports actual B/Q, accepted versus committed progress, output lengths/termination,
-timed work, makespan/throughput and median dispersion. Existing Draft CUDA events
-and fences supply in-memory per-forward evidence, emitted once, without extra
-CUDA sync or per-forward filesystem writes. The end covers final Target rank sync
-and necessary Draft GPU completion. Physical overlap uses existing aligned witnesses;
-unattributed waits/IPC/critical-path components remain unavailable. Extra Draft GPU
-use is disclosed, so this is not an equal-total-resource comparison.
+S1-P uses versioned `s1-performance-v1`. **Cross-run/cross-mode output equality is
+not required or performed.** Independent tokens, bootstrap, final prefix, output
+length, EOS/finish reason, proposal/acceptance and rounds may differ. All requests
+still share frozen input IDs/order, prompt tokens, 512/1024 budgets, model/tokenizer,
+sampling, K4 and existing numerical/backend/resource configuration. No new async
+sweep, algorithm change, patch change, resampling or ignored EOS is introduced.
 
-The committed helper supports no-weight G0, detached G1/G2/G3, status, bounded owned
-cleanup, verified sealed-run resume, independent offline comparison and review
-bundles. G3 checks estimated capacity and actual G2 engine blocks; insufficient
-capacity is BLOCKED with unchanged requests/budgets. Partial or divergent attempts
-never enter speedup aggregates. The result label remains
-`production vLLM Batched Draft end-to-end improvement`; no pure batching claim.
+Each run still validates completion exactly once; its own bootstrap, final tokens
+and committed-event reconstruction; EOS/budget; proposal prefix/round, correction,
+bonus, Target/Draft KV/sync and TP mapping; real measured boundaries; nonzero exit
+and owned cleanup. Old Phase4 validator defaults remain strict. G0, manifest, result,
+gate, seal, resume and offline comparison bind the same policy/schema. Old roots
+cannot be silently migrated or reused. G1 now runs Target, Serial, PingPong and one
+independent PingPong repeat; G2/G3 sizes and fixed rotations stay unchanged.
 
-CPU tests are synthetic contracts, including the actual scheduler's generic odd/singleton
-assignment and drain, native artifact validation, zero measured work, short tails,
-Draft completion after Target final sync, corruption/semantic failure rejection,
-PID ownership and interrupted-run preservation. The dedicated S1 suite passes
-66 tests locally on Python 3.11. The Phase4 suite passes 1182 tests / 2 platform
-skips and full pytest passes 1491 / 3 skips with the pinned source audit. Ruff,
-compileall, diff whitespace checks and all 11 S1 runbook Bash blocks pass. Linux CI
-results are recorded in the delivery and PR. Existing Python 3.9/3.12 jobs remain; the
-Python 3.11 contract job now also runs the S1 CLI and contracts.
+Each repeat reports actual full/timed/bootstrap tokens, completed requests,
+EOS/cap/setup-terminal counts, task length distributions, makespan, actual tok/s,
+completion latency, Target B/Q, Draft/acceptance work and physical overlap evidence.
+Mode-level median throughput ratios use each run's actual tokens. Makespan ratios
+carry actual output counts and are not equal-work speedups. Equality fields are
+null/NOT_REQUIRED; count equality is descriptive only. The label is
+`resident decode-only three-mode performance observation`, with no unconditional
+end-to-end improvement, pure batching, equal-total-GPU or serving TTFT/SLO claim.
+Zero overlap or lower throughput does not fail qualification; invalid/partial runs
+do not enter complete-run aggregates. G3 capacity shortage remains BLOCKED without
+changing N or budgets. Measurement boundaries and instrumentation are unchanged.
 
-See [S1 design/source map](phase-s1-design.md), [execution/result schema](phase-s1-schema.md)
-and [copyable server runbook](phase-s1-runbook.md). **S1 GPU numerical equality,
-real KV/capacity, physical overlap, throughput and repeatability remain PENDING.**
-No GPU inference or AutoDL connection was performed by the agent, and S2/S3 have
-not started. Stop after implementation handoff and await the user's server gates.
+The committed helper sets `OMP_NUM_THREADS=1`, `VLLM_ALLOW_INSECURE_SERIALIZATION=1`
+for the existing local callable RPC path, clears USE_TORCH/TF/FLAX and pins GPU Python
+and visibility per child. Actual values are recorded. Detached launch, status,
+owned cleanup, fresh-attempt resume and immutable review bundles remain available.
+
+S1-P CPU contracts: **87 PASS** (synthetic only). Full local pytest with the pinned
+vLLM source audit: **1512 passed, 3 GPU/platform skips**. Ruff, compileall, diff checks
+and all 11 runbook Bash blocks/helper syntax pass. Final-SHA Linux CI runs after push;
+its actual completion status and links are recorded in PR #4 and the delivery handoff.
+Existing Python 3.9/3.12 CI and Python 3.11 Phase4/source contracts remain; the 3.11 job
+also runs the S1-P regression file. **S1-P GPU / performance: PENDING**, awaiting a
+fresh server G0–G3 run. No GPU inference or AutoDL connection was performed by the
+agent; no new GPU correctness/performance result is claimed, and S2/S3 have not started.
+
+See [design and audited call chain](phase-s1-design.md), [versioned result/schema](phase-s1-schema.md)
+and [copyable server runbook](phase-s1-runbook.md). Stop after this handoff and await
+S1-P server results; recovering cross-run token equality is not a prerequisite.
 
 ## Phase 4A.0–4A.1: vLLM freeze and Serial Disaggregated correctness
 

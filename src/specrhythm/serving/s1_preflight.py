@@ -18,6 +18,12 @@ from specrhythm.phase4.manifest import (
     validate_topology,
 )
 from specrhythm.serving.common import digest, require
+from specrhythm.serving.s1_policy import (
+    G0_SCHEMA,
+    REQUIRED_ENVIRONMENT,
+    environment_evidence,
+    policy_fields,
+)
 from specrhythm.serving.s1_runtime import resident_capacity
 from specrhythm.serving.s1_workload import (
     QUOTAS,
@@ -51,6 +57,7 @@ def clean_environment(mode, manifest_path=None):
     for key in ("USE_TORCH", "USE_TF", "USE_FLAX", "RANK", "WORLD_SIZE", "LOCAL_RANK"):
         env.pop(key, None)
     env.update(
+        **REQUIRED_ENVIRONMENT,
         HF_HOME="/root/.cache/huggingface",
         VLLM_USE_V2_MODEL_RUNNER="0",
         VLLM_BATCH_INVARIANT="1",
@@ -228,6 +235,7 @@ def prepare(root: Path, s0: Path, vllm_source: Path):
         "Draft_backend": "vllm-batched",
         "numerical_mode": "batch-invariant",
         "arrival_replay_enabled": False,
+        "launch_environment": environment_evidence(),
     }
     rows = load_requests(s0 / "main1000.jsonl")
     memory = {r["physical_gpu_id"]: r["memory_total_mib"] for r in topology["gpus"]}
@@ -250,6 +258,8 @@ def prepare(root: Path, s0: Path, vllm_source: Path):
     write_once(
         root / "g0.json",
         {
+            "schema_version": G0_SCHEMA,
+            **policy_fields(),
             "valid": True,
             "stage": "G0",
             "model_weights_loaded": False,

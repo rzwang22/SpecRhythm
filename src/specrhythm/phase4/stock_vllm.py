@@ -617,6 +617,7 @@ def run_stock_smoke(
     numerical_plan_path: Optional[Path] = None,
     numerical_output_path: Optional[Path] = None,
     matched_bootstrap_async_off: bool = False,
+    compare_repeated_outputs: bool = True,
 ) -> dict[str, Any]:
     """Bring up one independent stock vLLM engine and repeat a frozen workload."""
 
@@ -799,7 +800,7 @@ def run_stock_smoke(
             and first["stop_reason"] == second["stop_reason"]
             for first, second in zip(runs[0], runs[1])
         )
-        if len(runs) == 2
+        if len(runs) == 2 and compare_repeated_outputs
         else None
     )
     numerical_rows = (
@@ -866,6 +867,7 @@ def run_stock_smoke(
         "sampling": config.sampling.to_dict(),
         "runs": runs,
         "repeated_run_deterministic": deterministic,
+        "repeated_output_comparison_performed": len(runs) == 2 and compare_repeated_outputs,
         "repeated_run_performed": len(runs) == 2,
         "diagnostic_only": diagnostic_single_run,
         "reference_freeze_eligible": False if diagnostic_single_run else None,

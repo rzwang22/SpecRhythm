@@ -7,6 +7,7 @@ from pathlib import Path
 
 from specrhythm.phase4.config import load_phase4_config
 from specrhythm.serving.common import read_json, require
+from specrhythm.serving.s1_policy import EFFECTIVE_SCHEMA, environment_evidence, policy_fields
 from specrhythm.serving.s1_workload import (
     PROFILE_ENV,
     active_profile,
@@ -125,7 +126,9 @@ def effective_runtime(llm, worker_ranks, config):
     write_once(
         Path(os.environ["SR_S1_RUN_DIRECTORY"]) / "s1-effective-runtime.json",
         {
-            "schema_version": "specrhythm.s1-effective-runtime.v1",
+            "schema_version": EFFECTIVE_SCHEMA,
+            **policy_fields(),
+            "launch_environment": environment_evidence(),
             "sampling": sampling,
             "target_worker_ranks": worker_ranks,
             "target_required_capacity": required,
@@ -161,10 +164,64 @@ def resident_capacity(rows, block_size):
     }
 
 
+def qualify_raw_target(result, definitions, eos_ids):
+    """Optional raw observations retain per-run validity, without a determinism dependency."""
+    from specrhythm.phase4.serial import token_prefix_hash
+
+    errors = list(result.get("errors") or [])
+    if "valid" in result and result["valid"] is not True:
+        errors.append("raw Target reported invalid execution")
+    try:
+        runs = result["runs"]
+        require(bool(runs), "raw Target has no completed run")
+        expected = {r.request_id: r for r in definitions}
+        for index, run in enumerate(runs):
+            actual = {r["request_id"]: r for r in run}
+            require(
+                set(actual) == set(expected) and len(actual) == len(run),
+                "raw Target completed request set differs",
+                run=index,
+            )
+            for rid, row in actual.items():
+                definition = expected[rid]
+                tokens = row["generated_token_ids"]
+                token_prefix_hash(tokens)
+                require(
+                    0 < len(tokens) <= definition.maximum_new_tokens
+                    and not any(t in eos_ids for t in tokens[:-1])
+                    and row.get("finished", True) is True,
+                    "raw Target invalid token budget/EOS/completion",
+                    request_id=rid,
+                )
+                eos = tokens[-1] in eos_ids
+                require(
+                    row["finish_reason"] == ("stop" if eos else "length")
+                    and (eos or len(tokens) == definition.maximum_new_tokens)
+                    and (row["stop_reason"] is None or (eos and row["stop_reason"] == tokens[-1])),
+                    "raw Target invalid natural termination",
+                    request_id=rid,
+                )
+                require(
+                    row["prompt_length"] == definition.prompt_length
+                    and row["generated_tokens"] == len(tokens)
+                    and row["token_accounting"] == {
+                        "prompt_tokens": definition.prompt_length,
+                        "generated_tokens": len(tokens),
+                        "total_tokens": definition.prompt_length + len(tokens),
+                    },
+                    "raw Target invalid per-run token accounting",
+                    request_id=rid,
+                )
+    except (KeyError, TypeError, ValueError) as error:
+        errors.append(f"raw Target execution evidence: {error}")
+    return {**result, **policy_fields(), "valid": not errors, "errors": errors}
+
+
 def run_consumer(mode: str, manifest_path: Path, directory: Path, root: Path):
     """Called only in an owned GPU subprocess by the server launcher."""
     require(mode in ("raw-target", "target", "serial", "pingpong"), "unknown S1 consumer")
     manifest, definitions = load_execution(manifest_path, verify_parent=True)
+    environment_evidence()
     os.environ[PROFILE_ENV] = str(manifest_path.resolve())
     os.environ["SR_S1_RUN_DIRECTORY"] = str(directory.resolve())
     os.environ["SR_S1_MODE"] = mode
@@ -197,10 +254,11 @@ def run_consumer(mode: str, manifest_path: Path, directory: Path, root: Path):
             **common,
             runtime_manifest_path=path("runtime-manifest.json"),
             correctness_mode="batch-invariant",
+            compare_repeated_outputs=False,
         )
         result["s1_raw_target_patch_stack"] = patch
-        result["s1_reference_scope"] = "stock Target with dormant five-patch stack; exact required"
-        result["valid"] = result["repeated_run_deterministic"] is True
+        result["s1_reference_scope"] = "explicit stock Target observation; not an S1-P gate"
+        result = qualify_raw_target(result, definitions, manifest["execution"]["eos_token_ids"])
         write_once(path("raw.json"), result)
         return result
     common.update(

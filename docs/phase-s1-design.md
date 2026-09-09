@@ -1,13 +1,14 @@
-# Phase S1: long-output resident three-mode baseline
+# Phase S1-P: resident three-mode performance qualification
 
-Implementation starts at clean commit `0dd5750384eb63bd4d2ef3b32163d819862e0fbd`
+S1-P starts at clean commit `cd36d18c63ac706548fabccb4e5cf6e0f15e5897`
 on `codex/vllm-serving-v0.1`. PR #4 stays Draft/Open/unmerged; PR #2/#3 are untouched.
 [S0 is CLOSED/PASS](phase-s0-closure-review.md). S1 implementation and CPU contracts
 are delivered independently of **GPU qualification, which is PENDING**.
 
 S1 asks whether the frozen four-class schema reaches real resident execution,
-whether the three modes produce exactly the same long-budget token sequences, and
-what the measured Draft/Target work and waiting evidence explain. Performance gain
+whether each mode executes and measures its own actual output correctly, and what
+the measured Draft/Target work and waiting evidence explain. Independent output
+sequences, bootstraps, lengths, termination reasons and round boundaries may differ. Performance gain
 and positive overlap are observations, not acceptance requirements. No arrival
 runner, dynamic admission/rebalancing, SLO tuning, Shaping, Eager, PD or KVConnector
 is introduced. S2/S3 have not started.
@@ -22,10 +23,10 @@ is introduced. S2/S3 have not started.
 | Target | `run_resident_target` through `s1_runtime.run_consumer` | Real resident Target-only; no timed Draft proposal; setup Draft resource disclosed |
 | Serial | `run_serial_disaggregated`, production `serve_batched_draft` | Same persistent paged-KV vLLM Draft and strict Target→sync→Draft dependencies |
 | PingPong | `run_resident_dual_batch` selects existing PingPong classes; production `run_dual_draft_service` | Fixed manifest-order alternating A/B, opposite-cohort dependencies, shrinking/drain, existing scheduler admissibility/no-HOL |
-| Raw reference | `run_stock_smoke`, Target role, two ordinary stock runs | G1 exact raw→resident reference chain; dormant installed five-patch stack, no reference continuation injected into Draft |
+| Optional raw observation | `run_stock_smoke`, explicit S1 runtime raw-target entry only | Removed from G1; per-run output/accounting checks, no repeated-output comparison or reference passed to resident/Draft |
 | Output | Native full token IDs, finish/stop reason, accounting, DecodeReady and per-round artifacts | Natural EOS, correction/bonus/tail, completed sets, actual bootstrap |
 | Validation | `s1_results.inspect_run`, `compare_results`, offline CLI `compare` | Independent three-mode contract; old five-mode, corrected-5/100, 16-token/1487-token experiments unchanged |
-| Report | `specrhythm.s1-result.v1` / `specrhythm.s1-comparison.v1` | Correctness, measurement, lifecycle and repeatability separate from performance numbers |
+| Report | `specrhythm.s1-result.v2` / `specrhythm.s1-comparison.v2` | Internal correctness, measurement and lifecycle separate from actual performance ratios; output repeatability NOT_REQUIRED |
 
 The pinned source audit uses vLLM commit
 `752a3a504485790a2e8491cacbb35c137339ad34`, especially `SamplingParams`,
@@ -64,7 +65,7 @@ one-token untimed bootstrap. Temperature 0, top_p 1, per-request seed, natural E
 no minimum length or ignored EOS. The engine's processed EOS/stop/sampling parameters
 are recorded before generation; disagreement with the frozen policy fails closed.
 No matched-bootstrap injection is used; each fresh engine generates its own bootstrap.
-G1 checks it against the ordinary raw Target reference.
+It is checked against that run’s own final output and committed events only.
 
 After all resident rows reach DecodeReady, the existing final TP barrier and CUDA
 sync publish the performance start. Serial initial proposals and both PingPong
@@ -81,30 +82,47 @@ capacity before `generate`. S1 uses context 4096, max_num_seqs 128 and query cap
 4096. G3 additionally checks its needs against G2's actual Target and Draft block
 capacities. Insufficient capacity is **BLOCKED**, with N and budgets unchanged.
 
-## Exactness and failure semantics
+## S1-P policy and failure semantics
 
-The comparator checks full generated IDs and bootstrap, completion exactly once,
-length/EOS/finish/stop, final prefix and actual timed-token counts by stable request
-ID. Any token or termination divergence blocks formal speedup. G1 checks both raw
-Target repetitions against resident Target. Every mode and repeat shares execution,
-workload, sampling, model, patch and config identity; physical setup identity may differ.
+The previous G1 raw Target attempt-002 completed two real generations but was stopped
+by `repeated_run_deterministic=false` under the old exact-output policy (operator
+report; no new server inspection by the agent). That root remains sealed and unchanged.
+This task replaces S1-D; no numerical consistency diagnosis or async/batch-invariant
+configuration sweep is performed.
 
-Round validation uses actual proposed/accepted/rejected IDs. Nonterminal commits
-include accepted prefix plus one correction or bonus; terminal truncation can omit
-that extra token. Prefix hashes/versions, logical KV accounting, native Target
-diagnostics and PingPong consumed/verified/committed coverage are checked. Existing
-runtime guards still reject stale proposals, duplicate consumption, unproposed
-advancement, wrong row mapping and invalid scheduler admission. Terminal prefix/state,
-Draft synchronization, sampled-row TP consensus and owned cleanup are retained.
+`s1-performance-v1` with policy schema `specrhythm.s1-policy.v1` is mandatory in
+execution v2, effective-runtime v2, result v2, comparison v2, G0 v2 and seal v2.
+Manifest hashes bind policy and input/config identity. Startup rejects an old root
+before writing launcher files; child and Draft-child load the new policy, and
+seal/resume/previous-gate/offline comparison reject missing or different policy/schema.
+Old passing or failing artifacts cannot silently become S1-P gate evidence. A fresh
+G0 and new engine lifecycle are required with the new final execution commit.
 
-`errors=null` and `errors=[]` both mean no errors. A nonempty error list, false raw
-validity, failed coordinator, missing requests, bad accounting, invalid lifecycle,
-invalid measurement or mismatched execution identity blocks the gate. No HF/numerical
-equivalence waiver is inherited from older performance comparison tools. First output
-divergence includes request, token position and retained round/prefix evidence.
-Repeated runs compare per-request/round semantics, ignoring cross-request write order;
-round differences remain visible and are not labeled deterministic merely because
-final tokens match. Their scheduler-level cause is reported unavailable unless proven.
+No default S1-P path invokes cross-run/cross-mode token, bootstrap, final-prefix,
+termination, length, proposal, acceptance or round comparison. `compare_results`
+checks common input/config/effective sampling and each result’s internal validity.
+Its historical equality fields are null; the explicit comparison status is
+`NOT_REQUIRED`, performed=false. Optional historical Python diagnostic helpers remain
+outside this call chain. The stock runner’s `compare_repeated_outputs` defaults true
+for historical callers; the explicit S1 raw adapter passes false and qualifies actual
+completed request sets, per-run token accounting and natural termination instead.
+The normal S1-P G1 plan never invokes raw Target.
+
+Within a run, validation still requires completion exactly once, that run's full
+committed tokens/bootstrap/final-prefix identity, length/EOS/finish/stop correctness,
+and real timed-token counts. Serial/PingPong still use actual proposed/accepted/rejected
+IDs, correction/bonus/tail rules, prefix hashes/versions, logical KV accounting,
+Target diagnostics and consumed/verified/committed coverage. Existing runtime guards
+reject stale proposals, duplicate consumption, unproposed advancement, incorrect row
+mapping and invalid scheduler admission. Draft synchronization and TP consensus stay
+within each run. No Draft algorithm, scheduler, model, K or patch is changed.
+
+`errors=null` and `errors=[]` mean no errors. Nonempty errors, false raw validity,
+nonzero actual/effective exit code, missing/duplicate requests, bad accounting,
+invalid lifecycle/cleanup, missing GPU completion, invalid measurement or different
+input/config still block. Errors are retained with material reasons; validity is
+never forced true to bypass a failure. Raw token/event artifacts remain available
+for traceability without introducing output equality as a gate.
 
 ## Measurement and interpretation
 
@@ -145,18 +163,32 @@ records remain available for further attribution.
 
 Target uses TP2 on GPU1/2; SD adds TP1 Draft GPU0. Resident Target's untimed provider
 also reserves/uses Draft GPU0, which is reported. This is a fixed Target-resource
-comparison, not an equal-total-GPU fairness result. The retained label is
-`production vLLM Batched Draft end-to-end improvement`; no pure batching claim.
+comparison, not an equal-total-GPU fairness result. The result label is
+`resident decode-only three-mode performance observation`. It makes no end-to-end
+improvement or pure batching claim. Every run reports its own completed request count,
+full/timed/bootstrap tokens, EOS/cap/setup-terminal counts and task length distributions.
+Throughput is actual timed tokens divided by that run's decode duration. Compare mode
+medians of actual tok/s, with raw samples and population standard deviation. Makespan
+ratios carry each mode's actual timed-token counts; they are not equal-work speedups.
+`equal_timed_token_counts` is descriptive only; neither equal caps nor equal counts
+proves equal tokens or total model work. Differing outputs/lengths/rounds never cause
+resampling, ignored EOS, reduced budgets or hidden run exclusion.
 
 ## Execution and handoff
 
 The executable [runbook](phase-s1-runbook.md) stops at G3. Every child uses the pinned
 GPU Python in its own owned session with a unique PID/start identity and launch token.
 The detached supervisor survives SSH closure, writes stage/log/exit-code artifacts,
-and stops later gates on failure. Resume verifies seals, cleans interrupted owned
+and stops later gates on material execution/measurement/cleanup failure. G1 contains
+Target, Serial, PingPong and an independent PingPong repeat; G2/G3 retain 20/100 requests
+and G3's fixed three rotations. The wrapper and each child explicitly set
+`OMP_NUM_THREADS=1`, `VLLM_ALLOW_INSECURE_SERIALIZATION=1` and unset USE_TORCH/TF/FLAX.
+The RPC setting enables the existing local callable RPC path; actual values are
+recorded in G0 execution, command/Draft-owner and effective-runtime artifacts. Resume verifies seals, cleans interrupted owned
 processes first, skips validated completed runs and uses a fresh attempt/engine/KV
 for anything incomplete. It never repairs or overwrites a partial measurement.
 
 [Schema](phase-s1-schema.md) describes frozen inputs, result/seal structure and
 unavailable fields. CPU fixtures are synthetic contract evidence only. They do not
-establish GPU numerical equality, KV correctness, physical overlap or throughput.
+establish real GPU KV correctness, physical overlap or throughput. Independent
+GPU output equality is not required by S1-P.
