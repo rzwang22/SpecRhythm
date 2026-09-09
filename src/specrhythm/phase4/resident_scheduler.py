@@ -19,8 +19,8 @@ from specrhythm.phase4.resident_setup import (
 )
 from specrhythm.phase4.serial import Proposal
 from specrhythm.phase4.transport import CheckpointJsonl
-from specrhythm.serving.s1_workload import initial_target_tail, s1_enabled
-from specrhythm.serving.s1_workload import load_runtime_requests as load_smoke_requests
+from specrhythm.serving.runtime_profile import initial_target_tail, s1_enabled
+from specrhythm.serving.runtime_profile import load_runtime_requests as load_smoke_requests
 
 try:
     from vllm.v1.core.sched.scheduler import Scheduler

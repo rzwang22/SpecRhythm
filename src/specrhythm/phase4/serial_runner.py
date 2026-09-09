@@ -49,14 +49,14 @@ from specrhythm.phase4.stock_vllm import (
 from specrhythm.phase4.transport import CheckpointJsonl, UnixDraftClient, payload_sha256
 from specrhythm.phase4.vllm_diagnostics import validate_kv_monotonicity
 from specrhythm.phase4.vllm_installation import locate_installed_vllm_file
-from specrhythm.serving.s1_workload import (
+from specrhythm.serving.runtime_profile import (
     initial_proposal_excluded_ids,
     pending_reference_comparison,
     require_reference_or_s1,
     s1_enabled,
     target_options,
 )
-from specrhythm.serving.s1_workload import load_runtime_requests as load_smoke_requests
+from specrhythm.serving.runtime_profile import load_runtime_requests as load_smoke_requests
 
 PATCHED_VLLM_RUNNER_SHA256 = (
     "2905189397b1517659e6606f5bc36c7ca226330f42255c579207fe38f61f9e19"

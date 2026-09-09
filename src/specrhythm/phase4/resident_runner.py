@@ -51,8 +51,8 @@ from specrhythm.phase4.stock_vllm import (
     validate_worker_ranks,
 )
 from specrhythm.phase4.transport import CheckpointJsonl, UnixDraftClient
-from specrhythm.serving.s1_workload import load_runtime_requests as load_smoke_requests
-from specrhythm.serving.s1_workload import (
+from specrhythm.serving.runtime_profile import load_runtime_requests as load_smoke_requests
+from specrhythm.serving.runtime_profile import (
     pending_reference_comparison,
     require_reference_or_s1,
     s1_enabled,

@@ -1,0 +1,172 @@
+# S2 — GPU-resident Prefilled-KV Dynamic Decode Serving
+
+Status: implementation and CPU contracts; real-GPU qualification is pending. The operator
+reported S1-P G0–G3 PASS at `5a00049e2eabf09f535fdd5f187f77406f6dcfe2` in
+`/root/autodl-tmp/SpecRhythm-data/results/phase-s1/s1p-5a00049-20260909T144802Z-1469`.
+S0 and S1 artifacts remain read-only. S2 uses `specrhythm-s2`, separate schemas and a fresh root.
+
+## Observation boundary
+
+**GPU-resident prefilled-KV delivery; prefill/import excluded; queue/decode/drain included.**
+Arrival models ideal PD delivery: the selected request's private KV is already available on
+its decode GPUs. This is a **finite-trace serving observation**. It does not measure network
+PD transfer, mixed prefill/decode interference, complete PD end-to-end user latency, kernel
+self time, or steady-state service capacity.
+
+Every attempt creates fresh Target and Draft engines. All selected prompts are processed
+before the S2 barrier using the qualified `ResidentWarmStartProvider` observations. The
+Target has materialized the prompt; its one sampled bootstrap is the pending next input.
+Draft has materialized prompt **plus bootstrap**, retaining the corresponding next-logits
+GPU view. The existing decode-ready manifest is validated metadata; it is not a KV tensor.
+No snapshot tensor copies or cross-process KV file format are introduced. Request IDs,
+positions, exact prefix hashes, materialized lengths and physical block tables are checked.
+
+Each allocator retains private blocks for staged/queued requests. Removing an unscheduled
+request from vLLM's `InputBatch` does not free its cached request/KV state in the pinned MRV1
+source. S2 checks the unchanged staged prefix and block table before every Target step and
+around Draft proposal/commit operations. Timed Target preemption is rejected before freeing
+blocks. Initial blocks of active requests may grow but cannot be replaced. Live block tables
+cannot alias across requests. Fully terminal bootstraps need no continuation KV: setup may
+release those blocks, and arrival records their terminal state with zero timed tokens.
+
+## Capacity and identity
+
+The models, GPU0 Draft TP1 / GPUs1,2 Target TP2, BF16, eager model execution, K=4, natural EOS,
+greedy sampling, per-request budgets/seeds, UUID live mode, numerical batch-invariant setting
+and five vLLM patches remain as frozen by S1. No Shaping or new candidate-selection policy is
+introduced. `runtime_profile.py` delegates unchanged to S1/legacy when S2 is absent.
+
+Target scheduler/model-input capacity is 512 **resident pool slots**. Global active decode
+capacity is 128 in all three modes; Serial can use all 128. Draft's existing forward capacity
+is 128, and its allocator can retain more request views than one forward's input rows. Target
+query-token capacity remains 4096. Actual B/Q and active counts are reported separately.
+
+A no-request engine probe is run for each of the three modes. It collects actual cache block
+capacity, block size, active device UUID and free CUDA memory after engine initialization on
+Draft and each Target rank (nine records). Static estimates do not authorize timing. The
+conservative block calculation, separately for each rank and mode, is:
+
+```
+all initial prefix blocks
++ sum of the largest min(128, N) growth requirements through full output cap + K4
++ one partial/copy block per possible active request
++ max(32 blocks, ceil(5% of actual cache blocks))
+```
+
+Target prefix length is prompt length; Draft prefix length includes bootstrap. Allocation
+rounding is applied per request. There are zero snapshot copies. Actual free memory must
+also cover an extra 512 MiB workspace margin and, on Draft, `N * vocab_size * 4` bytes of
+cached logits. Engine profiling has already reserved model/cache/workspace memory. The
+formula is restricted to the pinned dense single-KV-group layout. It does not rely on early
+EOS. Each fresh run checks actual capacity again and verifies the complete physical initial
+pool before publishing its barrier. A changed or insufficient runtime fails; it never shrinks
+its own workload during performance execution.
+
+Small requests 100, large requests 500. The nested order uses the exact S1 mixed100 set first,
+then independent seeded hash ranks within each class from remaining main1000. Every prefix
+of ten has chat/code/reasoning/summarization counts 3/3/2/2. Prompt bytes/IDs, S0 source and
+Mooncake provenance, sampling, budgets and EOS remain untouched. Neither short-request
+selection nor calibration/main mixing is permitted. Both desired sizes decrease by ten until
+all nine rank/mode checks pass. One plan freezes actual_N for every mode/rate/declared seed.
+If large cannot exceed small, G3 explicitly skips the duplicate scale.
+
+## Clock, admission and cohort boundaries
+
+S2 explicitly sets `VLLM_ENABLE_V1_MULTIPROCESSING=0` and `async_scheduling=False`. The pinned
+`InprocClient.get_output()` executes exactly one EngineCore step. TP execution remains in the
+existing workers. A background EngineCore could advance between coordinator calls, so the
+runtime rejects that client type rather than assuming `LLMEngine.step()` controls it.
+
+The arrival observer is a separate monotonic-clock thread, including while the coordinator
+waits for Target or Serial Draft GPU work. It retains frozen planned arrivals, observes due
+requests, records observation lag, and queues them. Admission happens only between completed
+Target steps. The FIFO queue uses the frozen trace order. A finished request continues to
+consume an active slot until its real Draft final synchronization/release has drained.
+
+Lifecycle: `STAGED -> QUEUED (ARRIVED event) -> ACTIVE -> FINISHED`, with explicit FAILED rows
+and the primary failure on an interrupted observation. Bootstrap-terminal requests go from
+QUEUED to FINISHED at observed arrival, with no admission or timed commit. The observation
+clock never pauses for trace idle, queueing, admission, control serialization, scheduling,
+synchronization or drain. Process teardown and final report serialization occur afterward.
+
+Target and Serial gate timed scheduling on ACTIVE status. S2 Serial generates its first real
+Draft proposal on admission and imports that validated proposal at the first verification
+hook. Later proposal, acceptance, rollback, EOS and synchronization algorithms are inherited.
+
+PingPong inherits Dual's real readiness, TP sampled-row mapping, verification, acceptance,
+retired-ready handling and request/proposal lifecycle. It assigns admitted requests to the
+smaller currently held cohort, ties to A. It only modifies a cohort when that cohort has no
+in-flight Draft work and Target has finished the preceding step. Cohort membership then stays
+stable for that request's lifetime. Target selects one ready cohort at a time, switching after
+a scheduled unit; an empty or blocked cohort does not prevent the other eligible cohort from
+continuing. It does not wait for future requests or permanently divide the entire pool N/2.
+Readiness is decided using the inherited admissibility check, including consumed-proposal
+checks, rather than the presence of historical proposal metadata.
+
+Control snapshots are atomically replaced without fsync only when admission/state/initial
+proposal metadata changes. Ordinary continuing steps reuse the snapshot. Initial metadata is
+retired from the control packet after the first observed commit and retained once in final
+raw evidence. Arrival/commit/population statistics are in memory and emitted at completion;
+existing native worker diagnostics/logging retain their original behavior. Foreground log
+mirroring reads the original Target/Draft logs and cannot replace their exit codes.
+
+## Trace and SLO
+
+Poisson inter-arrivals are generated by `Random(arrival_seed).expovariate(1.0)` and divided by
+lambda, with the first arrival exactly zero. A separate `Random(order_seed)` shuffles request
+order. Float seconds retain precision; only conversion to the monotonic nanosecond clock is
+rounded. Every rate uses the same unit exponential samples and order for its frozen set/seed;
+every mode uses the same trace file/hash. Defaults are .25/.5/1 requests/s and one seed pair
+1667/1668. These are engineering observation points, not asserted capacity multiples.
+Additional seed pairs require explicit `prepare --extra-seed ARRIVAL ORDER` before freezing;
+all pairs then share the same capacity-selected IDs and SLO. No repeats are silently added.
+
+SLO can be supplied explicitly per task or derived from a separate calibration200 sample:
+five per class, seed 1670 hash ranking, Target-only and active limit one. Calibration uses the
+same fresh preloaded KV and observation clock. It reports queueing, but its *baseline* uses
+`(completion - admission) / timed tokens` so earlier calibration requests' queueing cannot
+inflate the isolated decode reference. The engineering threshold is class median ×1.5.
+A class with no timed calibration tokens requires explicit thresholds. Calibration's fixed
+20 requests must also pass real capacity; if they cannot fit, use explicit thresholds.
+The S0 `slo_policy_ref=null` remains unchanged. The new policy is sealed before main runs and
+cannot be altered after seeing main results. It is not an inherited paper SLO.
+
+Main request SLO is **queue-inclusive decode average ms per timed token**:
+`(completion - planned_arrival) / n`. Queueing and arrival handling lag remain inside it.
+Zero-timed-token requests are reported separately and excluded from the SLO denominator.
+Request attainment is good requests / eligible timed requests. Token goodput counts actual
+timed tokens of good requests; request goodput counts good requests. Both divide by the same
+uninterrupted observation duration used by throughput, including idle and drain.
+
+Commit timestamps are actual coordinator-visible output publication times. A verification
+that emits several tokens assigns that one observed timestamp to all of them; no interpolation
+is performed. Request TPOT is `(last timed commit - first timed commit)/(n-1)` for n>1; raw
+within-request intervals preserve zero gaps inside a batch. Queue wait, first timed-token wait,
+TPOT and queue-inclusive average latency have distinct field names and distributions.
+
+## Qualification and limitations
+
+Mandatory: successful real exit and owned cleanup; every request terminal/released; exact
+within-run bootstrap + native worker commits = observed output; token/budget/EOS accounting;
+request/round/prefix and Target structural evidence; TP sampled-row consensus; private resident
+KV and actual capacity; frozen workload/config/model/backend/trace/SLO identity; ordered clocks
+and real GPU timing for executed forwards. Empty optional statistics are count zero/None.
+
+Cross-run token, output length, EOS and round equality are **NOT_REQUIRED**. Slow PingPong,
+zero overlap, single-cohort execution, lack of multi-request batches under sparse arrivals and
+zero SLO attainment are valid observations. Reports include actual output work, tok/s and
+makespan together; a shorter run alone does not establish equal-work speedup.
+
+Overlap retains two explicit scopes: the inherited synchronized CUDA-stage envelope
+intersection/union with actual Draft/Target TP identity, and a separate broader host-stage
+intersection. Neither is kernel self time or automatically time saved on the critical path.
+Initial/peak KV block use and GPU memory are reported; memory peaks include engine/setup
+allocations, not only timed decode. Full events/block tables/logs remain in raw sealed attempts;
+the upload summary contains aggregate metrics and raw paths/hashes, not giant token arrays.
+
+CPU tests use real adapter/provenance/allocator-contract code with explicitly synthetic
+workers and inputs. Source tests inspect the pinned vLLM client, scheduler and InputBatch
+contracts. They cannot prove real GPU residency, model correctness, capacity, asynchronous
+join/leave performance or speedup. Those remain the operator's G0–G3 validation work.
+
+See [schema](phase-s2-schema.md) and [server runbook](phase-s2-runbook.md).

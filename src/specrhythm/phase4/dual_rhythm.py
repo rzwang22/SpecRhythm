@@ -10,8 +10,8 @@ from types import MappingProxyType
 
 from specrhythm.phase4.batched_draft_service import write_immutable_report
 from specrhythm.phase4.manifest import sha256_file
-from specrhythm.serving.s1_workload import load_runtime_requests as load_smoke_requests
-from specrhythm.serving.s1_workload import s1_enabled
+from specrhythm.serving.runtime_profile import load_runtime_requests as load_smoke_requests
+from specrhythm.serving.runtime_profile import s1_enabled
 
 SELECTOR = "SR_PHASE4B_DUAL_RHYTHM"
 MANIFEST = "SR_PHASE4_DUAL_RHYTHM_MANIFEST"

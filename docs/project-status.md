@@ -1,6 +1,6 @@
 # SpecRhythm project status
 
-Last updated: 2026-09-09
+Last updated: 2026-09-10
 
 Maintenance rule: every code-changing PR updates this file with its scope, status, evidence,
 known limitations, and next gate before that PR is considered complete.
@@ -34,9 +34,50 @@ claims.
 | [#1 workload-v0.1](https://github.com/rzwang22/SpecRhythm/pull/1) | merged | strict Mooncake replay, R3 proxy config, validator, manifest, fixture tests and docs | workload plumbing only; proxy payload and illustrative acceptance |
 | [#2 simulator-semantics-v0.2](https://github.com/rzwang22/SpecRhythm/pull/2) | frozen draft; Phase 2 complete, not merged | proposal lifecycle, deterministic tree oracle, tree-aware allocators, base-preserving residual controls, Phase-2 nested search pools and common-snapshot oracle replay, path-aware eager and accounting | pure-Python proxy and oracle upper bounds only; no deployable oracle, measured search cost, GPU integration, or performance claim |
 | [#3 gpu-integration-v0.1](https://github.com/rzwang22/SpecRhythm/pull/3) | draft; Phase 3B.1 and corrected-20 Phase 3C.2 complete; Phase 3C.3 corrected-100 awaiting server run | hardened multi-rank primitives, corrected R3-real traces, common-prefix replay, request-bootstrap statistics, 2x shell decomposition and diagnostic learned ranker | user-run 3×A800 correctness artifacts plus Mac CPU tests; no packed-tree/serving engine, Dual-Batch, SLO, calibrated latency or speedup claim |
-| [#4 vllm-serving-v0.1](https://github.com/rzwang22/SpecRhythm/pull/4) | Draft/Open/unmerged; historical Phase4 qualifications retained; S0 CLOSED/PASS; S1-P performance policy implemented, CPU/CI validation recorded below, GPU PENDING | explicit four-class resident Target/Serial/PingPong profile, per-run validity, capacity gates and owned launch/resume | no new S1 GPU correctness/overlap/performance result; no dynamic serving/SLO or equal-total-GPU claim |
+| [#4 vllm-serving-v0.1](https://github.com/rzwang22/SpecRhythm/pull/4) | Draft/Open/unmerged; S0 CLOSED/PASS; operator reports S1-P G0–G3 PASS at `5a00049`; S2 implemented, GPU PENDING | independent prefilled-KV resident pool, dynamic Poisson arrival/admission, Target/Serial/PingPong and engineering SLO/goodput | CPU/source contracts are not GPU qualification; finite-trace ideal PD-delivery boundary only |
 
 ## Phase S: Serving Workloads & Arrival Replay
+
+**S2 — GPU-resident Prefilled-KV Dynamic Decode Serving** continues from
+`5a00049e2eabf09f535fdd5f187f77406f6dcfe2`. The operator reported S1-P G0–G3 PASS
+in `/root/autodl-tmp/SpecRhythm-data/results/phase-s1/s1p-5a00049-20260909T144802Z-1469`.
+That user-supplied baseline status supersedes the earlier S1 GPU-pending entries below;
+the coding agent has not independently rerun it. S0/S1 evidence remains read-only.
+
+The independent `specrhythm-s2` entry freezes nested 3:3:2:2 small100/large500 inputs,
+common capacity-driven decrements of ten from actual Draft/TP Target rank probes,
+independent Poisson/order seeds and a pre-main engineering SLO policy. Every new attempt
+recreates private Target/Draft KV before one uninterrupted arrival-to-drain observation.
+Synchronous EngineCore steps permit FIFO admission only at safe boundaries; a separate
+arrival thread queues arrivals while GPU work is busy. The common active limit is 128,
+distinct from 512 resident slots and the 4096 query-token cap. PingPong cohorts are filled
+dynamically without waiting for a future empty cohort; Serial can use all active slots.
+
+Native worker commits, KV block isolation, Target structure, sampled-row TP consensus,
+within-run budgets/EOS/accounting, real exit and owned cleanup remain mandatory. Cross-run
+token/length/EOS/round equality remains NOT_REQUIRED. Sparse singleton execution, zero
+overlap, lower speed and zero SLO attainment are observations, not failures. Queue-inclusive
+decode average latency is distinct from TPOT, and output work/throughput/makespan are
+reported together. Foreground tagged raw logs, precise primary failures, sealed evidence,
+fresh-state recovery and a small upload JSON are included.
+
+Local Python 3.11 validation with the pinned vLLM source audit: S2 contracts **48 passed**,
+S1 compatibility **104 passed**, Phase4 **1182 passed / 2 platform skips**, and full pytest
+**1577 passed / 3 skips** (one GPU opt-in and two Linux-only process cases). Ruff, compileall,
+eight repository shell files, eight S2 runbook Bash blocks and staged diff checks pass.
+Linux CI for the delivered commit is recorded in the final handoff and PR #4. The new
+contracts cover real adapter startup order, synthetic private
+allocator residency/restoration, independent arrivals, dynamic slots/cohorts, common
+capacity and traces, native-shaped accounting, offline requalification and real owned CPU
+child failure/cleanup. Fixed-source tests inspect vLLM's synchronous client, retained cached
+requests and scheduler allocation hooks. Real GPU capacity, residency, dynamic numerical
+execution, G0–G3 measurements and performance remain **PENDING operator validation**.
+The coding agent has performed no GPU execution and no AutoDL connection.
+
+See [S2 design](phase-s2-design.md), [S2 schema](phase-s2-schema.md) and
+[S2 server runbook template](phase-s2-runbook.md). The handoff includes a separate rendered
+runbook with the final full SHA; each commit uses a fresh S2 result root. PR #4 remains
+Draft/Open/unmerged; PR #2/#3 are unchanged. Earlier Phase S/4 entries below are historical.
 
 **S0 — Mixed Real-Text Workload Foundation** adds independent versioned serving
 requests, source acquisition/locking, deterministic selection, real Qwen3

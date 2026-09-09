@@ -29,7 +29,7 @@ from specrhythm.phase4.manifest import (
     validate_topology,
 )
 from specrhythm.phase4.transport import CheckpointJsonl
-from specrhythm.serving.s1_workload import s1_enabled, target_options
+from specrhythm.serving.runtime_profile import s1_enabled, target_options
 
 MATCHED_BOOTSTRAP_CONTROL_SCHEMA = (
     "specrhythm.phase4b1-gate3-matched-bootstrap-control.v1"
@@ -696,7 +696,7 @@ def run_stock_smoke(
             "matched-bootstrap async-OFF control requires Target corrected-100, "
             "batch-invariant mode, one diagnostic run, and both diagnostic outputs"
         )
-    from specrhythm.serving.s1_workload import load_runtime_requests
+    from specrhythm.serving.runtime_profile import load_runtime_requests
 
     requests = load_runtime_requests(
         workload_path,

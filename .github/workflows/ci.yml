@@ -31,6 +31,8 @@ jobs:
       - run: python -m pytest -q tests/test_phase4.py
       - run: specrhythm-s0 --help
       - run: python -m pytest -q tests/test_serving_s0.py
+      - run: specrhythm-s2 --help
+      - run: python -m pytest -q tests/test_serving_s2.py tests/test_serving_s2_runtime.py tests/test_serving_s2_cli.py tests/test_serving_s2_results.py
       - run: specrhythm-s1 --help
       - run: python -m pytest -q tests/test_serving_s1.py tests/test_serving_s1_performance.py tests/test_serving_s1_console.py tests/test_serving_s1_startup.py
 
@@ -48,6 +50,6 @@ jobs:
           ref: 752a3a504485790a2e8491cacbb35c137339ad34
           path: tmp/phase4b3-vllm-source
           sparse-checkout: vllm
-      - run: python -m pytest tests/test_phase4_vllm_draft.py tests/test_phase4_vllm_draft_source.py tests/test_phase4_pingpong_source.py
+      - run: python -m pytest tests/test_phase4_vllm_draft.py tests/test_phase4_vllm_draft_source.py tests/test_phase4_pingpong_source.py tests/test_serving_s2_source.py
         env:
           SR_PHASE4B3_SOURCE_AUDIT: tmp/phase4b3-vllm-source

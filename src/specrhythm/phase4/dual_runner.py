@@ -66,8 +66,8 @@ from specrhythm.phase4.stock_vllm import (
     validate_worker_ranks,
 )
 from specrhythm.phase4.transport import CheckpointJsonl
-from specrhythm.serving.s1_workload import load_runtime_requests as load_smoke_requests
-from specrhythm.serving.s1_workload import s1_enabled, target_options
+from specrhythm.serving.runtime_profile import load_runtime_requests as load_smoke_requests
+from specrhythm.serving.runtime_profile import s1_enabled, target_options
 
 
 def run_dual_batch(
@@ -629,7 +629,7 @@ def run_resident_dual_batch(
             raise ValueError("Dual plugin microbatch differs from scheduler/runner")
     except ValueError as error:
         microbatch_errors.append(str(error))
-    from specrhythm.serving.s1_workload import initial_proposal_excluded_ids
+    from specrhythm.serving.runtime_profile import initial_proposal_excluded_ids
 
     no_speculative_work = (
         s1_enabled()

@@ -34,7 +34,7 @@ from specrhythm.phase4.resident_setup import (
 )
 from specrhythm.phase4.serial import token_prefix_hash
 from specrhythm.phase4.transport import CheckpointJsonl, UnixDraftClient
-from specrhythm.serving.s1_workload import load_runtime_requests as load_smoke_requests
+from specrhythm.serving.runtime_profile import load_runtime_requests as load_smoke_requests
 
 
 class ResidentTargetProposer:

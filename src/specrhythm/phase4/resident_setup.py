@@ -22,7 +22,7 @@ from specrhythm.phase4.decode_ready import (
 )
 from specrhythm.phase4.manifest import sha256_file
 from specrhythm.phase4.serial import Proposal
-from specrhythm.serving.s1_workload import initial_proposal_excluded_ids, initial_target_tail
+from specrhythm.serving.runtime_profile import initial_proposal_excluded_ids, initial_target_tail
 
 SETUP_CONTROL_SCHEMA = "specrhythm.phase4b-resident-setup-control.v1"
 SETUP_READY_SCHEMA = "specrhythm.phase4b-resident-setup-ready.v1"

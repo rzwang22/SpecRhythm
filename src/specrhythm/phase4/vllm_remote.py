@@ -42,8 +42,8 @@ from specrhythm.phase4.resident_setup import (
 from specrhythm.phase4.serial import Proposal, RoundRecord, SerialTimeline, greedy_acceptance
 from specrhythm.phase4.transport import CheckpointJsonl, UnixDraftClient
 from specrhythm.phase4.vllm_diagnostics import TARGET_ONLY_FIELDS
-from specrhythm.serving.s1_workload import load_runtime_requests as load_smoke_requests
-from specrhythm.serving.s1_workload import s1_enabled
+from specrhythm.serving.runtime_profile import load_runtime_requests as load_smoke_requests
+from specrhythm.serving.runtime_profile import s1_enabled
 
 
 @dataclass

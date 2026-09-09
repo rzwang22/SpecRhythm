@@ -25,7 +25,7 @@ from specrhythm.phase4.draft_metrics import DraftMetrics
 from specrhythm.phase4.manifest import model_revision_manifest, sha256_file
 from specrhythm.phase4.stock_vllm import active_cuda_device_identity
 from specrhythm.phase4.vllm_installation import locate_installed_vllm_file
-from specrhythm.serving.s1_workload import s1_enabled
+from specrhythm.serving.runtime_profile import s1_enabled
 
 API_PATH = Path(__file__).with_name("vllm_draft_api.json")
 EXECUTE_FIELDS = (

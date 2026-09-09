@@ -16,8 +16,9 @@ LOGS = {"Target": "target.log", "Draft": "draft-service.log"}
 class RunConsole:
     """Children still write directly to raw files; display never owns their stdout pipes."""
 
-    def __init__(self, directory, mode, *, stream=None, poll_seconds=0.05):
+    def __init__(self, directory, mode, *, stream=None, poll_seconds=0.05, label="S1-P"):
         self.directory, self.mode = directory, mode
+        self.label = label
         self.stream = sys.stdout if stream is None else stream
         self.poll_seconds = poll_seconds
         self.stop = threading.Event()
@@ -38,7 +39,7 @@ class RunConsole:
             return
         try:
             for line in text.splitlines():
-                print(f"[S1-P {self.mode} {source}] {line}", file=self.stream, flush=True)
+                print(f"[{self.label} {self.mode} {source}] {line}", file=self.stream, flush=True)
         except (OSError, ValueError):
             # A closed terminal does not invalidate or truncate the original child logs.
             self.display_available = False
@@ -74,13 +75,13 @@ class RunConsole:
                 handle.close()
 
 
-def print_failure(error, *, directory=None, mode="gate", stream=None):
+def print_failure(error, *, directory=None, mode="gate", stream=None, label="S1-P"):
     """Emit qualification fields and both original log tails without changing artifacts."""
     stream = sys.stderr if stream is None else stream
 
     def emit(source, value):
         text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
-        print(f"[S1-P {mode} {source}] {text}", file=stream, flush=True)
+        print(f"[{label} {mode} {source}] {text}", file=stream, flush=True)
 
     try:
         emit("FAILED", {"error": str(error), "details": getattr(error, "details", {})})

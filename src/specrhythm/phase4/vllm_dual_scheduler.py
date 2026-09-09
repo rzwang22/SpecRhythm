@@ -33,7 +33,7 @@ from specrhythm.phase4.request_identity import (
 from specrhythm.phase4.resident_setup import load_setup_ready
 from specrhythm.phase4.serial import token_prefix_hash
 from specrhythm.phase4.transport import CheckpointJsonl
-from specrhythm.serving.s1_workload import load_runtime_requests as load_smoke_requests
+from specrhythm.serving.runtime_profile import load_runtime_requests as load_smoke_requests
 
 try:
     from vllm.v1.core.sched.scheduler import Scheduler

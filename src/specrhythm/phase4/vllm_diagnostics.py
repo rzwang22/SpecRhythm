@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
 
 from specrhythm.phase4.transport import CheckpointJsonl
-from specrhythm.serving.s1_workload import load_runtime_requests as load_smoke_requests
+from specrhythm.serving.runtime_profile import load_runtime_requests as load_smoke_requests
 
 DIAGNOSTIC_ENV = "SR_PHASE4_TARGET_DIAGNOSTICS"
 DIAGNOSTIC_SCHEMA = "specrhythm.phase4-target-forward-diagnostic.v1"
