@@ -99,6 +99,23 @@ accepted calibrated experiment.
 
 ### S1-P implementation handoff
 
+The Serial startup follow-up starts at `645635d5a54d886ac874a9e1046ae8ad957bef9b`.
+The operator reports G0/Target complete and Serial failing on missing
+`decode-ready-context.json`. Source audit confirms S1 bypassed the legacy Serial
+CLI's context creation. The S1 adapter now creates it exclusively before calling
+the real Serial runner/LLM, using the existing builder, real provenance parser and
+frozen config/patch/workload/Git/execution bindings. The regression failed at the
+simulated LLM construction entrance before the fix and passes afterward without
+precreating context. Startup exceptions remain primary; missing later reports are
+secondary diagnostics. Foreground logs, actual return codes, owned cleanup and
+NOT_REQUIRED token-equality policy are retained. Runtime/scheduler/backend/Target
+and five-patch implementation files are unchanged. Current focused CPU suite: 104
+passed; full local Python 3.11 suite with the pinned source audit: 1529 passed,
+3 skipped. Ruff, compileall, helper syntax and 12 runbook Bash blocks pass.
+Linux CI evidence for the delivered commit is recorded in PR #4.
+No GPU run or AutoDL connection was performed. Old roots/results stay unchanged;
+next operator step is a new root and foreground G0/G1 at the delivered SHA.
+
 The backend/frontend follow-up starts at `08cf93a531dc928e02820b14412398b952592a49`.
 S1 qualification now checks the report producer's `vllm-batched-paged-kv-draft`
 identity, independently from shutdown complete, zero live requests and execution

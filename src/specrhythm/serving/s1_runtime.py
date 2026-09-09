@@ -217,6 +217,54 @@ def qualify_raw_target(result, definitions, eos_ids):
     return {**result, **policy_fields(), "valid": not errors, "errors": errors}
 
 
+def prepare_serial_context(config, manifest, workload, root, context_path):
+    """S1 adapter owns this file, like the legacy Serial CLI; runners/workers only read it."""
+    from specrhythm.phase4.decode_ready import DecodeReadyProvenance
+    from specrhythm.phase4.manifest import sha256_file
+    from specrhythm.phase4.resident_runner import build_decode_ready_context
+    from specrhythm.phase4.serial_runner import load_patch_manifest
+
+    if context_path.exists():
+        raise FileExistsError(f"refusing to overwrite Serial context {context_path}")
+    execution = manifest["execution"]
+    for name, key in (
+        ("config.json", "config_sha256"),
+        ("patch-manifest.json", "patch_manifest_sha256"),
+    ):
+        require(
+            sha256_file(root / name) == execution[key],
+            "frozen Serial context input changed",
+            artifact=str(root / name), expected=execution[key], actual=sha256_file(root / name),
+        )
+    require(execution["numerical_mode"] == "batch-invariant", "S1 Serial numerical mode changed")
+    context = build_decode_ready_context(
+        config,
+        patch_manifest=load_patch_manifest(root / "patch-manifest.json", config),
+        workload_path=workload,
+        git_commit=execution["git_commit"],
+        correctness_mode=execution["numerical_mode"],
+    )
+    require(
+        context["workload_sha256"] == manifest["logical"]["workload_sha256"],
+        "frozen Serial context workload changed",
+        artifact=str(workload),
+    )
+    context["s1_execution_binding"] = {
+        "creator": "specrhythm.serving.s1_runtime.prepare_serial_context",
+        "execution_sha256": manifest["manifest_sha256"],
+        "execution_configuration": execution,
+        "config_sha256": execution["config_sha256"],
+        "patch_manifest_sha256": execution["patch_manifest_sha256"],
+    }
+    provenance = DecodeReadyProvenance.from_dict(context)
+    write_once(context_path, context)
+    require(
+        DecodeReadyProvenance.from_dict(read_json(context_path)) == provenance,
+        "Serial context readback differs before worker creation",
+        artifact=str(context_path),
+    )
+
+
 def run_consumer(mode: str, manifest_path: Path, directory: Path, root: Path):
     """Called only in an owned GPU subprocess by the server launcher."""
     require(mode in ("raw-target", "target", "serial", "pingpong"), "unknown S1 consumer")
@@ -291,6 +339,7 @@ def run_consumer(mode: str, manifest_path: Path, directory: Path, root: Path):
     if mode == "serial":
         from specrhythm.phase4.serial_runner import run_serial_disaggregated
 
+        prepare_serial_context(config, manifest, workload, root, setup["context_path"])
         result = run_serial_disaggregated(
             config,
             **common,

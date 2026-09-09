@@ -9,6 +9,7 @@ import signal
 import subprocess
 import sys
 import time
+import traceback
 import uuid
 from pathlib import Path
 
@@ -385,6 +386,14 @@ def execute_attempt(root, mode, manifest_path, manifest, directory):
             draft_log.close()
         os.environ.clear()
         os.environ.update(old_environment)
+    if rc != 0:
+        report = failed_execution_report(root, mode, manifest_path, manifest, directory, rc)
+        seal_run(directory, report)
+        raise DataError(
+            report["errors"][0], returncode=rc, directory=str(directory), mode=mode,
+            primary_error=report["primary_error"],
+            secondary_diagnostics=report["secondary_diagnostics"],
+        )
     # Recheck frozen bytes/metadata after the owned run, outside measurement.
     validate_execution_files(root, manifest["execution"])
     if mode == "raw-target":
@@ -402,9 +411,6 @@ def execute_attempt(root, mode, manifest_path, manifest, directory):
         report = inspect_run(manifest_path, directory, mode)
     seal_run(directory, report)
     require(
-        rc == 0, "GPU command failed; later gates stopped", returncode=rc, directory=str(directory)
-    )
-    require(
         report["valid"],
         "S1 run qualification failed; later gates stopped",
         errors=report.get("errors"),
@@ -413,6 +419,50 @@ def execute_attempt(root, mode, manifest_path, manifest, directory):
         directory=str(directory),
     )
     return directory, report
+
+
+def failed_execution_report(root, mode, manifest_path, manifest, directory, rc):
+    """A failed command stays primary; incomplete downstream reports are diagnostics."""
+    secondary, failures = [], []
+    for source, name in (("Target", "child-failure.json"), ("Draft", "draft-child-failure.json")):
+        path = directory / name
+        if path.is_file():
+            try:
+                failure = read_json(path)
+                require(isinstance(failure, dict), "child failure must be an object")
+                failures.append({**failure, "source": source, "artifact": str(path)})
+            except (OSError, ValueError) as error:
+                secondary.append({"artifact": str(path), "error": str(error)})
+    failures.sort(key=lambda f: f.get("timestamp_ns", 0))
+    primary = failures[0] if failures else {
+        "error": f"execution failed with effective exit code {rc}",
+        "artifact": str(directory / "exit-code.json"),
+    }
+    secondary.extend(failures[1:])
+    try:
+        validate_execution_files(root, manifest["execution"])
+    except Exception as error:
+        secondary.append({"stage": "post-execution input validation", "error": str(error)})
+    report = {}
+    if mode != "raw-target":
+        try:
+            report = inspect_run(manifest_path, directory, mode)
+            secondary.extend({"stage": "post-execution qualification", "error": e}
+                             for e in report.get("errors", []))
+        except Exception as error:
+            secondary.append({"stage": "post-execution qualification", "error": str(error)})
+    for name in ("raw.json", "plugin-report.json", "draft-backend-report.json"):
+        path = directory / name
+        if not path.is_file() and (mode != "raw-target" or name == "raw.json"):
+            secondary.append({"artifact": str(path), "status": "MISSING_AFTER_EXECUTION_FAILURE"})
+    message = f"S1 {primary.get('source', mode)} execution failed: {primary['error']}"
+    return {
+        **report, "schema_version": RESULT_SCHEMA, **policy_fields(), "mode": mode,
+        "execution_sha256": manifest["manifest_sha256"],
+        "valid": False, "performance_result": False,
+        "errors": [message], "primary_error": primary, "secondary_diagnostics": secondary,
+        "error_details": {"returncode": rc, "primary_error": primary},
+    }
 
 
 def require_previous_gate(root, gate):
@@ -754,6 +804,21 @@ def main(argv=None):
         if args.command == "bundle":
             return bundle(root)
     except (OSError, ValueError, RuntimeError, KeyError, subprocess.SubprocessError) as error:
+        # Capture the original child exception before teardown/missing reports can obscure it.
+        # This runs only after a failure, never in the measured decoding path.
+        if args.command in ("child", "draft-child") and args.directory is not None:
+            failure_path = args.directory / (
+                "child-failure.json" if args.command == "child" else "draft-child-failure.json"
+            )
+            try:
+                write_once(failure_path, {
+                    "error": str(error), "error_type": type(error).__name__,
+                    "details": getattr(error, "details", {}), "mode": args.mode,
+                    "timestamp_ns": time.monotonic_ns(), "traceback": traceback.format_exc(),
+                })
+            except (OSError, ValueError) as diagnostic_error:
+                print(json.dumps({"secondary_diagnostic": str(diagnostic_error),
+                                  "artifact": str(failure_path)}), file=sys.stderr)
         print(
             json.dumps(
                 {"valid": False, "error": str(error), "details": getattr(error, "details", {})}

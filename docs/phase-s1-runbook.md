@@ -9,7 +9,11 @@ S1-P uses `acceptance_policy=s1-performance-v1`; independent output equality is
 NOT_REQUIRED. The previous GPU gate stopped under the old exact-output policy.
 Preserve this old root unchanged; do not run resume/compare to rewrite its acceptance:
 `/root/autodl-tmp/SpecRhythm-data/results/phase-s1/cd36d18-20260909T110103Z-1489`.
-Preserve all other failed S1-P roots as well, including runs at `08cf93a…`.
+Preserve all other failed S1-P roots as well, including runs at `08cf93a…` and
+`645635d…`. At `645635d…` the operator completed G0/Target; Serial failed during
+startup because its decode-ready context had not been created. Those completed and
+failed artifacts remain unchanged. The corrected S1 adapter creates the Serial
+context before Target LLM worker construction; use a fresh root at the new commit.
 Prepare a fresh root at the delivered commit, then run G1 again. This runbook does
 not implement S1-D numerical diagnosis, an output-equality recovery sweep or S2/S3.
 
@@ -28,7 +32,7 @@ export SR_S1_REPO=/root/autodl-tmp/src/SpecRhythm
 export SR_S1_PYTHON=/root/autodl-tmp/envs/specrhythm-phase4-vllm-0.25.1/bin/python3.11
 export SR_S1_S0=/root/autodl-tmp/SpecRhythm-data/results/phase-s0/20260909T042148Z-pypi-1837/build-a
 export SR_S1_BASE=/root/autodl-tmp/SpecRhythm-data/results/phase-s1
-export SR_S1_RUN_ID="s1p-front-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+export SR_S1_RUN_ID="s1p-serial-context-$(date -u +%Y%m%dT%H%M%SZ)-$$"
 export SR_S1_ROOT="$SR_S1_BASE/$SR_S1_RUN_ID"
 export OMP_NUM_THREADS=1
 export VLLM_ALLOW_INSECURE_SERIALIZATION=1
@@ -104,6 +108,10 @@ last 40 lines of each child log (bounded to 64 KiB per file). No separate log se
 is needed. The failed stage retains its mode/attempt directory. A later artifact
 error cannot replace a recorded nonzero Target/Draft execution status. Old failed
 artifacts are retained; current-code retry uses a new root and fresh G0.
+On a child startup exception, `child-failure.json` (or `draft-child-failure.json`)
+retains the original exception and traceback. The failed result's `primary_error`
+and first error retain that exception; absent downstream reports are explicitly
+`secondary_diagnostics` / `MISSING_AFTER_EXECUTION_FAILURE`, not replacement causes.
 
 G1 order: resident Target, Serial, PingPong, then a fresh independent PingPong.
 Raw Target is not part of the S1-P gate or a prerequisite. Each owned run has a fresh

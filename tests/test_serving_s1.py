@@ -167,6 +167,45 @@ def execution(tmp_path, rows=None):
     return path, value, rows
 
 
+def freeze_serial_inputs(root, path, manifest):
+    """Freeze real config/patch-report shapes, never a precreated decode-ready context."""
+    from test_phase4 import CONFIG
+
+    from specrhythm.phase4.serial_runner import (
+        PATCHED_VLLM_RUNNER_SHA256,
+        PATCHED_VLLM_SCHEDULER_SHA256,
+    )
+    from specrhythm.serving.s1_preflight import REPO
+
+    write_once(root / "config.json", json.loads(CONFIG.read_text()))
+    patches = REPO / "integrations/vllm/patches"
+    names = (
+        "0001-custom-proposer-request-and-verify-hooks.patch",
+        "0002-scheduler-request-admissibility-hook.patch",
+        "0003-target-forward-timing-observer.patch",
+        "0004-gate3-numerical-observer.patch",
+        "0005-dual-sampled-row-context.patch",
+    )
+    write_once(root / "patch-manifest.json", dict(
+        schema_version="specrhythm.vllm-patch-state-check.v1",
+        operation="check", expected_state="patched", valid=True, errors=[],
+        verified_source_commit="752a3a504485790a2e8491cacbb35c137339ad34",
+        actual_runner_sha256=PATCHED_VLLM_RUNNER_SHA256,
+        actual_scheduler_sha256=PATCHED_VLLM_SCHEDULER_SHA256,
+        patch_stack_applied=True,
+        patch_stack=[dict(patch_file=n, patch_sha256=sha256_file(patches / n)) for n in names],
+    ))
+    manifest["execution"].update(
+        config_sha256=sha256_file(root / "config.json"),
+        patch_manifest_sha256=sha256_file(root / "patch-manifest.json"),
+        numerical_mode="batch-invariant", K=4, Draft_backend="vllm-batched", uuid_mode="live",
+    )
+    manifest["manifest_sha256"] = digest(
+        {k: v for k, v in manifest.items() if k != "manifest_sha256"}
+    )
+    path.write_text(json.dumps(manifest))
+
+
 def ready_manifest(rows, execution_manifest, bootstraps=None):
     bootstraps = bootstraps or [100 + i for i in range(len(rows))]
     observations = [
@@ -388,6 +427,8 @@ def test_actual_consumer_entry_receives_s1_manifest_and_full_budgets(
     )
     directory = tmp_path / "run"
     directory.mkdir()
+    if mode == "serial":
+        freeze_serial_inputs(tmp_path, path, manifest)
     monkeypatch.setattr(s1_runtime, "load_execution", lambda *a, **k: (manifest, rows))
     monkeypatch.setattr(s1_runtime, "load_phase4_config", lambda *a: phase4_config)
     monkeypatch.setenv("SR_S1_DRAFT_SOCKET", "/tmp/synthetic-only.sock")

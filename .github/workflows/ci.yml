@@ -32,7 +32,7 @@ jobs:
       - run: specrhythm-s0 --help
       - run: python -m pytest -q tests/test_serving_s0.py
       - run: specrhythm-s1 --help
-      - run: python -m pytest -q tests/test_serving_s1.py tests/test_serving_s1_performance.py tests/test_serving_s1_console.py
+      - run: python -m pytest -q tests/test_serving_s1.py tests/test_serving_s1_performance.py tests/test_serving_s1_console.py tests/test_serving_s1_startup.py
 
   phase4b3-draft-source-contract:
     runs-on: ubuntu-latest

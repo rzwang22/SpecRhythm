@@ -213,3 +213,30 @@ Target 7 / Draft startup 9 statuses and actual owned process/socket cleanup. Art
 qualification failures after a failed process preserve its recorded nonzero status.
 The decode measurement boundary, GPU synchronization, scheduling and cross-run
 NOT_REQUIRED policy remain unchanged. These tests do not constitute a GPU result.
+
+## Serial context startup correction
+
+At `645635d5a54d886ac874a9e1046ae8ad957bef9b`, the operator reports G0 and resident
+Target complete, followed by Serial startup failure. Source audit identifies the
+missing adapter responsibility: the legacy `phase4-resident-serial-run` CLI builds
+the context before `run_serial_disaggregated()`, but S1's `run_consumer("serial")`
+passed only a path. The runner exports it as `SR_PHASE4_DECODE_READY_CONTEXT`, then
+`LLM(...)` constructs workers whose `RemoteDraftProposer.__init__` reads it. The
+runner/proposer do not create the context. Target/PingPong already create theirs.
+
+`prepare_serial_context()` in the S1 adapter now owns creation for the current
+Serial attempt. It checks frozen config/patch/workload identity, reuses
+`build_decode_ready_context()` with the frozen Git commit and numerical mode,
+records the complete S1 execution binding and validates real provenance parsing
+before and after exclusive file creation. Only then does it enter the unchanged
+Serial runner. No runner, proposer, scheduler, backend, Target or patch code changes.
+
+The CPU regression invokes the real adapter and Serial runner with only the
+environment/installed GPU dependencies substituted. Its simulated LLM constructor
+asserts that context already exists and parses/binds it using the real
+`DecodeReadyProvenance`. The test failed on the original code at that exact entry
+with `Serial context missing at LLM construction`, then passed with the fix. It
+does not precreate context. Changed frozen inputs fail before LLM, and a second
+startup cannot overwrite the first context. A simulated LLM startup exception is
+retained as the primary failure through the child CLI and foreground supervisor;
+missing reports and later validation errors remain secondary diagnostics.

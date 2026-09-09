@@ -62,6 +62,7 @@ VLLM_ALLOW_INSECURE_SERIALIZATION=1 and absent USE_TORCH/TF/FLAX. GPU effective 
 | `valid`, `errors`, `error_details` | Material run qualification and domain-specific failure details |
 | `checks.correctness/measurement/lifecycle` | Separate validity/errors; uncompleted checks do not become PASS |
 | `draft_backend_checks` | Four independent field checks with `valid`, `field`, `expected`, `actual`, `present` and absolute `artifact` path; failures also appear in `errors`/`error_details` |
+| `primary_error`, `secondary_diagnostics` | For a nonzero command, retain the original child exception and its artifact path; missing downstream reports use `MISSING_AFTER_EXECUTION_FAILURE`. The result remains invalid and preserves the effective exit code. |
 | `performance_result` | Valid run with positive actual timed work; false for failures or all-setup-terminal runs |
 | `requests` | Stable ID/class, full generated IDs/count, actual bootstrap, untimed/timed counts, natural EOS/cap termination, final prefix hash, terminal-in-setup flag, commit events and barrier-to-completion latency |
 | `round_semantics` | Per-request/round sorted prefix/hash, proposal, accepted/rejected, correction/bonus, committed IDs and terminal status |
@@ -118,6 +119,24 @@ reported independently, including missing fields; a selector string is not accep
 as the runtime report name. The S1-P output-equality policy is unchanged.
 
 ## Files, recovery and immutability
+
+The S1 adapter exclusively creates Serial's `decode-ready-context.json` before
+calling the resident Serial runner and before `LLM(...)` creates Target workers.
+It reuses `build_decode_ready_context()` and parses the value and saved readback
+with `DecodeReadyProvenance`. The existing context schema/worker fields are unchanged.
+An additional `s1_execution_binding` records its creator, `execution_sha256`, the
+full frozen `execution_configuration`, `config_sha256` and `patch_manifest_sha256`.
+The adapter checks current config/patch file hashes and workload hash against that
+manifest. Git identity comes from the same frozen execution already checked by the
+owned launcher. Existing context files are never overwritten. Target/PingPong keep
+their existing context creation paths; the legacy Serial CLI remains unchanged.
+
+On a child exception, a single exclusive `child-failure.json` or
+`draft-child-failure.json` retains `error`, `error_type`, `details`, `mode`,
+`timestamp_ns` and the exception-chain `traceback`. If both children record errors,
+the earliest recorded exception is primary. Without a child exception artifact,
+the real nonzero exit status is primary and the original logs remain available.
+These files are written only after failure and included in the attempt seal/bundle.
 
 Each run lives at `<root>/<gate>/<repeat>-<mode>/attempt-NNN/`. Native outputs,
 DecodeReady/setup/initial-proposal/timing, Target diagnostics, scheduler/request-state,

@@ -89,6 +89,8 @@ def print_failure(error, *, directory=None, mode="gate", stream=None):
         directory = Path(directory)
         for name in (
             "result.json",
+            "child-failure.json",
+            "draft-child-failure.json",
             "launcher-failure.json",
             "exit-code.json",
             "process-lifecycle.json",
@@ -105,8 +107,11 @@ def print_failure(error, *, directory=None, mode="gate", stream=None):
                             "artifact": str(path),
                             "errors": value.get("errors"),
                             "error_details": value.get("error_details"),
+                            "primary_error": value.get("primary_error"),
                         },
                     )
+                    for diagnostic in value.get("secondary_diagnostics", []):
+                        emit("secondary diagnostic", diagnostic)
                     for check in value.get("draft_backend_checks", {}).values():
                         if check.get("valid") is not True:
                             emit("Draft check", check)
