@@ -178,7 +178,8 @@ resampling, ignored EOS, reduced budgets or hidden run exclusion.
 
 The executable [runbook](phase-s1-runbook.md) stops at G3. Every child uses the pinned
 GPU Python in its own owned session with a unique PID/start identity and launch token.
-The detached supervisor survives SSH closure, writes stage/log/exit-code artifacts,
+Foreground `gate` is the default; an optional detached supervisor survives SSH
+closure. Both write stage/log/exit-code artifacts,
 and stops later gates on material execution/measurement/cleanup failure. G1 contains
 Target, Serial, PingPong and an independent PingPong repeat; G2/G3 retain 20/100 requests
 and G3's fixed three rotations. The wrapper and each child explicitly set
@@ -192,3 +193,23 @@ for anything incomplete. It never repairs or overwrites a partial measurement.
 unavailable fields. CPU fixtures are synthetic contract evidence only. They do not
 establish real GPU KV correctness, physical overlap or throughput. Independent
 GPU output equality is not required by S1-P.
+
+## Backend report and foreground reporting correction
+
+The follow-up starts at `08cf93a531dc928e02820b14412398b952592a49`. The previous
+S1 validator and synthetic fixture confused the selector `vllm-batched` with the
+producer report name `vllm-batched-paged-kv-draft`. The validator now references
+`VllmBatchedDraftBackend.backend_name`; native CPU fixtures call its actual `report()`
+method with only the worker replaced by a CPU fake. Shutdown, live request count and
+execution-failure checks remain mandatory and are recorded separately with expected,
+actual and artifact path. No runtime backend implementation is modified.
+
+A read-only log mirror shows Target/Draft stdout/stderr live with mode/process tags.
+Raw files remain the subprocess output destination, so display cannot replace a
+process return code or truncate logs. Failures automatically show field-level errors,
+exit/cleanup evidence and both bounded log tails. Real CPU subprocess tests require
+both live streams to be visible before permitting Target exit, then check preserved
+Target 7 / Draft startup 9 statuses and actual owned process/socket cleanup. Artifact
+qualification failures after a failed process preserve its recorded nonzero status.
+The decode measurement boundary, GPU synchronization, scheduling and cross-run
+NOT_REQUIRED policy remain unchanged. These tests do not constitute a GPU result.

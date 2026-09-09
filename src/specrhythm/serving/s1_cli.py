@@ -16,6 +16,7 @@ from specrhythm.phase4.manifest import atomic_write_json, sha256_file
 from specrhythm.phase4.owned_processes import OwnedProcesses, process_table
 from specrhythm.phase4.process_lifecycle import run_owned_target
 from specrhythm.serving.common import DataError, read_json, require
+from specrhythm.serving.s1_console import RunConsole, print_failure
 from specrhythm.serving.s1_policy import (
     COMPARISON_SCHEMA,
     G0_SCHEMA,
@@ -198,6 +199,25 @@ def run_attempt(root, gate, mode, repeat, manifest_path):
             "state": "RUNNING",
         },
     )
+    with RunConsole(directory, mode):
+        try:
+            return execute_attempt(root, mode, manifest_path, manifest, directory)
+        except Exception as error:
+            # Offline/artifact failures after a failed command must not replace its real status.
+            try:
+                recorded = read_json(directory / "exit-code.json").get("effective_exit_code")
+            except (OSError, ValueError):
+                recorded = None
+            if type(recorded) is int and recorded != 0:
+                raise DataError(str(error), **{
+                    **getattr(error, "details", {}),
+                    "returncode": recorded, "directory": str(directory), "mode": mode,
+                }) from error
+            raise
+
+
+def execute_attempt(root, mode, manifest_path, manifest, directory):
+    """Keep direct child log files and the existing owned runner/cleanup path."""
     env = clean_environment(mode, manifest_path)
     env["SR_VLLM_SOURCE"] = manifest["execution"]["vllm_source"]
     socket = Path("/tmp") / f"sr-s1-{uuid.uuid4().hex[:16]}.sock"
@@ -258,6 +278,11 @@ def run_attempt(root, gate, mode, repeat, manifest_path):
             deadline = time.monotonic() + 900
             while not (socket.is_socket() and (directory / "draft-service-ready.json").is_file()):
                 if draft.poll() is not None or time.monotonic() >= deadline:
+                    draft_status = draft.poll()
+                    failure_status = (
+                        draft_status if draft_status not in (None, 0)
+                        else 124 if draft_status is None else 1
+                    )
                     rc, _ = run_owned_target(
                         [sys.executable, "-c", "raise SystemExit(1)"],
                         target_log=directory / "target.log",
@@ -266,7 +291,21 @@ def run_attempt(root, gate, mode, repeat, manifest_path):
                         draft_socket=socket,
                         ownership_journal=directory / "ownership.json",
                     )
-                    raise RuntimeError(f"Draft startup failed or timed out; cleanup rc={rc}")
+                    write_once(directory / "exit-code.json", {
+                        "effective_exit_code": failure_status,
+                        "draft_exit_code": draft_status,
+                        "cleanup_exit_code": rc,
+                        "coordinator_exit_code": None,
+                        "target_generation_started": False,
+                    })
+                    raise DataError(
+                        "Draft startup failed or timed out",
+                        returncode=failure_status,
+                        draft_exit_code=draft_status,
+                        cleanup_exit_code=rc,
+                        directory=str(directory),
+                        mode=mode,
+                    )
                 time.sleep(0.2)
             from specrhythm.phase4.owned_processes import socket_owned_by_pid
             from specrhythm.phase4.process_lifecycle import _unix_socket_identity
@@ -311,11 +350,13 @@ def run_attempt(root, gate, mode, repeat, manifest_path):
             timeout_seconds=14400,
             ownership_journal=directory / "ownership.json",
         )
-        if draft:
-            draft.wait(timeout=15)
+        draft_status = draft.wait(timeout=15) if draft else None
+        if rc == 0 and draft_status not in (None, 0):
+            rc = draft_status
         write_once(
             directory / "exit-code.json",
-            {"effective_exit_code": rc, "coordinator_exit_code": lifecycle["target_exit_status"]},
+            {"effective_exit_code": rc, "coordinator_exit_code": lifecycle["target_exit_status"],
+             "draft_exit_code": draft_status},
         )
     except Exception as error:
         write_once(
@@ -327,7 +368,17 @@ def run_attempt(root, gate, mode, repeat, manifest_path):
             },
         )
         if (directory / "draft-owner.json").exists() or (directory / "ownership.json").exists():
-            cleanup_attempt(directory)
+            try:
+                cleanup_attempt(directory)
+            except Exception as cleanup_error:
+                raise DataError(
+                    str(error),
+                    returncode=getattr(error, "details", {}).get("returncode", 1),
+                    original_details=getattr(error, "details", {}),
+                    cleanup_error=str(cleanup_error),
+                    directory=str(directory),
+                    mode=mode,
+                ) from error
         raise
     finally:
         if draft_log:
@@ -357,6 +408,8 @@ def run_attempt(root, gate, mode, repeat, manifest_path):
         report["valid"],
         "S1 run qualification failed; later gates stopped",
         errors=report.get("errors"),
+        error_details=report.get("error_details"),
+        draft_backend_checks=report.get("draft_backend_checks"),
         directory=str(directory),
     )
     return directory, report
@@ -556,19 +609,25 @@ def supervise(root, selected, launch_id):
             status = gate(root, selected)
         except Exception as error:
             status = getattr(error, "details", {}).get("returncode", 1)
+            previous_stage = (
+                read_json(root / "stage.json") if (root / "stage.json").is_file() else {}
+            )
+            context = {k: previous_stage[k] for k in ("gate", "mode", "repeat", "directory")
+                       if k in previous_stage}
             atomic_write_json(
                 root / "stage.json",
                 {
                     **policy_fields(),
+                    **context,
                     "state": getattr(error, "details", {}).get("status", "FAILED"),
                     "error": str(error),
                     "details": getattr(error, "details", {}),
                 },
             )
-            print(
-                json.dumps({"error": str(error), "details": getattr(error, "details", {})}),
-                flush=True,
-            )
+            directory = getattr(error, "details", {}).get("directory", context.get("directory"))
+            if directory and root.resolve() not in Path(directory).resolve().parents:
+                directory = None
+            print_failure(error, directory=directory, mode=context.get("mode", selected))
         finally:
             value = {
                 **policy_fields(), "launch_id": launch_id, "exit_code": status, "gate": selected

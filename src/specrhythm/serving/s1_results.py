@@ -16,6 +16,7 @@ from specrhythm.phase4.performance_boundary import extract_performance_boundary
 from specrhythm.phase4.process_lifecycle import validate_lifecycle_artifact
 from specrhythm.phase4.serial import token_prefix_hash
 from specrhythm.phase4.vllm_diagnostics import validate_target_diagnostic
+from specrhythm.phase4.vllm_draft_backend import VllmBatchedDraftBackend
 from specrhythm.serving.common import integer, read_json, require
 from specrhythm.serving.s1_policy import (
     COMPARISON_SCHEMA,
@@ -360,6 +361,27 @@ def workload_metrics(requests, start, end):
     }
 
 
+def draft_backend_checks(backend, artifact):
+    """Report identity and each shutdown invariant independently using the producer contract."""
+    expected = {
+        "backend_name": VllmBatchedDraftBackend.backend_name,
+        "backend_shutdown_complete": True,
+        "draft_live_requests_final": 0,
+        "execution_failed": False,
+    }
+    return {
+        field: {
+            "field": field,
+            "expected": value,
+            "actual": backend.get(field),
+            "present": field in backend,
+            "artifact": str(artifact.resolve()),
+            "valid": type(backend.get(field)) is type(value) and backend.get(field) == value,
+        }
+        for field, value in expected.items()
+    }
+
+
 def inspect_run(manifest_path: Path, directory: Path, mode: str):
     manifest, definitions = load_execution(manifest_path, verify_parent=True)
     os.environ[PROFILE_ENV] = str(manifest_path.resolve())
@@ -384,6 +406,21 @@ def inspect_run(manifest_path: Path, directory: Path, mode: str):
         "errors": [],
     }
     try:
+        backend_path = directory / "draft-backend-report.json"
+        backend = read_json(backend_path)
+        report["draft_backend_checks"] = draft_backend_checks(backend, backend_path)
+        failed_backend_checks = [
+            check for check in report["draft_backend_checks"].values() if not check["valid"]
+        ]
+        require(
+            not failed_backend_checks,
+            "; ".join(
+                f"Draft {c['field']}: expected={c['expected']!r}, actual={c['actual']!r}, "
+                f"artifact={c['artifact']}"
+                for c in failed_backend_checks
+            ),
+            checks=failed_backend_checks,
+        )
         raw = read_json(directory / "raw.json")
         require(
             raw.get("valid") is True and not raw.get("errors"),
@@ -438,7 +475,6 @@ def inspect_run(manifest_path: Path, directory: Path, mode: str):
             max([start] + [e["timestamp_ns"] for e in events]),
         )
         require(not errors, "invalid final GPU synchronization", errors=errors)
-        backend = read_json(directory / "draft-backend-report.json")
         draft_forwards = draft_measurement(backend, start)
         end = max(
             [r["final_cuda_synchronize_complete_ns"] for r in sync]
@@ -482,13 +518,6 @@ def inspect_run(manifest_path: Path, directory: Path, mode: str):
         forwards = target_forwards(diagnostics, start, semantics)
         require(forwards or not events, "timed commits lack mandatory Target forward evidence")
         require(all(r["end_ns"] <= end for r in forwards), "Target forward beyond measurement end")
-        require(
-            backend.get("backend_name") == "vllm-batched"
-            and backend.get("backend_shutdown_complete") is True
-            and backend.get("draft_live_requests_final") == 0
-            and backend.get("execution_failed") is False,
-            "Draft backend identity/cleanup invalid",
-        )
         if mode == "target":
             require(
                 not rounds and backend["draft_model_forward_count"] == 0,

@@ -9,6 +9,7 @@ S1-P uses `acceptance_policy=s1-performance-v1`; independent output equality is
 NOT_REQUIRED. The previous GPU gate stopped under the old exact-output policy.
 Preserve this old root unchanged; do not run resume/compare to rewrite its acceptance:
 `/root/autodl-tmp/SpecRhythm-data/results/phase-s1/cd36d18-20260909T110103Z-1489`.
+Preserve all other failed S1-P roots as well, including runs at `08cf93a…`.
 Prepare a fresh root at the delivered commit, then run G1 again. This runbook does
 not implement S1-D numerical diagnosis, an output-equality recovery sweep or S2/S3.
 
@@ -27,7 +28,7 @@ export SR_S1_REPO=/root/autodl-tmp/src/SpecRhythm
 export SR_S1_PYTHON=/root/autodl-tmp/envs/specrhythm-phase4-vllm-0.25.1/bin/python3.11
 export SR_S1_S0=/root/autodl-tmp/SpecRhythm-data/results/phase-s0/20260909T042148Z-pypi-1837/build-a
 export SR_S1_BASE=/root/autodl-tmp/SpecRhythm-data/results/phase-s1
-export SR_S1_RUN_ID="s1p-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+export SR_S1_RUN_ID="s1p-front-$(date -u +%Y%m%dT%H%M%SZ)-$$"
 export SR_S1_ROOT="$SR_S1_BASE/$SR_S1_RUN_ID"
 export OMP_NUM_THREADS=1
 export VLLM_ALLOW_INSECURE_SERIALIZATION=1
@@ -46,9 +47,14 @@ export PATH="/root/autodl-tmp/envs/specrhythm-phase4-vllm-0.25.1/bin:$PATH"
   "$SR_S1_PYTHON" --version
   test ! -e "$SR_S1_ROOT"
   mkdir -p "$SR_S1_BASE"
+  set +e
   bash integrations/vllm/phase_s1.sh prepare --root "$SR_S1_ROOT" \
     --s0 "$SR_S1_S0" --vllm-source /root/autodl-tmp/src/vllm-v0.25.1 \
-    > "$SR_S1_BASE/$SR_S1_RUN_ID-g0.log" 2>&1
+    2>&1 | tee "$SR_S1_BASE/$SR_S1_RUN_ID-g0.log"
+  SR_S1_G0_STATUS=("${PIPESTATUS[@]}")
+  set -e
+  if [ "${SR_S1_G0_STATUS[0]}" -ne 0 ]; then exit "${SR_S1_G0_STATUS[0]}"; fi
+  test "${SR_S1_G0_STATUS[1]}" -eq 0
   mv "$SR_S1_BASE/$SR_S1_RUN_ID-g0.log" "$SR_S1_ROOT/g0.log"
   cat "$SR_S1_ROOT/g0.json"
 )
@@ -76,18 +82,28 @@ runtime records. These settings do not upgrade packages or change GPU placement.
 ## G1 — smoke4 three modes and independent PingPong observation
 
 ```bash
-cd "$SR_S1_REPO"
-bash integrations/vllm/phase_s1.sh start --root "$SR_S1_ROOT" --gate G1
-bash integrations/vllm/phase_s1.sh status --root "$SR_S1_ROOT"
-cat "$SR_S1_ROOT/stage.json"
-tail -n 80 "$SR_S1_ROOT"/launcher-*.log
+(
+  set -euo pipefail
+  cd "$SR_S1_REPO"
+  bash integrations/vllm/phase_s1.sh gate --root "$SR_S1_ROOT" --gate G1
+)
 ```
 
-`start` returns launcher PID/log immediately. It uses a new session, `/dev/null`
-stdin and persistent stdout/stderr, so closing SSH does not stop it. `status` checks
-PID **and start identity**, rather than trusting a stale PID file. An active GPU child
-may spend time loading weights; its continuous log lives under the current attempt
-reported in `stage.json` (`target.log`, `draft-service.log`).
+`gate` is the default foreground entry. It blocks until the gate passes or fails,
+and returns the actual effective execution status (or 1 for qualification failure).
+Run it directly, without a `tee` pipeline around GPU execution. Target and Draft
+stdout/stderr continue to write directly to `target.log` and `draft-service.log`.
+A read-only mirror displays both streams live, tagged `[S1-P <mode> Target]` and
+`[S1-P <mode> Draft]`; original log bytes are unchanged. No extra GPU synchronization
+or per-token fsync is added. Closing the terminal is not a promised detached run;
+use the explicit optional background entry below when disconnect survival is needed.
+
+On failure the command automatically prints qualification errors, field-level Draft
+checks (`field`, `expected`, `actual`, `artifact`), exit/lifecycle evidence, and the
+last 40 lines of each child log (bounded to 64 KiB per file). No separate log search
+is needed. The failed stage retains its mode/attempt directory. A later artifact
+error cannot replace a recorded nonzero Target/Draft execution status. Old failed
+artifacts are retained; current-code retry uses a new root and fresh G0.
 
 G1 order: resident Target, Serial, PingPong, then a fresh independent PingPong.
 Raw Target is not part of the S1-P gate or a prerequisite. Each owned run has a fresh
@@ -96,7 +112,7 @@ bootstrap/commit/EOS/budget, Target/Draft state, accounting, measurement and cle
 Independent output tokens, bootstraps, lengths, finish reasons and rounds may differ.
 The second PingPong is a repeated performance observation, not an equality test.
 
-After `status` says `alive=false`, check and independently requalify without GPU:
+After `gate` returns successfully, inspect its result and optionally requalify offline:
 
 ```bash
 cat "$SR_S1_ROOT/exit-code.json"
@@ -104,7 +120,7 @@ cat "$SR_S1_ROOT/G1/comparison.json"
 bash integrations/vllm/phase_s1.sh compare --root "$SR_S1_ROOT" --gate G1
 ```
 
-Require launcher exit 0, stage PASS and comparison `valid=true`. A throughput ratio below 1
+Require foreground command exit 0, stage PASS and comparison `valid=true`. A throughput ratio below 1
 or no physical overlap does not block. Internal execution/accounting/measurement/cleanup
 failure does block; independent output differences do not. In case of a material failure,
 preserve it and stop. The comparator emits a new immutable offline report; it never
@@ -113,12 +129,14 @@ changes the original sealed artifacts.
 ## G2 — mixed20, three modes once
 
 ```bash
-bash integrations/vllm/phase_s1.sh start --root "$SR_S1_ROOT" --gate G2
-bash integrations/vllm/phase_s1.sh status --root "$SR_S1_ROOT"
-tail -n 80 "$SR_S1_ROOT"/launcher-*.log
+(
+  set -euo pipefail
+  cd "$SR_S1_REPO"
+  bash integrations/vllm/phase_s1.sh gate --root "$SR_S1_ROOT" --gate G2
+)
 ```
 
-Wait for completion, then:
+`gate` waits for completion. Continue only after it exits 0:
 
 ```bash
 cat "$SR_S1_ROOT/exit-code.json"
@@ -133,10 +151,11 @@ and clean owned shutdown. Each run uses its own actual timed tokens for tok/s. T
 ## G3 — mixed100, three fixed rotations
 
 ```bash
-bash integrations/vllm/phase_s1.sh start --root "$SR_S1_ROOT" --gate G3
-bash integrations/vllm/phase_s1.sh status --root "$SR_S1_ROOT"
-cat "$SR_S1_ROOT/G3/capacity-check.json"
-tail -n 80 "$SR_S1_ROOT"/launcher-*.log
+(
+  set -euo pipefail
+  cd "$SR_S1_REPO"
+  bash integrations/vllm/phase_s1.sh gate --root "$SR_S1_ROOT" --gate G3
+)
 ```
 
 G3 first checks worst-case 100-request KV/sequence/query needs against both the
@@ -145,7 +164,7 @@ estimate and G2's actual Target/Draft allocated blocks. Insufficient capacity re
 The fixed orders are Target→Serial→PingPong, Serial→PingPong→Target,
 PingPong→Target→Serial. No parameter grid, legacy sweep or full main1000 run follows.
 
-After completion:
+After the foreground command exits 0:
 
 ```bash
 cat "$SR_S1_ROOT/exit-code.json"
@@ -165,10 +184,11 @@ No positive gain is required. Partial/OOM/invalid runs never enter complete-run 
 
 ## Disconnect, failure cleanup and resume
 
-For an ordinary disconnect, reconnect and restore `SR_S1_ROOT` to the **same existing
+After a disconnect or an interrupted foreground command, reconnect and restore `SR_S1_ROOT` to the **same existing
 absolute root**, plus the repo/Python variables above. Do not generate a new root for
 resume. `status` is safe while running; do not start another GPU task concurrently.
 There is a kernel lock against concurrent S1 supervisors using this root.
+Confirm the prior launcher has exited and owned cleanup is complete before retrying.
 
 ```bash
 cd /root/autodl-tmp/src/SpecRhythm
@@ -177,7 +197,7 @@ cat "$SR_S1_ROOT/stage.json"
 cat "$SR_S1_ROOT/exit-code.json"
 ```
 
-If the launcher exited or was interrupted, resume the same gate. The helper first
+If the launcher exited or was interrupted, rerun `gate` in the foreground to resume the same gate. The helper first
 verifies/cleans owned incomplete attempts, verifies every seal plus the current S1-P
 policy/schema and frozen execution identity, skips completed valid runs, and creates
 a new attempt for interrupted/failed work. It does not restart from
@@ -185,7 +205,7 @@ half-written JSON or lost live KV. Resolve a real runtime/config failure before 
 if code must change, begin a new S1 root and repeat its gates with that new frozen code.
 
 ```bash
-bash integrations/vllm/phase_s1.sh resume --root "$SR_S1_ROOT" --gate G1
+bash integrations/vllm/phase_s1.sh gate --root "$SR_S1_ROOT" --gate G1
 ```
 
 Replace G1 with the interrupted G2/G3 as appropriate. For explicit cleanup only,
@@ -203,6 +223,21 @@ blocks further work and needs inspection. A prior-policy run can never be skippe
 as a new-policy PASS. Raw coordinator and effective timeout/cleanup return codes
 are retained separately; timeout is 4 hours per GPU child, Draft startup
 timeout is 15 minutes. Timeout/failed attempts never enter performance aggregates.
+
+## Optional detached execution
+
+Foreground `gate` above is the default. To deliberately survive SSH closure, use
+`start` for a new gate or `resume` for an interrupted gate instead. Both return
+immediately with a PID and launcher log; their immediate exit is not gate PASS.
+The same live mirror and failure summary appear in the launcher log.
+
+```bash
+bash integrations/vllm/phase_s1.sh start --root "$SR_S1_ROOT" --gate G1
+bash integrations/vllm/phase_s1.sh status --root "$SR_S1_ROOT"
+tail -n 80 "$SR_S1_ROOT"/launcher-*.log
+# Only after the old launcher has exited, for the same interrupted gate:
+bash integrations/vllm/phase_s1.sh resume --root "$SR_S1_ROOT" --gate G1
+```
 
 ## Verify and return a review bundle
 

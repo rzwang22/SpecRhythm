@@ -61,6 +61,7 @@ VLLM_ALLOW_INSECURE_SERIALIZATION=1 and absent USE_TORCH/TF/FLAX. GPU effective 
 | --- | --- |
 | `valid`, `errors`, `error_details` | Material run qualification and domain-specific failure details |
 | `checks.correctness/measurement/lifecycle` | Separate validity/errors; uncompleted checks do not become PASS |
+| `draft_backend_checks` | Four independent field checks with `valid`, `field`, `expected`, `actual`, `present` and absolute `artifact` path; failures also appear in `errors`/`error_details` |
 | `performance_result` | Valid run with positive actual timed work; false for failures or all-setup-terminal runs |
 | `requests` | Stable ID/class, full generated IDs/count, actual bootstrap, untimed/timed counts, natural EOS/cap termination, final prefix hash, terminal-in-setup flag, commit events and barrier-to-completion latency |
 | `round_semantics` | Per-request/round sorted prefix/hash, proposal, accepted/rejected, correction/bonus, committed IDs and terminal status |
@@ -109,6 +110,13 @@ within-run metric accounting. It does not call output/round equality helpers.
   `end_to_end_improvement_claim=false`, `pure_batching_claim=false`,
   `new_serving_SLO_result=false`.
 
+The backend selector is `SR_PHASE4_DRAFT_BACKEND=vllm-batched`. The report producer
+`VllmBatchedDraftBackend.report()` uses `backend_name=vllm-batched-paged-kv-draft`.
+Validation requires that report name, `backend_shutdown_complete=true`, integer
+`draft_live_requests_final=0`, and `execution_failed=false`. All four checks are
+reported independently, including missing fields; a selector string is not accepted
+as the runtime report name. The S1-P output-equality policy is unchanged.
+
 ## Files, recovery and immutability
 
 Each run lives at `<root>/<gate>/<repeat>-<mode>/attempt-NNN/`. Native outputs,
@@ -125,6 +133,14 @@ Inventory, byte equality and the current result policy/schema are required
 before a run can be skipped. Run artifacts are flat; no live socket resides inside them.
 Recovery writes a new cleanup sidecar beside the old attempt and uses a new attempt
 for reruns. It does not resume live KV or modify sealed failure evidence.
+
+Foreground `gate` mirrors the existing raw child logs with mode/Target/Draft tags.
+Children still write directly to files; they are never attached to a display pipe.
+Failure summaries print result errors, field checks, exit/lifecycle evidence and
+bounded log tails, without modifying the retained attempt. Target/Draft real exit
+codes remain in `exit-code.json`; later artifact errors do not replace them. Failed
+`stage.json` retains the current mode and directory. `start`/`resume` remain optional
+detached entries, with the same display routed into their launcher log.
 
 Supervisor status (`stage.json`, latest `launcher.json`, latest `exit-code.json`) is
 mutable operational state. Historical launcher logs and per-launch exit files are

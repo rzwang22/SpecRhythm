@@ -99,6 +99,25 @@ accepted calibrated experiment.
 
 ### S1-P implementation handoff
 
+The backend/frontend follow-up starts at `08cf93a531dc928e02820b14412398b952592a49`.
+S1 qualification now checks the report producer's `vllm-batched-paged-kv-draft`
+identity, independently from shutdown complete, zero live requests and execution
+failure false. Each check retains field/expected/actual/artifact evidence; failures
+print those details and bounded child-log tails directly. Regression artifacts use
+the actual backend report producer with a CPU worker. Cross-run equality remains
+**NOT_REQUIRED** under the same `s1-performance-v1` policy.
+
+The default runbook uses foreground `gate`. A read-only log mirror labels each
+mode and Target/Draft source while both child streams still write to their original
+files. Real CPU subprocess tests prove output is visible before exit, preserve
+Target exit 7 and Draft startup exit 9, and exercise the existing owned cleanup.
+No backend/scheduler/Target/measurement/patch implementation changes are included.
+Current local Python 3.11 checks: 100 focused tests, 1525 full-suite passes with 3
+skips; Ruff, compileall and runbook syntax checks pass. Linux CI for the delivered
+commit is recorded in PR #4. No GPU execution or AutoDL connection was performed.
+All old failure artifacts stay unchanged; the next server step is fresh-root
+foreground G0/G1 using [the runbook](phase-s1-runbook.md).
+
 S0 is **CLOSED / PASS** with its original sealed inputs and the assistant review
 scope preserved. S1-P starts at clean `cd36d18c63ac706548fabccb4e5cf6e0f15e5897` on
 `codex/vllm-serving-v0.1`; PR #4 remains Draft/Open/unmerged. PR #2/#3 are untouched.

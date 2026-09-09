@@ -614,7 +614,9 @@ def native_artifacts(
     *, token_offset=0, setup_terminal=(), eos_finish=(),
 ):
     """Synthetic native-schema artifacts: validators run normally; only S0 parent is fake."""
-    from specrhythm.phase4.draft_metrics import DraftMetrics
+    from test_phase4_vllm_draft import FakeWorker
+
+    from specrhythm.phase4.vllm_draft_backend import VllmBatchedDraftBackend
     from specrhythm.serving import s1_results
 
     path, manifest, definitions = execution(
@@ -674,7 +676,11 @@ def native_artifacts(
             run_valid=True,
         ),
     )
-    draft_metrics = DraftMetrics()
+    # Exercise the actual report producer, not a hand-written backend selector/name.
+    draft_backend = VllmBatchedDraftBackend(
+        SimpleNamespace(max_model_len=4096), worker=FakeWorker()
+    )
+    draft_metrics = draft_backend.metrics
     if speculative:
         draft_metrics.forward("proposal", 4, 4)
         draft_metrics.gpu_ms["proposal"] = 0.1
@@ -712,10 +718,9 @@ def native_artifacts(
                 for i, r in enumerate(definitions)
             ],
         )
-    backend = draft_metrics.snapshot("vllm-batched")
+    draft_backend.shutdown()
+    backend = draft_backend.report()
     backend.update(
-        backend_shutdown_complete=True,
-        draft_live_requests_final=0,
         assignment=manifest["assignment"],
         pingpong_work_records=[],
     )
