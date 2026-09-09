@@ -8,7 +8,9 @@ different prompts. See [design](phase-s1-design.md) and [schema](phase-s1-schema
 Use Bash. Set `SR_S1_COMMIT` to the final full commit in the delivery message once.
 The branch update below is fast-forward only and checks the exact delivered SHA.
 The model paths, HF cache, source checkout and GPU interpreter are fixed in the helper.
-No S0 CPU environment is used for inference.
+The helper puts this checkout's `src` first on `PYTHONPATH`, so every child imports
+the pinned code without reinstalling packages in the GPU environment. No S0 CPU
+environment is used for inference.
 
 ## G0 — freeze input and check installed environment, without loading weights
 
