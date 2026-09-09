@@ -18,8 +18,9 @@ from specrhythm.phase4.resident_setup import (
     resident_admission_decision,
 )
 from specrhythm.phase4.serial import Proposal
-from specrhythm.phase4.stock_vllm import load_smoke_requests
 from specrhythm.phase4.transport import CheckpointJsonl
+from specrhythm.serving.s1_workload import initial_target_tail, s1_enabled
+from specrhythm.serving.s1_workload import load_runtime_requests as load_smoke_requests
 
 try:
     from vllm.v1.core.sched.scheduler import Scheduler
@@ -93,6 +94,9 @@ class ResidentSetupScheduler(Scheduler):
                 consumer=self._resident_consumer,
                 has_initial_proposal=proposal_installed,
             )
+            if (self._resident_consumer == "serial" and self._resident_ready is not None
+                    and initial_target_tail(stable_id, int(request.num_output_tokens))):
+                admissible, reason = True, "s1-budget-target-tail"
             self._resident_decisions[str(internal_id)] = (
                 admissible,
                 reason,
@@ -130,12 +134,16 @@ class ResidentSetupScheduler(Scheduler):
                         if self._resident_ready is not None
                         else None
                     ),
+                    "s1_initial_target_tail": initial_target_tail(
+                        stable_id, int(request.num_output_tokens) if request is not None else 0
+                    ),
                     "initial_proposal_installed": self._initial_proposal_was_installed(
                         stable_id
                     ),
                     "initial_proposal_lifecycle_state": (
                         self._resident_initial_lifecycle.state_for(stable_id).value
                         if self._resident_initial_lifecycle is not None
+                        and stable_id in self._resident_initial_lifecycle.expected_request_ids
                         else None
                     ),
                     "admissible": admissible,
@@ -162,6 +170,9 @@ class ResidentSetupScheduler(Scheduler):
                     stable_id, request
                 ),
             )
+            if (self._resident_consumer == "serial" and self._resident_ready is not None
+                    and initial_target_tail(stable_id, int(request.num_output_tokens))):
+                decision_value = (True, "s1-budget-target-tail")
             decision = (*decision_value, time.monotonic_ns(), stable_id)
             self._resident_decisions[internal_id] = decision
         if int(request.num_output_tokens) > 1 and self._resident_ready is None:
@@ -218,24 +229,32 @@ class ResidentSetupScheduler(Scheduler):
     ) -> None:
         assert self._resident_proposal_events is not None
         self._resident_initial_lifecycle = ResidentInitialProposalLifecycle(
-            expected_request_ids=self._resident_expected_ids,
+            expected_request_ids=(tuple(p.request_id for p in proposals)
+                                  if s1_enabled() else self._resident_expected_ids),
             stable_to_internal_request_id=mappings,
             proposals=proposals,
             emit=self._resident_proposal_events.append,
+            allow_empty=s1_enabled(),
         )
         self._resident_initial_lifecycle.publish(
             self.requests, cycle_id=self._resident_cycle_id
         )
 
     def _initial_proposal_available(self, stable_id: str, request: Any) -> bool:
-        if self._resident_initial_lifecycle is None:
+        if self._resident_initial_lifecycle is None or (
+            s1_enabled()
+            and stable_id not in self._resident_initial_lifecycle.expected_request_ids
+        ):
             return False
         return self._resident_initial_lifecycle.available_for_first_verification(
             stable_id, request
         )
 
     def _initial_proposal_was_installed(self, stable_id: str) -> bool:
-        if self._resident_initial_lifecycle is None:
+        if self._resident_initial_lifecycle is None or (
+            s1_enabled()
+            and stable_id not in self._resident_initial_lifecycle.expected_request_ids
+        ):
             return False
         return self._resident_initial_lifecycle.was_installed(stable_id)
 

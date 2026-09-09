@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
 
 from specrhythm.phase4.transport import CheckpointJsonl
+from specrhythm.serving.s1_workload import load_runtime_requests as load_smoke_requests
 
 DIAGNOSTIC_ENV = "SR_PHASE4_TARGET_DIAGNOSTICS"
 DIAGNOSTIC_SCHEMA = "specrhythm.phase4-target-forward-diagnostic.v1"
@@ -342,7 +343,6 @@ def capture_target_forward(
     if not workload_path:
         raise RuntimeError("SR_PHASE4_WORKLOAD is required for stable Target diagnostics")
     from specrhythm.phase4.batch_invariant import BATCH_INVARIANT_ENV
-    from specrhythm.phase4.stock_vllm import load_smoke_requests
 
     workload = Path(workload_path).resolve()
     request_count = sum(

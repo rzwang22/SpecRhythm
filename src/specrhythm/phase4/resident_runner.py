@@ -48,10 +48,17 @@ from specrhythm.phase4.stock_vllm import (
     _visible_physical_ids,
     _worker_performance_finalize,
     _worker_runtime_snapshot,
-    load_smoke_requests,
     validate_worker_ranks,
 )
 from specrhythm.phase4.transport import CheckpointJsonl, UnixDraftClient
+from specrhythm.serving.s1_workload import load_runtime_requests as load_smoke_requests
+from specrhythm.serving.s1_workload import (
+    pending_reference_comparison,
+    require_reference_or_s1,
+    s1_enabled,
+    setup_terminal_ids,
+    target_options,
+)
 
 
 def build_decode_ready_context(
@@ -127,7 +134,7 @@ def run_resident_target(
 ) -> dict[str, Any]:
     """Run a real-KV decode-only Target pass; never derive performance metrics."""
 
-    if request_count not in {2, 5, 100}:
+    if request_count not in {2, 5, 100} and not s1_enabled():
         raise ValueError("Phase-4B resident correctness allows only 2, 5, or 100 requests")
     for path in (
         context_path,
@@ -168,9 +175,11 @@ def run_resident_target(
         raise ValueError(
             "resident numerical diagnosis requires corrected-100 batch-invariant mode"
         )
-    reference = load_reference(reference_path)
-    require_reference_for_mode(reference, correctness_mode)
-    require_exact_resident_reference_reuse(reference, config, workload_path)
+    require_reference_or_s1(reference_path, phase4b2_performance)
+    reference = load_reference(reference_path) if reference_path is not None else None
+    if reference is not None:
+        require_reference_for_mode(reference, correctness_mode)
+        require_exact_resident_reference_reuse(reference, config, workload_path)
     patch_manifest = load_patch_manifest(patch_manifest_path, config)
     installed_stack = validate_installed_patch_stack(patch_manifest)
     environment = _read_object(environment_path)
@@ -240,6 +249,7 @@ def run_resident_target(
         seed=config.sampling.seed,
         gpu_memory_utilization=config.target.gpu_memory_utilization,
         max_model_len=config.max_model_len,
+        **target_options(),
         enforce_eager=config.enforce_eager,
         enable_prefix_caching=config.enable_prefix_caching,
         enable_dbo=False,
@@ -257,9 +267,12 @@ def run_resident_target(
     rank_errors.extend(batch_validation["batch_invariant_validation"]["errors"])
     if rank_errors:
         raise RuntimeError("invalid resident Target worker evidence: " + "; ".join(rank_errors))
+    from specrhythm.serving.s1_runtime import effective_runtime
+
+    effective_runtime(llm, worker_ranks, config)
     tokenizer = llm.get_tokenizer()
     for request in requests:
-        actual = tokenizer.encode(request.prompt_text, add_special_tokens=True)
+        actual = tokenizer.encode(request.prompt_text, add_special_tokens=not s1_enabled())
         if list(actual) != list(request.prompt_token_ids):
             raise RuntimeError(f"Target tokenizer disagrees for {request.request_id}")
     prompts = [{"prompt_token_ids": list(row.prompt_token_ids)} for row in requests]
@@ -338,8 +351,9 @@ def run_resident_target(
         },
     )
     decode_rows = _decode_rows(serialized, manifest)
-    raw_rows = _reference_rows(reference, requests)
-    raw_decode = compare_raw_and_decode_outputs(raw_rows, decode_rows, manifest)
+    raw_rows = _reference_rows(reference, requests) if reference is not None else []
+    raw_decode = (compare_raw_and_decode_outputs(raw_rows, decode_rows, manifest)
+                  if reference is not None else pending_reference_comparison())
     boundary_errors = validate_measurement_boundary(
         manifest,
         first_target_decode_start_ns=(
@@ -348,9 +362,10 @@ def run_resident_target(
             else None
         ),
     )
-    if not first_contracts:
+    if not first_contracts and len(setup_terminal_ids(manifest)) != len(manifest.requests):
         boundary_errors.append("no first Target decode exists after the barrier")
-    stock_comparison = compare_outputs_to_reference(serialized, reference)
+    stock_comparison = (compare_outputs_to_reference(serialized, reference)
+                        if reference is not None else pending_reference_comparison())
     errors = (
         first_errors
         + boundary_errors
@@ -436,7 +451,7 @@ def run_resident_target(
         "draft_shutdown": draft_shutdown,
         "artifact_sha256": {
             "workload": sha256_file(workload_path),
-            "reference": sha256_file(reference_path),
+            "reference": sha256_file(reference_path) if reference_path is not None else None,
             "decode_ready_manifest": sha256_file(decode_ready_manifest_path),
             "first_target_forward": sha256_file(first_forward_path),
             "setup_control": sha256_file(setup_control_path),
@@ -514,6 +529,8 @@ def _first_forward_contracts(
     errors = []
     output_by_id = {str(row.get("request_id", "")): row for row in outputs}
     for request in manifest.requests:
+        if request.request_id in setup_terminal_ids(manifest):
+            continue
         matches = [
             row
             for row in diagnostics

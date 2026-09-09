@@ -79,11 +79,17 @@ def _run_owned_target(
     graceful_seconds: float = 5.0,
     kill_seconds: float = 2.0,
     poll_seconds: float = 0.05,
+    timeout_seconds: Optional[float] = None,
+    ownership_journal: Optional[Path] = None,
 ) -> tuple[int, dict[str, Any]]:
     """Run one Target in an owned session and fail on leaked descendants."""
 
     if not command:
         raise ValueError("Target command is empty")
+    if timeout_seconds is not None and (
+        not math.isfinite(timeout_seconds) or timeout_seconds <= 0
+    ):
+        raise ValueError("Target timeout must be finite and positive")
     for name, value in (
         ("natural_teardown_grace_seconds", natural_teardown_grace_seconds),
         ("graceful_seconds", graceful_seconds),
@@ -132,12 +138,26 @@ def _run_owned_target(
                 raise RuntimeError("Target did not enter its recorded owned session")
             owner = OwnedProcesses(process.pid, target_token=ownership_token)
             owner.snapshot()
+            if ownership_journal is not None:
+                _atomic_json(ownership_journal, {
+                    "target_token": ownership_token, "root_pid": process.pid,
+                    "observed": list(owner.observed.values()),
+                    "draft_pid": draft_pid,
+                    "draft_observed": list(draft_owner.observed.values()) if draft_owner else [],
+                    "draft_socket": str(draft_socket) if draft_socket else None,
+                    "draft_socket_identity": draft_socket_before,
+                    "draft_socket_proven": draft_socket_proven,
+                })
             while process.poll() is None:
                 rows = owner.snapshot()
                 _record_members(observed, rows)
                 if draft_owner is not None:
                     draft_owner.snapshot()
                 failure_detection = failure_monitor.detect(rows, process.pid)
+                if (timeout_seconds is not None
+                        and (time.monotonic_ns() - started_ns) / 1e9 >= timeout_seconds):
+                    failure_detection = {"reason": "owned Target execution timeout",
+                                         "timeout_seconds": timeout_seconds}
                 if failure_detection is not None:
                     break
                 time.sleep(poll_seconds)
@@ -213,6 +233,8 @@ def _run_owned_target(
         effective_status = 125
     if failure_detection is not None:
         effective_status = 125
+        if failure_detection.get("reason") == "owned Target execution timeout":
+            effective_status = 124
     ended_ns = time.monotonic_ns()
     report = {
         "schema_version": LIFECYCLE_SCHEMA,

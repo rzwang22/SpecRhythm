@@ -43,6 +43,7 @@ class DraftMetrics:
         self.host_gap_ns = 0
         self.host_gap_count = 0
         self.failed = False
+        self.s1_forward_records: list[dict[str, Any]] = []
 
     def forward(self, purpose: str, requests: int, tokens: int) -> None:
         if purpose not in (*self.batches, "warmup") or requests < 1 or tokens < requests:
@@ -56,6 +57,8 @@ class DraftMetrics:
         measured = self.batches["proposal"] + self.batches["commit"]
         stats = batch_statistics(measured)
         return {
+            **({"s1_forward_records": list(self.s1_forward_records)}
+               if self.s1_forward_records else {}),
             "schema_version": "specrhythm.phase4b3-draft-backend.v1",
             "backend_name": backend_name,
             "serving_performance_backend": True,

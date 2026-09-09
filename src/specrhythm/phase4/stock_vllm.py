@@ -29,6 +29,7 @@ from specrhythm.phase4.manifest import (
     validate_topology,
 )
 from specrhythm.phase4.transport import CheckpointJsonl
+from specrhythm.serving.s1_workload import s1_enabled, target_options
 
 MATCHED_BOOTSTRAP_CONTROL_SCHEMA = (
     "specrhythm.phase4b1-gate3-matched-bootstrap-control.v1"
@@ -249,6 +250,16 @@ def _worker_runtime_snapshot(worker: Any) -> dict[str, Any]:
         "enforce_eager": bool(worker.vllm_config.model_config.enforce_eager),
     }
     result.update(worker_batch_invariant_evidence(worker))
+    if s1_enabled():
+        cache = worker.vllm_config.cache_config
+        kv = getattr(worker.model_runner, "kv_cache_config", None)
+        result["s1_effective_capacity"] = {
+            "max_model_len": worker.vllm_config.model_config.max_model_len,
+            "max_num_seqs": scheduler_config.max_num_seqs,
+            "max_num_batched_tokens": scheduler_config.max_num_batched_tokens,
+            "block_size": cache.block_size,
+            "num_gpu_blocks": getattr(kv, "num_blocks", None) or cache.num_gpu_blocks,
+        }
     return result
 
 
@@ -684,7 +695,9 @@ def run_stock_smoke(
             "matched-bootstrap async-OFF control requires Target corrected-100, "
             "batch-invariant mode, one diagnostic run, and both diagnostic outputs"
         )
-    requests = load_smoke_requests(
+    from specrhythm.serving.s1_workload import load_runtime_requests
+
+    requests = load_runtime_requests(
         workload_path,
         effective_count,
         require_task_mixture=effective_count in {5, 100},
@@ -708,6 +721,7 @@ def run_stock_smoke(
         seed=config.sampling.seed,
         gpu_memory_utilization=engine.gpu_memory_utilization,
         max_model_len=config.max_model_len,
+        **target_options(),
         enforce_eager=config.enforce_eager,
         enable_prefix_caching=config.enable_prefix_caching,
         enable_dbo=False,
@@ -746,9 +760,12 @@ def run_stock_smoke(
                 rank_errors.append("TP worker did not prove ResidentSetupScheduler absence")
     if rank_errors:
         raise RuntimeError("invalid vLLM worker evidence: " + "; ".join(rank_errors))
+    from specrhythm.serving.s1_runtime import effective_runtime
+
+    effective_runtime(llm, worker_ranks, config)
     tokenizer = llm.get_tokenizer()
     for request in requests:
-        encoded = tokenizer.encode(request.prompt_text, add_special_tokens=True)
+        encoded = tokenizer.encode(request.prompt_text, add_special_tokens=not s1_enabled())
         if list(encoded) != list(request.prompt_token_ids):
             raise RuntimeError(
                 f"vLLM tokenizer disagrees with frozen prompt tokens for {request.request_id}"

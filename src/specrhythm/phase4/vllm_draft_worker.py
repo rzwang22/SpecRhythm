@@ -25,6 +25,7 @@ from specrhythm.phase4.draft_metrics import DraftMetrics
 from specrhythm.phase4.manifest import model_revision_manifest, sha256_file
 from specrhythm.phase4.stock_vllm import active_cuda_device_identity
 from specrhythm.phase4.vllm_installation import locate_installed_vllm_file
+from specrhythm.serving.s1_workload import s1_enabled
 
 API_PATH = Path(__file__).with_name("vllm_draft_api.json")
 EXECUTE_FIELDS = (
@@ -163,6 +164,8 @@ class VllmDraftWorker:
         self.owner_thread = threading.get_ident()
         self.views: dict[str, Any] = {}
         self.events: list[tuple[str, Any, Any]] = []
+        self.s1_pending_events: dict[int, dict] = {}
+        self.s1_forward_evidence = s1_enabled()
         self.hooks: list[Any] = []
         self.executor = None
         self.closed = False
@@ -382,6 +385,8 @@ class VllmDraftWorker:
 
     def _install_model_events(self) -> None:
         def before(_module: Any, _args: Any) -> None:
+            if self.s1_forward_evidence:
+                self.s1_forward_start_ns = time.monotonic_ns()
             event = self.torch.cuda.Event(enable_timing=True)
             event.record()
             self._model_start = event
@@ -393,6 +398,18 @@ class VllmDraftWorker:
             self.metrics.forward(
                 self.phase, max(len(self.active_rows), 1), max(self.active_tokens, 1)
             )
+            if self.s1_forward_evidence:
+                row = {
+                    "purpose": self.phase, "B": max(len(self.active_rows), 1),
+                    "Q": max(self.active_tokens, 1),
+                    "internal_request_ids": list(self.active_rows),
+                    "host_start_ns": self.s1_forward_start_ns,
+                    "host_launch_end_ns": time.monotonic_ns(),
+                    "gpu_event_ms": None, "cuda_completion_observed_ns": None,
+                    "extra_cuda_sync": False, "per_forward_file_write": False,
+                }
+                self.s1_pending_events[id(event)] = row
+                self.metrics.s1_forward_records.append(row)
 
         self.hooks = [
             self.model.register_forward_pre_hook(before),
@@ -471,7 +488,12 @@ class VllmDraftWorker:
         self.metrics.syncs[reason] += 1
         self.torch.cuda.synchronize()
         for purpose, start, end in self.events:
-            self.metrics.gpu_ms[purpose] += start.elapsed_time(end)
+            elapsed = start.elapsed_time(end)
+            self.metrics.gpu_ms[purpose] += elapsed
+            if self.s1_forward_evidence:
+                row = self.s1_pending_events.pop(id(end))
+                row["gpu_event_ms"] = elapsed
+                row["cuda_completion_observed_ns"] = time.monotonic_ns()
         self.events.clear()
 
     def request_evidence(self, request_id: str) -> dict:

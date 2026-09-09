@@ -22,6 +22,7 @@ from specrhythm.phase4.decode_ready import (
 )
 from specrhythm.phase4.manifest import sha256_file
 from specrhythm.phase4.serial import Proposal
+from specrhythm.serving.s1_workload import initial_proposal_excluded_ids, initial_target_tail
 
 SETUP_CONTROL_SCHEMA = "specrhythm.phase4b-resident-setup-control.v1"
 SETUP_READY_SCHEMA = "specrhythm.phase4b-resident-setup-ready.v1"
@@ -478,7 +479,8 @@ def build_deferred_initial_proposals_ready(
     published_ns: int,
 ) -> dict[str, Any]:
     proposal_rows = tuple(proposals)
-    expected = [row.request_id for row in manifest.requests]
+    terminal_ids = initial_proposal_excluded_ids(manifest)
+    expected = [row.request_id for row in manifest.requests if row.request_id not in terminal_ids]
     if [row.request_id for row in proposal_rows] != expected:
         raise ValueError("deferred initial proposal request set/order differs")
     if published_ns < performance_measurement_start_ns:
@@ -523,7 +525,8 @@ def load_deferred_initial_proposals_ready(
         errors.append("unsupported deferred initial-proposal schema")
     if value.get("manifest_sha256") != manifest.manifest_sha256:
         errors.append("deferred proposals reference a different manifest")
-    expected = [str(item) for item in expected_request_ids]
+    terminal_ids = initial_proposal_excluded_ids(manifest)
+    expected = [str(item) for item in expected_request_ids if str(item) not in terminal_ids]
     if value.get("request_ids") != expected:
         errors.append("deferred initial-proposal request set/order differs")
     start = value.get("performance_measurement_start_ns")
@@ -725,6 +728,8 @@ def validate_resident_admission_events(
             and output_count == 1
             and ready
             and row.get("initial_proposal_installed") is not True
+            and not (row.get("s1_initial_target_tail") is True
+                     and initial_target_tail(request_id, output_count))
         ):
             errors.append(f"{label} released Serial without an initial proposal")
         if (

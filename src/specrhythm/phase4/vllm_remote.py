@@ -40,9 +40,10 @@ from specrhythm.phase4.resident_setup import (
     setup_row_evidence,
 )
 from specrhythm.phase4.serial import Proposal, RoundRecord, SerialTimeline, greedy_acceptance
-from specrhythm.phase4.stock_vllm import load_smoke_requests
 from specrhythm.phase4.transport import CheckpointJsonl, UnixDraftClient
 from specrhythm.phase4.vllm_diagnostics import TARGET_ONLY_FIELDS
+from specrhythm.serving.s1_workload import load_runtime_requests as load_smoke_requests
+from specrhythm.serving.s1_workload import s1_enabled
 
 
 @dataclass
@@ -101,6 +102,11 @@ class RemoteDraftProposer:
             self.eos_token_ids = tuple(int(item) for item in eos)
         else:
             self.eos_token_ids = ()
+        if s1_enabled():
+            from specrhythm.phase4.dual_commit import load_dual_stop_policies
+
+            policies = load_dual_stop_policies(vllm_config, requests)
+            self.eos_token_ids = tuple(policies[requests[0].request_id].terminal_token_ids)
         self.requests: dict[str, _TargetRequest] = {}
         # Kept as a public diagnostic alias for existing Phase-4A reports.
         self.internal_to_stable = self.identity.internal_to_stable
@@ -302,6 +308,8 @@ class RemoteDraftProposer:
             )
             tracker.record(observation)
             self._log_resident_observation(observation, duplicate=False)
+            if s1_enabled() and self.requests[stable_id].finished:
+                self.client.call("finish_request", {"request_id": stable_id})
         if not tracker.complete:
             self._write_report()
             return {
@@ -438,7 +446,12 @@ class RemoteDraftProposer:
             proposal_by_id = {row.request_id: row for row in initial_proposals}
             result: Optional[dict[str, Any]] = {
                 "draft_token_ids": [
-                    list(proposal_by_id[self.identity.stable_id(str(internal_id))].proposal_token_ids)
+                    (list(proposal_by_id[
+                        self.identity.stable_id(str(internal_id))
+                    ].proposal_token_ids)
+                     if (not s1_enabled()
+                         or self.identity.stable_id(str(internal_id)) in proposal_by_id)
+                     else [])
                     for internal_id in request_ids
                 ]
             }
@@ -460,6 +473,11 @@ class RemoteDraftProposer:
         for stable_id in self.definitions:
             definition = self.definitions[stable_id]
             state = self.requests.get(stable_id)
+            if s1_enabled() and state is not None and (
+                state.finished
+                or definition.maximum_new_tokens - len(state.generated_token_ids) == 1
+            ):
+                continue
             if state is None or len(state.generated_token_ids) != 1 or state.finished:
                 raise RuntimeError(
                     f"Serial initial proposal state is invalid for {stable_id}"
@@ -478,6 +496,8 @@ class RemoteDraftProposer:
                     "eos_token_ids": list(self.eos_token_ids),
                 }
             )
+        if s1_enabled() and not rows:
+            return ()
         outgoing = {"synchronizations": [], "proposals": rows}
         _assert_target_information_isolated(outgoing)
         response = self.client.call("synchronize_and_batch_propose", outgoing)
@@ -485,9 +505,10 @@ class RemoteDraftProposer:
             str(row["request_id"]): Proposal.from_dict(row)
             for row in response.get("proposals", ())
         }
-        if set(by_id) != set(self.definitions):
+        expected = [r["request_id"] for r in rows]
+        if set(by_id) != set(expected):
             raise RuntimeError("Draft did not return one initial proposal per request")
-        proposals = tuple(by_id[item] for item in self.definitions)
+        proposals = tuple(by_id[item] for item in expected)
         if any(row.draft_start_ns < measurement_start_ns for row in proposals):
             raise RuntimeError("Serial initial proposal began before measurement_start")
         for proposal in proposals:

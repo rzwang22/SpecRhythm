@@ -63,10 +63,11 @@ from specrhythm.phase4.stock_vllm import (
     _serialize_outputs,
     _visible_physical_ids,
     _worker_performance_finalize,
-    load_smoke_requests,
     validate_worker_ranks,
 )
 from specrhythm.phase4.transport import CheckpointJsonl
+from specrhythm.serving.s1_workload import load_runtime_requests as load_smoke_requests
+from specrhythm.serving.s1_workload import s1_enabled, target_options
 
 
 def run_dual_batch(
@@ -141,7 +142,7 @@ def run_dual_batch(
         expected_count=request_count,
         require_task_mixture=request_count in {5, 100},
     )
-    if request_count == 100:
+    if request_count == 100 and not s1_enabled():
         counts = {
             task: sum(item.task_class == task for item in requests)
             for task in ("code", "chat", "summarization")
@@ -187,6 +188,7 @@ def run_dual_batch(
         seed=config.sampling.seed,
         gpu_memory_utilization=config.target.gpu_memory_utilization,
         max_model_len=config.max_model_len,
+        **target_options(),
         enforce_eager=config.enforce_eager,
         enable_prefix_caching=config.enable_prefix_caching,
         enable_dbo=False,
@@ -206,9 +208,12 @@ def run_dual_batch(
     rank_errors.extend(batch_validation["batch_invariant_validation"]["errors"])
     if rank_errors:
         raise RuntimeError("invalid Target worker evidence: " + "; ".join(rank_errors))
+    from specrhythm.serving.s1_runtime import effective_runtime
+
+    effective_runtime(llm, worker_ranks, config)
     tokenizer = llm.get_tokenizer()
     for request in requests:
-        actual = tokenizer.encode(request.prompt_text, add_special_tokens=True)
+        actual = tokenizer.encode(request.prompt_text, add_special_tokens=not s1_enabled())
         if list(actual) != list(request.prompt_token_ids):
             raise RuntimeError(f"Target tokenizer disagrees for {request.request_id}")
     pending = [item for item in requests if item.request_id not in completed_ids]
@@ -387,7 +392,7 @@ def run_resident_dual_batch(
 ) -> dict[str, Any]:
     """Run real decode-only resident Dual correctness without performance claims."""
 
-    if request_count not in {2, 5, 100}:
+    if request_count not in {2, 5, 100} and not s1_enabled():
         raise ValueError("Phase-4B.1 allows only 2, 5, or 100 requests")
     rhythm = selected_rhythm()
     scheduler_class, proposer_class = LEGACY_CLASSES
@@ -461,7 +466,7 @@ def run_resident_dual_batch(
         request_count,
         require_task_mixture=request_count in {5, 100},
     )
-    if request_count == 100:
+    if request_count == 100 and not s1_enabled():
         counts = {
             task: sum(row.task_class == task for row in requests)
             for task in ("code", "chat", "summarization")
@@ -517,6 +522,7 @@ def run_resident_dual_batch(
         seed=config.sampling.seed,
         gpu_memory_utilization=config.target.gpu_memory_utilization,
         max_model_len=config.max_model_len,
+        **target_options(),
         enforce_eager=config.enforce_eager,
         enable_prefix_caching=config.enable_prefix_caching,
         enable_dbo=False,
@@ -534,9 +540,12 @@ def run_resident_dual_batch(
     rank_errors.extend(batch_validation["batch_invariant_validation"]["errors"])
     if rank_errors:
         raise RuntimeError("invalid resident Dual Target ranks: " + "; ".join(rank_errors))
+    from specrhythm.serving.s1_runtime import effective_runtime
+
+    effective_runtime(llm, worker_ranks, config)
     tokenizer = llm.get_tokenizer()
     for request in requests:
-        actual = tokenizer.encode(request.prompt_text, add_special_tokens=True)
+        actual = tokenizer.encode(request.prompt_text, add_special_tokens=not s1_enabled())
         if list(actual) != list(request.prompt_token_ids):
             raise RuntimeError(f"Target tokenizer disagrees for {request.request_id}")
     prompts = [{"prompt_token_ids": list(row.prompt_token_ids)} for row in requests]
@@ -620,23 +629,30 @@ def run_resident_dual_batch(
             raise ValueError("Dual plugin microbatch differs from scheduler/runner")
     except ValueError as error:
         microbatch_errors.append(str(error))
+    from specrhythm.serving.s1_workload import initial_proposal_excluded_ids
+
+    no_speculative_work = (
+        s1_enabled()
+        and len(initial_proposal_excluded_ids(manifest)) == len(manifest.requests)
+        and not proposal_rows and not lifecycle_rows and not verification_rows
+    )
     overlap_characterization = (
         characterize_overlap(draft_rows, verification_rows, overlap_rows, worker_ranks)
-        if overlap_requirement == "characterization" else None
+        if overlap_requirement == "characterization" and not no_speculative_work else None
     )
     overlap_errors = validate_overlap_witness(overlap_rows)
     errors = [
         *reconciliation_errors,
         *microbatch_errors,
         *validate_request_state_events(state_rows),
-        *validate_proposal_lifecycle_events(lifecycle_rows),
+        *(validate_proposal_lifecycle_events(lifecycle_rows) if not no_speculative_work else []),
         *validate_scheduler_cycles(
             scheduler_rows,
             proposal_lifecycle_rows=lifecycle_rows,
             state_rows=state_rows,
             draft_rows=draft_rows,
         ),
-        *validate_round_accounting(proposal_rows),
+        *(validate_round_accounting(proposal_rows) if not no_speculative_work else []),
         *_validate_request_identity_report(plugin_report, requests),
     ]
     if overlap_requirement == "required":

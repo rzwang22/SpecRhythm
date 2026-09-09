@@ -43,13 +43,20 @@ from specrhythm.phase4.stock_vllm import (
     _visible_physical_ids,
     _worker_performance_finalize,
     _worker_runtime_snapshot,
-    load_smoke_requests,
     run_stock_smoke,
     validate_worker_ranks,
 )
 from specrhythm.phase4.transport import CheckpointJsonl, UnixDraftClient, payload_sha256
 from specrhythm.phase4.vllm_diagnostics import validate_kv_monotonicity
 from specrhythm.phase4.vllm_installation import locate_installed_vllm_file
+from specrhythm.serving.s1_workload import (
+    initial_proposal_excluded_ids,
+    pending_reference_comparison,
+    require_reference_or_s1,
+    s1_enabled,
+    target_options,
+)
+from specrhythm.serving.s1_workload import load_runtime_requests as load_smoke_requests
 
 PATCHED_VLLM_RUNNER_SHA256 = (
     "2905189397b1517659e6606f5bc36c7ca226330f42255c579207fe38f61f9e19"
@@ -88,6 +95,10 @@ def load_patch_manifest(path: Path, config: Phase4Config) -> dict[str, Any]:
     value = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(value, dict):
         raise ValueError("vLLM patch manifest root must be an object")
+    if s1_enabled() and value.get("schema_version") == "specrhythm.vllm-patch-state-check.v1":
+        from specrhythm.serving.s1_preflight import checked_patch_adapter
+
+        return checked_patch_adapter(value, config)
     errors = []
     if value.get("schema_version") != "specrhythm.vllm-base-and-patch-manifest.v1":
         errors.append("unsupported vLLM patch manifest")
@@ -251,8 +262,10 @@ def run_serial_disaggregated(
 
     _require_v1_runner()
     mode_evidence = configure_before_worker_creation(correctness_mode)
-    reference = load_reference(reference_path)
-    require_reference_for_mode(reference, correctness_mode)
+    require_reference_or_s1(reference_path, phase4b2_performance)
+    reference = load_reference(reference_path) if reference_path is not None else None
+    if reference is not None:
+        require_reference_for_mode(reference, correctness_mode)
     patch_manifest = load_patch_manifest(patch_manifest_path, config)
     installed_runner = validate_installed_patched_runner(patch_manifest)
     environment = json.loads(environment_path.read_text(encoding="utf-8"))
@@ -293,7 +306,8 @@ def run_serial_disaggregated(
             "resident Serial requires context, manifest, timing and first-forward paths"
         )
     if resident_mode:
-        require_exact_resident_reference_reuse(reference, config, workload_path)
+        if reference is not None:
+            require_exact_resident_reference_reuse(reference, config, workload_path)
         installed_runner = validate_installed_patch_stack(patch_manifest)
     artifact_paths = [round_events_path, transport_events_path, plugin_report_path]
     artifact_paths.extend(path for path in resident_paths[1:] if path is not None)
@@ -397,6 +411,7 @@ def run_serial_disaggregated(
         seed=config.sampling.seed,
         gpu_memory_utilization=config.target.gpu_memory_utilization,
         max_model_len=config.max_model_len,
+        **target_options(),
         enforce_eager=config.enforce_eager,
         enable_prefix_caching=config.enable_prefix_caching,
         enable_dbo=False,
@@ -421,11 +436,14 @@ def run_serial_disaggregated(
     rank_errors.extend(batch_validation["batch_invariant_validation"]["errors"])
     if rank_errors:
         raise RuntimeError("invalid Target worker evidence: " + "; ".join(rank_errors))
+    from specrhythm.serving.s1_runtime import effective_runtime
+
+    effective_runtime(llm, worker_ranks, config)
     tokenizer = llm.get_tokenizer()
     for request in requests:
-        if list(tokenizer.encode(request.prompt_text, add_special_tokens=True)) != list(
-            request.prompt_token_ids
-        ):
+        if list(tokenizer.encode(
+            request.prompt_text, add_special_tokens=not s1_enabled()
+        )) != list(request.prompt_token_ids):
             raise RuntimeError(f"Target tokenizer disagrees for {request.request_id}")
     prompts = [{"prompt_token_ids": list(request.prompt_token_ids)} for request in requests]
     parameters = [
@@ -460,7 +478,8 @@ def run_serial_disaggregated(
         torch.cuda.synchronize()
     generation_end = time.monotonic_ns()
     serialized = _serialize_outputs(outputs, requests)
-    comparison = compare_outputs_to_reference(serialized, reference)
+    comparison = (compare_outputs_to_reference(serialized, reference)
+                  if reference is not None else pending_reference_comparison())
     if not plugin_report_path.is_file():
         raise RuntimeError("Target custom proposer did not emit its lifecycle report")
     plugin_report = json.loads(plugin_report_path.read_text(encoding="utf-8"))
@@ -514,8 +533,10 @@ def run_serial_disaggregated(
         "draft_service_ready_file": draft_ready_path.name,
         "draft_service_ready_sha256": sha256_file(draft_ready_path),
         "draft_service": draft_ready,
-        "stock_reference_file": reference_path.name,
-        "stock_reference_sha256": sha256_file(reference_path),
+        "stock_reference_file": reference_path.name if reference_path is not None else None,
+        "stock_reference_sha256": (
+            sha256_file(reference_path) if reference_path is not None else None
+        ),
         "patch_manifest_file": patch_manifest_path.name,
         "patch_manifest_sha256": sha256_file(patch_manifest_path),
         "transport": "unix-domain-socket",
@@ -621,7 +642,9 @@ def run_serial_disaggregated(
             else {"enabled": False}
         ),
         "draft_shutdown": draft_shutdown,
-        "stock_reference": reference_file_evidence(reference_path),
+        "stock_reference": (
+            reference_file_evidence(reference_path) if reference_path is not None else None
+        ),
         "patch_manifest": {
             "file": patch_manifest_path.name,
             "file_sha256": sha256_file(patch_manifest_path),
@@ -675,7 +698,10 @@ def run_serial_disaggregated(
         ).read()
         initial_proposal_errors = validate_initial_proposal_lifecycle_events(
             initial_proposal_rows,
-            expected_request_ids=[row.request_id for row in requests],
+            expected_request_ids=[
+                row.request_id for row in requests
+                if row.request_id not in initial_proposal_excluded_ids(manifest)
+            ],
         )
         resident_errors.extend(initial_proposal_errors)
         diagnostics = CheckpointJsonl(diagnostics_path).read() if diagnostics_path else []
@@ -686,6 +712,8 @@ def run_serial_disaggregated(
             if row.get("round_id") == 0
         }
         for ready in manifest.requests:
+            if ready.request_id in initial_proposal_excluded_ids(manifest):
+                continue
             matches = [
                 row
                 for row in diagnostics
@@ -784,7 +812,7 @@ def run_serial_disaggregated(
         decode_rows = _decode_rows(serialized, manifest)
         raw_decode = compare_raw_and_decode_outputs(
             _reference_rows(reference, requests), decode_rows, manifest
-        )
+        ) if reference is not None else pending_reference_comparison()
         if not raw_decode["valid"] and not phase4b2_performance:
             resident_errors.extend(raw_decode["errors"])
         result.update(
@@ -908,6 +936,7 @@ def run_fixed_proposal_control(
         seed=config.sampling.seed,
         gpu_memory_utilization=config.target.gpu_memory_utilization,
         max_model_len=config.max_model_len,
+        **target_options(),
         enforce_eager=config.enforce_eager,
         enable_prefix_caching=config.enable_prefix_caching,
         enable_dbo=False,

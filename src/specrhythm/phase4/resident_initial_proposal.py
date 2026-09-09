@@ -43,9 +43,10 @@ class ResidentInitialProposalLifecycle:
         stable_to_internal_request_id: Mapping[str, Any],
         proposals: Sequence[Proposal],
         emit: Callable[[Mapping[str, Any]], None],
+        allow_empty: bool = False,
     ) -> None:
         expected = tuple(str(item) for item in expected_request_ids)
-        if not expected or len(set(expected)) != len(expected):
+        if (not expected and not allow_empty) or len(set(expected)) != len(expected):
             raise RuntimeError("resident initial proposal request IDs are invalid")
         by_id = {proposal.request_id: proposal for proposal in proposals}
         if len(by_id) != len(tuple(proposals)) or set(by_id) != set(expected):

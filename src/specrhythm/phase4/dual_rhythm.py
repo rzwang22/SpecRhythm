@@ -10,7 +10,8 @@ from types import MappingProxyType
 
 from specrhythm.phase4.batched_draft_service import write_immutable_report
 from specrhythm.phase4.manifest import sha256_file
-from specrhythm.phase4.stock_vllm import load_smoke_requests
+from specrhythm.serving.s1_workload import load_runtime_requests as load_smoke_requests
+from specrhythm.serving.s1_workload import s1_enabled
 
 SELECTOR = "SR_PHASE4B_DUAL_RHYTHM"
 MANIFEST = "SR_PHASE4_DUAL_RHYTHM_MANIFEST"
@@ -35,7 +36,7 @@ def selected_rhythm(environ=None):
 def balanced_assignment(request_ids):
     ids = tuple(request_ids)
     if (
-        len(ids) < 2
+        len(ids) < (1 if s1_enabled() else 2)
         or len(set(ids)) != len(ids)
         or any(not isinstance(r, str) or not r.strip() for r in ids)
     ):

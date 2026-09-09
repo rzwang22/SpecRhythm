@@ -47,8 +47,8 @@ from specrhythm.phase4.resident_setup import (
     setup_row_evidence,
 )
 from specrhythm.phase4.serial import greedy_acceptance, token_prefix_hash
-from specrhythm.phase4.stock_vllm import load_smoke_requests
 from specrhythm.phase4.transport import CheckpointJsonl
+from specrhythm.serving.s1_workload import load_runtime_requests as load_smoke_requests
 
 
 @dataclass
