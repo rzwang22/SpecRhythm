@@ -32,7 +32,7 @@ jobs:
       - run: specrhythm-s0 --help
       - run: python -m pytest -q tests/test_serving_s0.py
       - run: specrhythm-s2 --help
-      - run: python -m pytest -q tests/test_serving_s2.py tests/test_serving_s2_runtime.py tests/test_serving_s2_cli.py tests/test_serving_s2_results.py
+      - run: python -m pytest -q tests/test_serving_s2.py tests/test_serving_s2_runtime.py tests/test_serving_s2_cli.py tests/test_serving_s2_results.py tests/test_serving_s2_uuid.py
       - run: specrhythm-s1 --help
       - run: python -m pytest -q tests/test_serving_s1.py tests/test_serving_s1_performance.py tests/test_serving_s1_console.py tests/test_serving_s1_startup.py
 

@@ -27,6 +27,10 @@ UUIDS = {
 
 @pytest.fixture
 def harness(monkeypatch):
+    # Legacy UUID contracts must not inherit a serving profile from other test adapters.
+    # S2's integrated fixture explicitly enables its own profile after this setup.
+    monkeypatch.delenv("SR_S1_EXECUTION_MANIFEST", raising=False)
+    monkeypatch.delenv("SR_S2_EXECUTION_MANIFEST", raising=False)
     calls = []
     cuda = SimpleNamespace(
         logical=0, name="A800",

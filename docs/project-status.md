@@ -34,9 +34,40 @@ claims.
 | [#1 workload-v0.1](https://github.com/rzwang22/SpecRhythm/pull/1) | merged | strict Mooncake replay, R3 proxy config, validator, manifest, fixture tests and docs | workload plumbing only; proxy payload and illustrative acceptance |
 | [#2 simulator-semantics-v0.2](https://github.com/rzwang22/SpecRhythm/pull/2) | frozen draft; Phase 2 complete, not merged | proposal lifecycle, deterministic tree oracle, tree-aware allocators, base-preserving residual controls, Phase-2 nested search pools and common-snapshot oracle replay, path-aware eager and accounting | pure-Python proxy and oracle upper bounds only; no deployable oracle, measured search cost, GPU integration, or performance claim |
 | [#3 gpu-integration-v0.1](https://github.com/rzwang22/SpecRhythm/pull/3) | draft; Phase 3B.1 and corrected-20 Phase 3C.2 complete; Phase 3C.3 corrected-100 awaiting server run | hardened multi-rank primitives, corrected R3-real traces, common-prefix replay, request-bootstrap statistics, 2x shell decomposition and diagnostic learned ranker | user-run 3×A800 correctness artifacts plus Mac CPU tests; no packed-tree/serving engine, Dual-Batch, SLO, calibrated latency or speedup claim |
-| [#4 vllm-serving-v0.1](https://github.com/rzwang22/SpecRhythm/pull/4) | Draft/Open/unmerged; S0 CLOSED/PASS; operator reports S1-P G0–G3 PASS at `5a00049`; S2 implemented, GPU PENDING | independent prefilled-KV resident pool, dynamic Poisson arrival/admission, Target/Serial/PingPong and engineering SLO/goodput | CPU/source contracts are not GPU qualification; finite-trace ideal PD-delivery boundary only |
+| [#4 vllm-serving-v0.1](https://github.com/rzwang22/SpecRhythm/pull/4) | Draft/Open/unmerged; S0 CLOSED/PASS; S1-P G0–G3 PASS at `5a00049`; S2 capacity/calibration/G0 and G1 Target/Serial reported PASS; PingPong startup fix awaiting retest | independent prefilled-KV resident pool, dynamic Poisson arrival/admission, Target/Serial/PingPong and engineering SLO/goodput | CPU/source contracts are not GPU qualification; finite-trace ideal PD-delivery boundary only |
 
 ## Phase S: Serving Workloads & Arrival Replay
+
+**S2 PingPong UUID startup correction** follows the operator's run at
+`c12b3768eaaaeca3ecde03999440b7b91763b128`, retained at
+`/root/autodl-tmp/SpecRhythm-data/results/phase-s2/s2-c12b3768eaaa-20260910T012202Z-1476`.
+Reported results: capacity PASS (small100/large390, 3:3:2:2), calibration/G0 PASS, G1
+Target and Serial each completed ten and passed; PingPong failed at first verification.
+There is no passed G1.json, so G2 remains blocked. These partial operator results do not
+establish complete S2 GPU/performance qualification, and the old root is preserved.
+
+S2 had called only the ordinary worker snapshot. The inherited Dual verification end hook
+requires the `DualVerificationUuidQuery(worker)` installed by `worker_dual_runtime_snapshot`,
+which the legacy Dual runner invoked but S2 omitted. S2 now uses an explicit PingPong startup
+RPC on both Target ranks before prefill/verification. Later capacity/memory snapshots only
+read the query evidence, preserving its identity and counters; Target/Serial remain on the
+ordinary startup path. Live UUID behavior, TP binding, algorithms, capacity selection, trace,
+SLO, models/K/numerical settings, measurement boundary, failure reporting and cleanup are
+unchanged. Probe counters may be zero without satisfying a nonempty UUID A/B experiment.
+
+The new CPU regression executes real S2 configuration, proposer constructors, startup RPC
+callbacks, inherited verification start/end on both simulated ranks and final evidence reads.
+It reproduced `AttributeError: 'S2PingProposer' object has no attribute 'uuid_queries'` at the
+original `vllm_dual.py:659` before the fix. Earlier tests stopped at LLM construction or used a
+canned RPC/step result, missing that integration boundary. The shared legacy UUID hardware
+fixture now explicitly clears unrelated serving profiles so focused tests are order-independent.
+Current local validation: S2 **53 passed**, S1 **104 passed**, legacy Dual UUID **37 passed**
+(combined **194 passed**); full Python 3.11 pytest with pinned source audit **1582 passed,
+3 skipped** (GPU opt-in and two Linux-only process cases). Ruff, compileall, eight repository
+shell files, eight runbook Bash blocks and diff checks pass. Exact-head Linux CI is recorded
+in the handoff and PR #4. The next operator run uses a new root and newly measured capacity
+(390 is not hard-coded), repeats calibration/G0/G1, and
+permits G2/G3 only after G1 succeeds. The agent has not connected to AutoDL or run GPU work.
 
 **S2 — GPU-resident Prefilled-KV Dynamic Decode Serving** continues from
 `5a00049e2eabf09f535fdd5f187f77406f6dcfe2`. The operator reported S1-P G0–G3 PASS
@@ -61,7 +92,7 @@ decode average latency is distinct from TPOT, and output work/throughput/makespa
 reported together. Foreground tagged raw logs, precise primary failures, sealed evidence,
 fresh-state recovery and a small upload JSON are included.
 
-Local Python 3.11 validation with the pinned vLLM source audit: S2 contracts **48 passed**,
+Initial `c12b376` local Python 3.11 validation with the pinned vLLM source audit: S2 contracts **48 passed**,
 S1 compatibility **104 passed**, Phase4 **1182 passed / 2 platform skips**, and full pytest
 **1577 passed / 3 skips** (one GPU opt-in and two Linux-only process cases). Ruff, compileall,
 eight repository shell files, eight S2 runbook Bash blocks and staged diff checks pass.
@@ -70,8 +101,9 @@ contracts cover real adapter startup order, synthetic private
 allocator residency/restoration, independent arrivals, dynamic slots/cohorts, common
 capacity and traces, native-shaped accounting, offline requalification and real owned CPU
 child failure/cleanup. Fixed-source tests inspect vLLM's synchronous client, retained cached
-requests and scheduler allocation hooks. Real GPU capacity, residency, dynamic numerical
-execution, G0–G3 measurements and performance remain **PENDING operator validation**.
+requests and scheduler allocation hooks. The partial operator results reported above supersede
+the initial GPU-pending status. PingPong with the startup correction, complete G1, and G2/G3
+measurements/performance remain **PENDING operator validation**.
 The coding agent has performed no GPU execution and no AutoDL connection.
 
 See [S2 design](phase-s2-design.md), [S2 schema](phase-s2-schema.md) and

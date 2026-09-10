@@ -35,6 +35,18 @@ The request metrics are `queue_ms`, `arrival_handling_lag_ms`, `first_timed_toke
 `request_tpot_ms`, and `queue_inclusive_decode_avg_ms_per_token`. Bootstrap/timed/total output
 counts are separate. SLO-good is defined only for requests with at least one timed token.
 
+For PingPong, worker snapshot rows additionally contain `dual_uuid_query`, from the existing
+`worker_dual_uuid_evidence` reader. This appears in startup `actual-capacity.json` Target worker
+rows, prefill `resident-pool.json` Target initial-memory rows, and final `runtime.json` Target
+memory rows. Fields retain `uuid_query_mode`, `uuid_initial_validation_count`,
+`uuid_verification_subprocess_query_count`, `uuid_cache_hit_count`,
+`uuid_verification_access_count`, and the real rank/device/UUID binding. Snapshot reads never
+reset counters; one startup validation per rank and zero verification accesses are normal for
+capacity probes. The nonempty-verification UUID A/B gate is not a capacity qualification rule.
+Verification UUID intervals remain in the existing `verification-events.jsonl`; final counters
+are read after the unchanged observation end and Draft shutdown. Target/Serial snapshots do
+not acquire a Dual query object or these Dual-only fields.
+
 Valid execution never depends on cross-run output equality or positive overlap/SLO attainment.
 A missing required field, source/identity mismatch, incorrect accounting, native commit
 mismatch or cleanup failure remains material; failures retain the primary error and raw log

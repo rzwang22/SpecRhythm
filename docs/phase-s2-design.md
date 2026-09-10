@@ -5,6 +5,51 @@ reported S1-P G0–G3 PASS at `5a00049e2eabf09f535fdd5f187f77406f6dcfe2` in
 `/root/autodl-tmp/SpecRhythm-data/results/phase-s1/s1p-5a00049-20260909T144802Z-1469`.
 S0 and S1 artifacts remain read-only. S2 uses `specrhythm-s2`, separate schemas and a fresh root.
 
+At `c12b3768eaaaeca3ecde03999440b7b91763b128`, the operator reports capacity PASS
+(small100/large390, 3:3:2:2), calibration/G0 PASS and ten completed requests in each of G1
+Target and Serial. G1 PingPong failed at its first verification with missing `uuid_queries`;
+there is no passed G1 gate, so G2 is blocked. The retained root is
+`/root/autodl-tmp/SpecRhythm-data/results/phase-s2/s2-c12b3768eaaa-20260910T012202Z-1476`.
+These are operator-reported results, not an agent GPU run or complete S2 qualification.
+
+## PingPong worker startup dependency correction
+
+The inherited `DualBatchRemoteProposer.on_target_verify_end()` calls
+`self.uuid_queries.for_verification()`. Its constructor does not create that worker-bound
+object. Legacy `dual_runner` first executes `worker_dual_runtime_snapshot` on every TP worker;
+that helper creates `DualVerificationUuidQuery(worker)` using the real device snapshot and
+assigns it to `worker.model_runner.drafter.uuid_queries`. S2 previously used only the ordinary
+`_worker_runtime_snapshot` and omitted this startup side effect.
+
+S2 now dispatches `initialize_pingpong_worker` immediately after LLM creation, before capacity
+confirmation, prefill and verification. It reuses the existing Dual initializer and the same
+Target TP/device validation. Target-only and Serial continue to dispatch `target_snapshot`.
+Later prefill/final memory snapshots call the ordinary worker snapshot and only read
+`worker_dual_uuid_evidence`; they never reinitialize the query or reset its counters. A second
+initialization remains an error under the existing helper. Live mode and its actual
+per-verification UUID subprocess queries are unchanged.
+
+Startup evidence is in `actual-capacity.json.target_worker_ranks[].dual_uuid_query`; prefill
+evidence is in `resident-pool.json.target_rank_initial_memory[].dual_uuid_query`; final evidence
+is in `runtime.json.target_final_memory[].dual_uuid_query`, read after the existing drain and
+Draft shutdown. The inherited verification log retains the actual two-rank UUID/device
+intervals. Each rank has one initial validation. Capacity probes have zero verification
+queries/accesses/cache hits: they collect startup evidence, not a UUID A/B experiment, and
+must not use that experiment's nonempty-verification gate. All artifacts use the existing
+attempt seal; no per-verification logging, clock boundary or additional GPU fence is added.
+
+The earlier context test deliberately stopped at LLM construction. The coordinator test's
+`collective_rpc` returned canned rows without invoking callbacks, and its fake `step()` never
+entered inherited verification hooks. The separate Dual UUID unit test supplied the query to
+an isolated observer, so it did not test S2's ownership of initialization. The new CPU contract
+crosses that missing boundary: real S2 `run/configure/make_engine`, real proposer constructors,
+callbacks executed on two simulated workers, real PingPong verification start/end, and final
+counter/report reads. Only hardware, transport and inference inputs are simulated; no test
+preassigns `uuid_queries`. Before this correction it reproduced the exact AttributeError at
+`vllm_dual.py:659`; afterward the chain, duplicate-init rejection, repeated reads, zero-access
+probe, missing-UUID failure and unchanged Target/Serial startup paths pass. This remains CPU
+contract evidence, not GPU verification.
+
 ## Observation boundary
 
 **GPU-resident prefilled-KV delivery; prefill/import excluded; queue/decode/drain included.**

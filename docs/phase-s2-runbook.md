@@ -2,8 +2,16 @@
 
 This file is the versioned template. The handoff also provides a rendered copy with
 `@S2_COMMIT@` replaced by the final full commit SHA; use that rendered copy. The coding agent
-has not connected to AutoDL or executed GPU work. S2 GPU/capacity/performance remains pending.
+has not connected to AutoDL or executed GPU work. Corrected PingPong and complete S2
+GPU/performance qualification remain pending; earlier partial results are recorded below.
 Keep PR #4 Draft/Open/unmerged. Existing S0/S1 roots are read-only.
+
+This run retries the S2 PingPong worker-initialization correction. Preserve the earlier root
+`/root/autodl-tmp/SpecRhythm-data/results/phase-s2/s2-c12b3768eaaa-20260910T012202Z-1476`
+unchanged; do not resume it with new code. Its reported small100/large390 capacity,
+calibration/G0 and G1 Target/Serial PASS are partial results. PingPong failed before G1 could
+pass. Use the new commit/root below and rerun capacity, calibration, G0 and all of G1.
+Capacity is measured again for the new run; 390 is never used as an input or fixed limit.
 
 Run each block in the same foreground Bash session. If a block fails, stop at that gate;
 review its automatic primary error/field/expected/actual/artifact/log-tail output. Do not
@@ -54,6 +62,9 @@ and binds their GPUs; do not launch this under torchrun or an inherited distribu
 The first command collects metadata without loading model weights. `capacity` then loads and
 cleans up each mode once without running requests, collecting actual capacity from all nine
 mode/rank combinations. Small100 and large500 shrink by ten on one common nested plan.
+PingPong startup now initializes the real UUID query once per Target rank. A capacity probe
+records one initial validation and zero verification accesses per rank; no verification batch
+is required to pass that probe.
 
 ```bash
 "$GPU_PY" -m specrhythm.serving.s2_cli prepare --root "$SR_S2_ROOT" \
@@ -95,6 +106,10 @@ limit 128. Check retained arrival lag, queue/admission, no premature work, boots
 FIFO/cohort join boundaries and resource drain. Sparse traces can legitimately show no queue
 beyond handling lag, only one cohort, singleton Draft batches, or zero overlap. Speed is not a
 gate. Invalid execution/accounting/KV/measurement/cleanup stops all subsequent runs.
+For PingPong, retained `dual_uuid_query` evidence in startup and final Target worker snapshots
+must show one startup validation per rank. Verification events retain actual UUID/device
+intervals and live-query counters accumulate across snapshots. Do not switch to cached mode.
+**Stop here unless the entire three-mode G1 exits zero and writes a valid G1.json.**
 
 ## G2 — actual_small, .25/.5/1 requests/s, three modes each
 
@@ -107,6 +122,8 @@ gate. Invalid execution/accounting/KV/measurement/cleanup stops all subsequent r
 G2 requires sealed G1 validity. The same input/trace is reused by Target, Serial and PingPong
 at each offered rate. Every attempt freshly recreates and preloads its private KV. Defaults
 run each mode once per rate, not a repeatability grid. Idle time remains in makespan.
+Do not attempt G2 after a failed PingPong run or a missing G1.json. Resolve G1 first; an earlier
+root's Target/Serial results do not qualify this new root. G3 additionally requires valid G2.
 
 ## G3 — actual_large only if capacity allows a distinct scale
 

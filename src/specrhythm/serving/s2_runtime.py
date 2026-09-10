@@ -8,6 +8,7 @@ from pathlib import Path
 
 from specrhythm.phase4.config import load_phase4_config
 from specrhythm.phase4.decode_ready import DecodeReadyProvenance, load_decode_ready_manifest
+from specrhythm.phase4.dual_uuid import worker_dual_runtime_snapshot, worker_dual_uuid_evidence
 from specrhythm.phase4.manifest import sha256_file
 from specrhythm.phase4.resident_runner import build_decode_ready_context
 from specrhythm.phase4.resident_setup import build_setup_control
@@ -107,12 +108,26 @@ def configure(root, manifest_path, directory, mode):
     return config, manifest, definitions
 
 
+def initialize_pingpong_worker(worker):
+    """One startup RPC per TP worker, before any prefill or verification.
+
+    The inherited Dual verification hook requires a query bound to the actual
+    worker. Its existing initializer performs the authoritative device snapshot
+    and rejects duplicate initialization. Later snapshots only read its evidence.
+    """
+    return _target_capacity_snapshot(worker, worker_dual_runtime_snapshot(worker))
+
+
 def target_snapshot(worker):
+    """Read current device/capacity evidence without creating or resetting queries."""
+    return _target_capacity_snapshot(worker, _worker_runtime_snapshot(worker))
+
+
+def _target_capacity_snapshot(worker, value):
     import torch
 
     from specrhythm.serving.s2_draft import cuda_memory
 
-    value = _worker_runtime_snapshot(worker)
     require(
         len(worker.model_runner.kv_cache_config.kv_cache_groups) == 1,
         "S2 capacity formula requires the frozen dense single-group KV layout",
@@ -128,6 +143,10 @@ def target_snapshot(worker):
         "num_gpu_blocks": capacity["num_gpu_blocks"],
         "vocab_size": worker.vllm_config.model_config.get_vocab_size(),
     }
+    if os.environ["SR_S2_MODE"] == "pingpong":
+        # Capacity probes legitimately have zero verification accesses. These are
+        # raw lifetime counters, not the historical nonempty UUID A/B experiment gate.
+        value["dual_uuid_query"] = worker_dual_uuid_evidence(worker)
     return value
 
 
@@ -480,7 +499,8 @@ def run(root, manifest_path, directory, mode, *, probe=False):
     failure = None
     try:
         llm = make_engine(config, mode)
-        ranks = llm.collective_rpc(target_snapshot)
+        startup_snapshot = initialize_pingpong_worker if mode == "pingpong" else target_snapshot
+        ranks = llm.collective_rpc(startup_snapshot)
         require(
             not validate_worker_ranks(ranks, config.target), "S2 Target TP/device binding invalid"
         )
