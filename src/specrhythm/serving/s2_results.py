@@ -17,12 +17,12 @@ from specrhythm.serving.s1_results import (
     distribution,
     draft_backend_checks,
     draft_measurement,
-    interval_duration,
     jsonl,
     target_forwards,
     validate_rounds,
 )
 from specrhythm.serving.s1_workload import write_once
+from specrhythm.serving.s2_overlap import stage_overlap
 from specrhythm.serving.s2_plan import BOUNDARY, LABEL, check_seal, sealed
 
 
@@ -350,7 +350,9 @@ def qualify(manifest_path, directory, mode, policy):
             "S2 native commit belongs to unknown request",
         )
         # Native worker diagnostics independently validate positions/KV/greedy commits.
-        artifact = directory / "target-diagnostics.jsonl"
+        artifact = directory / (
+            "round-events.jsonl" if mode == "serial" else "proposal-events.jsonl"
+        )
         rounds = jsonl(
             directory, "round-events" if mode == "serial" else "proposal-events", optional=True
         )
@@ -373,6 +375,7 @@ def qualify(manifest_path, directory, mode, policy):
                 r["prefix_sha256"] == token_prefix_hash(prefix),
                 "S2 verification parent hash differs",
             )
+        artifact = directory / "target-diagnostics.jsonl"
         forwards = target_forwards(
             jsonl(directory, "target-diagnostics", optional=True), start, semantics
         )
@@ -391,6 +394,7 @@ def qualify(manifest_path, directory, mode, policy):
                 and all(raw[r]["admission_ns"] <= f["start_ns"] for r in f["request_ids"]),
                 "S2 Target execution outside admitted observation interval",
             )
+        artifact = directory / "draft-backend-report.json"
         draft_forwards = draft_measurement(backend, start)
         require(
             all(r["cuda_completion_observed_ns"] <= end for r in draft_forwards),
@@ -413,6 +417,7 @@ def qualify(manifest_path, directory, mode, policy):
             verifies = jsonl(directory, "verification-events", optional=not rounds)
             drafts = jsonl(directory, "draft-work-events")
             lifecycle_rows = jsonl(directory, "proposal-lifecycle-events", optional=not rounds)
+            artifact = directory / "request-state-events.jsonl"
             require(not validate_request_state_events(states), "S2 PingPong request state invalid")
             terminal_errors = validate_final_commit_sequence(
                 {
@@ -430,6 +435,7 @@ def qualify(manifest_path, directory, mode, policy):
                 drafts,
                 states,
             )
+            artifact = directory / "draft-work-events.jsonl"
             require(
                 not terminal_errors,
                 "S2 final Target/Draft prefix mismatch",
@@ -450,12 +456,14 @@ def qualify(manifest_path, directory, mode, policy):
                 or {"round_count": len(rounds), "lifecycle_count": len(lifecycle_rows)},
                 artifact=str(directory / "proposal-lifecycle-events.jsonl"),
             )
+            artifact = directory / "verification-events.jsonl"
             require(
                 not validate_verification_contracts(
                     rounds, verifies, jsonl(directory, "target-diagnostics", optional=True)
                 ),
                 "S2 Target verification/TP row contract invalid",
             )
+            artifact = directory / "plugin-report.json"
             require(
                 read_json(directory / "plugin-report.json")["sampled_row_tp_consensus"] is True,
                 "S2 sampled-row TP consensus false",
@@ -470,6 +478,7 @@ def qualify(manifest_path, directory, mode, policy):
             from specrhythm.phase4.dual_overlap_characterization import characterize_overlap
             from specrhythm.phase4.dual_runner import build_cycle_and_overlap_events
 
+            artifact = directory / "verification-events.jsonl"
             _, overlap_rows = build_cycle_and_overlap_events(drafts, verifies)
             physical_overlap = characterize_overlap(
                 drafts,
@@ -482,24 +491,14 @@ def qualify(manifest_path, directory, mode, policy):
                 "S2 CUDA stage timing evidence invalid",
                 actual=physical_overlap.get("errors"),
             )
-        # Synchronized host envelopes are an overlap observation, not kernel self time.
-        overlaps = []
-        for work in backend.get("s2_work_records", []):
-            for f in forwards:
-                a, b = (
-                    max(work["host_start_ns"], f["start_ns"]),
-                    min(work["host_end_ns"], f["end_ns"]),
-                )
-                if b > a:
-                    require(
-                        not (set(work["request_ids"]) & set(f["request_ids"])),
-                        "S2 concurrent Draft/Target ownership collision",
-                    )
-                    require(
-                        all(raw[r]["cohort"] != work["logical_cohort"] for r in f["request_ids"]),
-                        "S2 same-cohort stages overlap",
-                    )
-                    overlaps.append((a, b))
+        artifact = directory / "draft-backend-report.json"
+        capacity_path = directory / "actual-capacity.json"
+        stages = stage_overlap(
+            backend, forwards, runtime,
+            states if mode == "pingpong" else [], drafts if mode == "pingpong" else [],
+            read_json(capacity_path)["target_worker_ranks"] if capacity_path.exists() else [],
+            directory,
+        )
         report.update(
             valid=True,
             metrics=observation_metrics(metrics, start, end),
@@ -529,11 +528,7 @@ def qualify(manifest_path, directory, mode, policy):
             committed_progress_per_round=stats(len(r["committed"]) for r in semantics),
             overlap_ms=physical_overlap["observed_overlap_ms"],
             physical_overlap=physical_overlap,
-            stage_host_overlap_ms=interval_duration(overlaps) / 1e6,
-            overlap_definition=(
-                "union of disjoint opposite-cohort Draft work / Target forward "
-                "host envelopes; synchronized CUDA evidence; not kernel self time"
-            ),
+            **stages,
             zero_overlap_or_attainment_blocks=False,
             prefill_setup_ns=pool["prefill_setup_ns"],
             target_kv=runtime["target_pool_final"],

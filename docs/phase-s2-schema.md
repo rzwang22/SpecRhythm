@@ -51,3 +51,22 @@ Valid execution never depends on cross-run output equality or positive overlap/S
 A missing required field, source/identity mismatch, incorrect accounting, native commit
 mismatch or cleanup failure remains material; failures retain the primary error and raw log
 tails. Summary/offline commands never dispatch an inference child.
+
+S2 terminal drain uses an explicit `specrhythm.s2-terminal-drain.v1` receipt under
+`draft-backend-report.json.s2_work_records[].terminal_drain`. It binds input rows and parent
+states to actual results, independently queried Draft device identity, retirement, unrelated
+KV scope/digests, and `release.materialized` prefix/block records. The release hook checks
+private ownership across the full live pool, including newly materialized blocks, before
+sampling `release.resources_released_ns` after the real release. Native state/work logs and
+the runtime ledger independently bound this receipt; an operation name alone is insufficient.
+
+New result fields are `stage_dependency_contract`, `active_stage_host_overlap_ms`, and
+`terminal_drain.{work_count,work_host_ms,host_overlap_ms,same_cohort_host_overlap_ms,pair_count,
+pairs,completions,definition}`. Completion rows keep `token_completion_ns`,
+`draft_resources_released_ns` and `active_slot_released_ns` separately. Existing `overlap_ms`
+and `physical_overlap` remain proposal-stage metrics. Existing `stage_host_overlap_ms` remains
+the opposite-cohort host union, including cross-cohort drain; the three host unions must not
+be added. Host-envelope intersections are not exact GPU kernel overlap. New failure details
+use `field=s2_stage_dependency`, a specific `artifact`, all related `artifacts`, and an `actual`
+record containing operation/terminal evidence and both stages' IDs/cohorts/intervals/IDs in
+common. No historical result or seal is rewritten by this contract change.

@@ -12,6 +12,81 @@ there is no passed G1 gate, so G2 is blocked. The retained root is
 `/root/autodl-tmp/SpecRhythm-data/results/phase-s2/s2-c12b3768eaaa-20260910T012202Z-1476`.
 These are operator-reported results, not an agent GPU run or complete S2 qualification.
 
+## S2 terminal-drain concurrency contract
+
+At `24b31a9e0125d773697d92ec0ea333384616e539`, the operator reports that the G1
+coordinator/Target, Draft and effective exit codes were zero; cleanup and owned cleanup
+completed with no remaining owned PID. Qualification rejected `S2 same-cohort stages overlap`.
+The reported pair was cohort A `finish_tail` for
+`sr-43f9b5ce7d32f7c6d51db9d5d71ee542a1e9db750c55a65de3b83755671d6495`
+overlapping Target proposal verification for
+`sr-de0452eb0a569d5a6c4775e2c0df7f56753fe0b9038b3e5d132aa334d5ed9ad7`.
+Draft host interval `[17257369905601164, 17257369927652247]` and Target host interval
+`[17257369914500012, 17257369966438131]` intersect by **13.152235 ms**, with no common
+request ID. This is a reported host-envelope intersection, not measured kernel overlap.
+The full retained server artifacts were not accessed by the coding agent.
+
+The source chain is `S2PingProposer` -> inherited `DualBatchRemoteProposer._rank_zero_update`
+-> `DynamicClient`/`CohortDraftClient` enqueue -> `BatchedDualDraftController` owner thread
+-> `S2DualMachine.execute_batch` -> `BatchedDualDraftMachine._commit_many(target_tail=True)`
+-> `S2DraftBackend.commit_many` -> production `VllmBatchedDraftBackend.commit_many` ->
+`finish_many` -> `VllmDraftWorker.release`. The Target hook requires a claimed proposal-free
+tail and a terminal one-token delta, advances the committed prefix/version and logs TERMINAL
+before enqueueing. The Draft dispatcher independently rejects pending proposals, nonterminal
+tails, non-monotonic versions and invalid hashes. It materializes the final committed prefix,
+fences, updates that request's state and releases its blocks. All tail plans are terminal, so
+the active set passed to subsequent proposal generation is empty.
+
+Distinct IDs alone do not establish safety. Draft mutations of the shared model, InputBatch,
+request table and KV allocator are serialized on the same checked CUDA owner thread. Worker
+materialization receives only the dispatched internal request IDs; release sends only those
+IDs through `finished_req_ids`, fences and frees their allocator views. Prefix caching is
+disabled and S2 checks private block ownership. Target runs in independently bound GPU1/2
+workers while Draft owns GPU0. The new S2-only receipt additionally checks the complete Draft
+block table immediately before release, records actual materialized prefix/block identities,
+and checks that every unrelated request's prefix/materialized length/block table is unchanged
+before, immediately before release, and afterward. Unrelated request IDs remain in scope even
+if they belong to the same cohort. No scheduler or shared Phase4/S1 implementation changes.
+
+The exemption applies only to `finish_tail` with a successful owner work result, native Target
+TERMINAL evidence preceding dispatch, the exact next-version terminal prefix, no resulting
+proposal or proposal forwards, retirement of precisely its own requests, unchanged unrelated
+private KV and independent device evidence. Every overlapping Target request must be covered
+by that unchanged unrelated pool. Same-cohort overlap requires a single-cohort **verification**;
+same-request overlap always fails. Active drafting/commit-and-propose keeps the opposite-cohort
+dependency rule, including operations that happen to return no proposal. Later work on a
+retired request, premature resource reuse and missing mandatory proof still fail.
+
+Receipts accumulate in memory in `draft-backend-report.json.s2_work_records[].terminal_drain`.
+They add CPU scope audits during terminal work, with their cost inside the unchanged observed
+work envelope; no new GPU fence or per-verification/fsync log is added. The resource timestamp
+is sampled after the actual release returns. Coordinator token completion and active-slot
+release remain distinct: the unchanged `release_finished` decision holds a finished request
+while the controller still reports it in flight. The slot cannot be reused until the whole
+Draft operation returns; final Target fences and all resource drain still precede `end_ns`.
+All materialization forwards and GPU event time remain in the existing measured totals.
+
+`result.json.stage_dependency_contract=specrhythm.s2-terminal-drain.v1` labels this refinement.
+`physical_overlap`/`overlap_ms` retain the existing proposal CUDA-stage calculation, which
+does not include proposal-free `finish_tail`. `stage_host_overlap_ms` retains the original
+opposite-cohort host union, including any cross-cohort drain. `active_stage_host_overlap_ms`
+excludes validated drain. `terminal_drain` separately reports work count/host cost, all and
+same-cohort host overlap unions, pairs and token/KV/slot completion timestamps. These unions
+are not additive and do not establish exact kernel overlap or critical-path time saved.
+Errors carry the operation, terminal receipt, both request sets/cohorts/intervals, intersection
+and the relevant backend/work/state/Target/runtime/capacity artifact paths.
+
+CPU regressions run actual S2 dispatch and production commit/release with simulated hardware,
+then use the full offline qualifier without replacing its validators. A same-cohort A tail /
+different-request verification fixture was rejected by the base commit's qualifier and passes
+the refined contract. Tests also cover invalid terminal/proposal/version/hash/KV evidence,
+active same-cohort and same-request conflicts, legal cross-cohort and zero overlap, foreground
+errors, preserved work/makespan, and a blocked real owner release holding the coordinator slot.
+This does not qualify the retained real run. Old artifacts/seals remain unchanged; missing
+terminal receipts do not silently receive the exemption. New code uses a new root, remeasures
+capacity and repeats calibration/G0/G1 before G2/G3. Cross-run token/length/EOS/round equality
+remains NOT_REQUIRED. GPU retest and complete S2 qualification remain pending.
+
 ## PingPong worker startup dependency correction
 
 The inherited `DualBatchRemoteProposer.on_target_verify_end()` calls

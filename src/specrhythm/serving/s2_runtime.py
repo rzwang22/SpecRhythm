@@ -406,14 +406,7 @@ def drive(
             inflight = set(status.get("inflight_request_ids", ()))
             busy = {clock.rows[r]["cohort"] for r in inflight}
             # Keep finished-but-syncing requests charged against the common active limit.
-            finished = [
-                rid
-                for rid, row in clock.rows.items()
-                if row["state"] == "FINISHED"
-                and not row["resources_released"]
-                and rid not in inflight
-            ]
-            clock.released(finished, time.monotonic_ns())
+            release_finished(clock, inflight)
             with clock.lock:
                 admitted = clock.admit(time.monotonic_ns(), busy_cohorts=busy)
             publish_control()
@@ -490,6 +483,15 @@ def drive(
                 "initial_admissions": initial_records,
             },
         )
+
+
+def release_finished(clock, inflight):
+    """Retain the existing active-slot charge until the owner has finished all work."""
+    finished = [
+        rid for rid, row in clock.rows.items()
+        if row["state"] == "FINISHED" and not row["resources_released"] and rid not in inflight
+    ]
+    clock.released(finished, time.monotonic_ns())
 
 
 def run(root, manifest_path, directory, mode, *, probe=False):

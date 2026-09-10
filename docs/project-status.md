@@ -34,9 +34,45 @@ claims.
 | [#1 workload-v0.1](https://github.com/rzwang22/SpecRhythm/pull/1) | merged | strict Mooncake replay, R3 proxy config, validator, manifest, fixture tests and docs | workload plumbing only; proxy payload and illustrative acceptance |
 | [#2 simulator-semantics-v0.2](https://github.com/rzwang22/SpecRhythm/pull/2) | frozen draft; Phase 2 complete, not merged | proposal lifecycle, deterministic tree oracle, tree-aware allocators, base-preserving residual controls, Phase-2 nested search pools and common-snapshot oracle replay, path-aware eager and accounting | pure-Python proxy and oracle upper bounds only; no deployable oracle, measured search cost, GPU integration, or performance claim |
 | [#3 gpu-integration-v0.1](https://github.com/rzwang22/SpecRhythm/pull/3) | draft; Phase 3B.1 and corrected-20 Phase 3C.2 complete; Phase 3C.3 corrected-100 awaiting server run | hardened multi-rank primitives, corrected R3-real traces, common-prefix replay, request-bootstrap statistics, 2x shell decomposition and diagnostic learned ranker | user-run 3×A800 correctness artifacts plus Mac CPU tests; no packed-tree/serving engine, Dual-Batch, SLO, calibrated latency or speedup claim |
-| [#4 vllm-serving-v0.1](https://github.com/rzwang22/SpecRhythm/pull/4) | Draft/Open/unmerged; S0 CLOSED/PASS; S1-P G0–G3 PASS at `5a00049`; S2 capacity/calibration/G0 and G1 Target/Serial reported PASS; PingPong startup fix awaiting retest | independent prefilled-KV resident pool, dynamic Poisson arrival/admission, Target/Serial/PingPong and engineering SLO/goodput | CPU/source contracts are not GPU qualification; finite-trace ideal PD-delivery boundary only |
+| [#4 vllm-serving-v0.1](https://github.com/rzwang22/SpecRhythm/pull/4) | Draft/Open/unmerged; S0 CLOSED/PASS; S1-P G0–G3 PASS at `5a00049`; S2 G1 at `24b31a9` reported zero process exits/clean cleanup but rejected terminal-tail overlap; S2-only contract refinement awaiting retest | independent prefilled-KV resident pool, dynamic Poisson arrival/admission, Target/Serial/PingPong and engineering SLO/goodput | CPU/source contracts are not GPU qualification; finite-trace ideal PD-delivery boundary only |
 
 ## Phase S: Serving Workloads & Arrival Replay
+
+**S2 terminal-drain qualification correction** is based on
+`24b31a9e0125d773697d92ec0ea333384616e539`. The operator reports zero Target/coordinator,
+Draft and effective exit codes, valid completed cleanup and no owned PID left. G1 rejected a
+13.152235 ms host overlap between cohort-A `finish_tail` and another A request's proposal
+verification, with an empty request intersection. The reported conflict and exact intervals
+are retained in the S2 design; full server artifacts were not accessed in this coding task.
+
+The old S2 qualifier applied the active Draft opposite-cohort rule to every operation.
+The source audit establishes that `finish_tail` validates a one-token terminal prefix,
+materializes/fences it, frees only that request's private KV and generates no next proposal.
+The S2-only refinement requires native terminal/owner evidence, correct prefix/version,
+independent actual GPU bindings, whole-pool private-block validation and unchanged unrelated
+prefix/block snapshots before allowing disjoint same-cohort verification overlap. Operation
+name or different IDs alone never grant an exemption. Active drafting and all same-request
+collisions remain blocked. Receipt/failure details identify the actual artifacts.
+
+Terminal work/host overlap and token/KV/slot completion are reported separately. Proposal
+pipeline overlap, real terminal forward/GPU cost, arrival-to-drain timing, held slots, owned
+cleanup, primary failures and real exits remain intact. `release_finished` only extracts the
+existing coordinator release decision for an actual blocked-owner regression. Scheduler,
+arrival/capacity/SLO/model/K/budget/numerical rules, UUID live mode, five patches and S1 defaults
+are unchanged; cross-run equality remains NOT_REQUIRED. Historical results are not rewritten.
+
+New CPU regressions use real S2 dispatch and production materialization/release with simulated
+hardware, then the full qualifier. The base qualifier rejected the same fixture; the refined
+qualifier accepts its cohort-A terminal drain and still rejects true conflicts, invalid
+terminal/proposal/prefix/KV evidence and early release/drain. A real asynchronous owner blocked
+inside release keeps the actual coordinator slot held. Related S2/S1/Dual/PingPong regressions:
+**219 passed** (including **23 new tests**). Full local Python 3.11 pytest with the pinned
+source audit: **1605 passed / 3 skipped** (GPU opt-in and two Linux-only process cases).
+Ruff, compileall, Bash and diff checks pass; exact-head CI is recorded in the handoff and
+PR #4. The next operator run uses the SHA-filled runbook and a
+new root, remeasures capacity, repeats calibration/G0 and complete three-mode G1, then permits
+G2/G3 only after the preceding gates pass. Old failed directories/seals remain preserved.
+No AutoDL connection or GPU execution was performed. S2 GPU/performance remains unqualified.
 
 **S2 PingPong UUID startup correction** follows the operator's run at
 `c12b3768eaaaeca3ecde03999440b7b91763b128`, retained at
@@ -61,7 +97,7 @@ It reproduced `AttributeError: 'S2PingProposer' object has no attribute 'uuid_qu
 original `vllm_dual.py:659` before the fix. Earlier tests stopped at LLM construction or used a
 canned RPC/step result, missing that integration boundary. The shared legacy UUID hardware
 fixture now explicitly clears unrelated serving profiles so focused tests are order-independent.
-Current local validation: S2 **53 passed**, S1 **104 passed**, legacy Dual UUID **37 passed**
+Historical `24b31a9` local validation: S2 **53 passed**, S1 **104 passed**, legacy Dual UUID **37 passed**
 (combined **194 passed**); full Python 3.11 pytest with pinned source audit **1582 passed,
 3 skipped** (GPU opt-in and two Linux-only process cases). Ruff, compileall, eight repository
 shell files, eight runbook Bash blocks and diff checks pass. Exact-head Linux CI is recorded

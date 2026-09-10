@@ -6,11 +6,17 @@ has not connected to AutoDL or executed GPU work. Corrected PingPong and complet
 GPU/performance qualification remain pending; earlier partial results are recorded below.
 Keep PR #4 Draft/Open/unmerged. Existing S0/S1 roots are read-only.
 
-This run retries the S2 PingPong worker-initialization correction. Preserve the earlier root
+This run validates the S2 terminal-drain concurrency correction based on
+`24b31a9e0125d773697d92ec0ea333384616e539`. That G1 run reportedly exited zero in both
+processes and completed owned cleanup, but failed same-cohort overlap qualification for a
+terminal `finish_tail` against another request's verification. Preserve that failed root and
+its original result/seal/logs; its exact path was not supplied with this report. Also preserve
+the earlier root
 `/root/autodl-tmp/SpecRhythm-data/results/phase-s2/s2-c12b3768eaaa-20260910T012202Z-1476`
 unchanged; do not resume it with new code. Its reported small100/large390 capacity,
-calibration/G0 and G1 Target/Serial PASS are partial results. PingPong failed before G1 could
-pass. Use the new commit/root below and rerun capacity, calibration, G0 and all of G1.
+calibration/G0 and G1 Target/Serial PASS are partial results. Neither historical failure is
+silently reclassified or overwritten. Use the new commit/root below and rerun capacity,
+calibration, G0 and all of G1.
 Capacity is measured again for the new run; 390 is never used as an input or fixed limit.
 
 Run each block in the same foreground Bash session. If a block fails, stop at that gate;
@@ -110,6 +116,16 @@ For PingPong, retained `dual_uuid_query` evidence in startup and final Target wo
 must show one startup validation per rank. Verification events retain actual UUID/device
 intervals and live-query counters accumulate across snapshots. Do not switch to cached mode.
 **Stop here unless the entire three-mode G1 exits zero and writes a valid G1.json.**
+
+The result labels `stage_dependency_contract=specrhythm.s2-terminal-drain.v1`. A same-cohort
+`finish_tail` overlap is allowed only with native terminal/prefix evidence, no follow-up
+proposal, private unchanged unrelated KV, disjoint requests and ordered real release.
+`terminal_drain` reports its host-envelope overlap and token/KV/slot completion times separately;
+the proposal `physical_overlap` metric keeps its existing scope. Zero drain work or overlap
+can be valid. Do not interpret host intersections as exact kernel overlap or subtract tail
+cost from makespan. All materialization forwards/GPU event costs and arrival-to-drain timing
+remain included. On failure, the foreground prints operation, terminal proof, both request
+sets/cohorts/intervals, intersection and the actual related artifacts. Preserve those failures.
 
 ## G2 — actual_small, .25/.5/1 requests/s, three modes each
 

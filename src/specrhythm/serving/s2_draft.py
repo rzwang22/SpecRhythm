@@ -14,9 +14,10 @@ from specrhythm.phase4.dual_batched_draft import (
 )
 from specrhythm.phase4.dual_rhythm import cohort_for
 from specrhythm.phase4.dual_service import DualDraftUnixServer
+from specrhythm.phase4.serial import token_prefix_hash
 from specrhythm.phase4.transport import CheckpointJsonl
 from specrhythm.phase4.vllm_draft_backend import VllmBatchedDraftBackend
-from specrhythm.serving.common import require
+from specrhythm.serving.common import digest, require
 from specrhythm.serving.s1_workload import write_once
 from specrhythm.serving.s2_pool import ResidentPoolAudit, control, prefix_record, publish
 
@@ -39,6 +40,7 @@ class S2DraftBackend(VllmBatchedDraftBackend):
         self.pool = ResidentPoolAudit("draft")
         self.pool_path = Path(os.environ["SR_S2_RUN_DIRECTORY"]) / "draft-pool.json"
         self.history = []
+        self.terminal_release = None
         self.memory_initial = cuda_memory(self.worker.torch)
         self._provenance["s2_capacity"] = {
             **self.memory_initial,
@@ -115,7 +117,23 @@ class S2DraftBackend(VllmBatchedDraftBackend):
         return result
 
     def finish_many(self, ids):
+        receipt = self.terminal_release
+        if ids and receipt is not None:
+            # The real commit materialization/fence has completed. Check the whole
+            # allocator, including newly allocated tail blocks, before freeing any.
+            physical = self.physical_rows()
+            ResidentPoolAudit("draft-terminal-release").check(physical, {})
+            require(set(ids) == set(receipt["request_ids"]), "S2 tail release scope changed")
+            receipt.update(
+                materialized={rid: physical[rid] for rid in ids},
+                unrelated_before_release_sha256=digest(
+                    {rid: row for rid, row in physical.items() if rid not in ids}
+                ),
+                private_kv_checked_requests=len(physical),
+            )
         super().finish_many(ids)
+        if ids and receipt is not None:
+            receipt["resources_released_ns"] = time.monotonic_ns()
         if control()["barrier_ns"] is None:
             publish(
                 self.pool_path,
@@ -157,7 +175,55 @@ class S2DualMachine(BatchedDualDraftMachine):
             "S2 Draft cohort mutation/mixed execution unit",
         )
         started = time.monotonic_ns()
-        results = super().execute_batch(operation, rows)
+        tail = operation == "finish_tail"
+        ids = [r["request_id"] for r in rows]
+        terminal_drain = None
+        if tail:
+            before = self.backend.physical_rows()
+            before_states = {
+                rid: {
+                    "finished": self._state(rid).finished,
+                    "proposal_present": self._state(rid).proposal is not None,
+                    "prefix_version": self._state(rid).prefix_version,
+                    "prefix_length": len(self._state(rid).committed_token_ids),
+                    "prefix_sha256": token_prefix_hash(self._state(rid).committed_token_ids),
+                }
+                for rid in ids
+            }
+            unrelated = {rid: r for rid, r in before.items() if rid not in ids}
+            before_proposals = self.backend.metrics.forwards["proposal"]
+            self.backend.terminal_release = {"request_ids": ids}
+        try:
+            # Unchanged dispatcher enforces terminal one-token/no-proposal and
+            # prefix/version contracts before the real commit, fence and release.
+            results = super().execute_batch(operation, rows)
+            if tail:
+                after = self.backend.physical_rows()
+                receipt = self.backend.terminal_release
+                require(
+                    after == unrelated
+                    and digest(unrelated) == receipt.get("unrelated_before_release_sha256")
+                    and all(rid in self.backend.retired for rid in ids),
+                    "S2 terminal drain changed unrelated KV or failed to retire its requests",
+                )
+                terminal_drain = {
+                    "schema_version": "specrhythm.s2-terminal-drain.v1",
+                    "rows": [dict(r) for r in rows],
+                    "before": before_states,
+                    "results": results,
+                    "release": dict(receipt),
+                    "unrelated_request_ids": sorted(unrelated),
+                    "unrelated_before_sha256": digest(unrelated),
+                    "unrelated_after_sha256": digest(after),
+                    "retired_request_ids": sorted(set(ids) & self.backend.retired),
+                    "proposal_forward_count": (
+                        self.backend.metrics.forwards["proposal"] - before_proposals
+                    ),
+                    "physical_gpu_id": self.backend.provenance["physical_gpu_id"],
+                    "gpu_uuid": self.backend.provenance["gpu_uuid"],
+                }
+        finally:
+            self.backend.terminal_release = None
         self.backend.history.append(
             {
                 "operation": operation,
@@ -165,6 +231,8 @@ class S2DualMachine(BatchedDualDraftMachine):
                 "request_ids": [r["request_id"] for r in rows],
                 "host_start_ns": started,
                 "host_end_ns": time.monotonic_ns(),
+                "terminal_by_request": {r["request_id"]: r.get("terminal", False) for r in rows},
+                **({"terminal_drain": terminal_drain} if tail else {}),
             }
         )
         return [{**r, "logical_cohort": cohort} for r in results]
