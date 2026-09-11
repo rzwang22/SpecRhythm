@@ -157,6 +157,7 @@ def bundle(root, output):
         "process-lifecycle.json",
     )
     files += [p for name in allowed for p in root.glob("runs/*/" + name)]
+    files += list(root.glob("runs/*/fixed-logging-*.json"))
     files += list(root.glob("comparison-*.json"))
     require(not output.exists(), "small bundle output already exists")
     with tarfile.open(output, "x:gz") as tar:
@@ -193,6 +194,9 @@ def parser():
     p.add_argument("--root", required=True, type=Path)
     p.add_argument("--s1", type=Path)
     p.add_argument("--mode", choices=MODES)
+    from specrhythm.serving.fixed_logging import MODES as OBSERVATIONS
+
+    p.add_argument("--observation", choices=OBSERVATIONS, default="original-live")
     p.add_argument("--warmup-steps", type=int, default=2)
     p.add_argument("--samples", type=int, default=12)
     p.add_argument("--repeats", type=int, default=1)
@@ -218,7 +222,10 @@ def main(argv=None):
                 from specrhythm.serving.fixed_observe import install_host_observation
 
                 selected = read_json(Path(os.environ["SR_FIXED_POINT"]))
-                install_host_observation()
+                from specrhythm.serving.fixed_logging import finish_current
+
+                role = "draft" if args.command == "draft-child" else "coordinator"
+                install_host_observation(role)
                 if args.command == "draft-child":
                     from specrhythm.phase4.config import load_phase4_config
                     from specrhythm.serving.fixed_draft import FixedDraftBackend, serve
@@ -234,8 +241,14 @@ def main(argv=None):
                     from specrhythm.serving.fixed_runtime import run
 
                     run(root, args.manifest, args.directory, selected, probe=args.probe)
+                finish_current(role)
                 return 0
             except BaseException as error:
+                from specrhythm.serving.fixed_artifacts import record_error
+                from specrhythm.serving.fixed_logging import abort_current
+
+                record_error(args.directory, error, args.command)
+                abort_current(error)
                 write_once(
                     args.directory
                     / (
@@ -261,6 +274,7 @@ def main(argv=None):
                 window_seconds=args.window_seconds,
                 setup_timeout=args.setup_timeout,
                 drain_timeout=args.drain_timeout,
+                observation=args.observation,
             )
             prepare(root, args.s1.resolve(), options)
             value = {"prepared": str(root), "capacity": "PENDING", "GPU_timing": "PENDING"}

@@ -34,7 +34,7 @@ jobs:
       - run: specrhythm-fixed --help
       - run: python -m pytest -q tests/test_serving_fixed.py tests/test_serving_fixed_cli.py tests/test_serving_fixed_results.py tests/test_serving_fixed_runtime.py tests/test_serving_fixed_startup.py tests/test_serving_fixed_stop.py tests/test_serving_fixed_settle.py tests/test_serving_fixed_failure_retention.py
       - run: bash -n scripts/run_fixed_diagnostic.sh
-      - run: python -m pytest -q tests/test_serving_fixed_attribution.py
+      - run: python -m pytest -q tests/test_serving_fixed_attribution.py tests/test_serving_fixed_logging.py tests/test_serving_fixed_timing.py
       - run: bash -n scripts/analyze_fixed_diagnostic.sh
       - run: specrhythm-s2 --help
       - run: python -m pytest -q tests/test_serving_s2.py tests/test_serving_s2_runtime.py tests/test_serving_s2_cli.py tests/test_serving_s2_results.py tests/test_serving_s2_uuid.py tests/test_serving_s2_terminal_drain.py

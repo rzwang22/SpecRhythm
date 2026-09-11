@@ -132,6 +132,7 @@ def execute(root, gate, mode, manifest_path, directory, *, probe=False, policy=N
         # Explicit new entry point only; old S2 keeps the original launcher and qualifier.
         env["SR_FIXED_POINT"] = str(directory / "point.json")
         options = manifest["fixed_diagnostic"]["options"]
+        env["SR_FIXED_OBSERVATION"] = options.get("observation", "original-live")
     socket = Path("/tmp") / ("sr-s2-" + uuid.uuid4().hex[:16] + ".sock")
     env["SR_S2_DRAFT_SOCKET"] = str(socket)
     saved_env = dict(os.environ)

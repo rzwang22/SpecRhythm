@@ -108,6 +108,11 @@ def settle(
         draft_shutdown = client.call("shutdown", {})
         require(draft_shutdown.get("shutdown") is True, "Draft shutdown incomplete")
         final = llm.collective_rpc(target_snapshot, timeout=update("target_final_evidence"))
+        from specrhythm.serving.fixed_logging import buffered, finalize_drain
+
+        if buffered():
+            update("diagnostic_final_flush")
+            state["logging_finalization"] = finalize_drain(llm, directory, deadline)
         remaining(deadline)
         state.update(status="COMPLETE", phase="await_coordinator_exit", end_ns=time.monotonic_ns())
         state["drain_ms"] = (state["end_ns"] - started) / 1e6

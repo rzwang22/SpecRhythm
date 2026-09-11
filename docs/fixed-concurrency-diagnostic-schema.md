@@ -101,3 +101,35 @@ coverage**, and POSITIVE for positive lower bound. `exact_kernel_overlap=false` 
 Exclusive host self-time and critical-path time saved remain null where not observable.
 Rows outside the formal window are not silently charged to measured token accounting.
 The runtime measurement/drain schemas below are unchanged.
+
+## Opt-in buffered-live receipts and timing addendum
+
+See [runtime design](fixed-buffered-runtime-design.md) and
+[two-mode runbook](fixed-buffered-runtime-runbook.md). `options.observation` is frozen;
+`original-live` remains the default. `buffered-live` adds one
+`fixed-logging-<pid>.json` (`specrhythm.fixed-logging.v1`) per process:
+
+- role/PID, observation, max_buffer_records/bytes, produced_records, written_records,
+  pending_records/bytes, flush_count, fsync_count, peak_buffer_records/bytes,
+  oversized_direct_records, append_blocking_ms, flush_blocking_ms, flush_reasons;
+- per-stream produced/written counts and confirmed written-byte SHA256; original-mode
+  bytes are delegated to native append and its incremental digest is not computed;
+- final_flush start/end/deadline/records, status, counts_final, integrity_complete,
+  primary logger error and bounded secondary errors. RUNNING counts are not final.
+
+`append_blocking_ms` includes nested capacity flush; do not add it to flush_blocking_ms.
+These counters cover CheckpointJsonl writes; host log_fsync timers can include other
+mandatory file writes. Final receipts are separate from pre-shutdown backend/worker
+snapshots, and are retained in small bundles. Four complete, conserving receipts and
+matching drain times are mandatory only for buffered mode. No old result is upgraded.
+
+`recorded_gpu_costs` (`specrhythm.fixed-recorded-gpu-costs.v1`) separates
+D_proposal / D_commit_or_prefix_sync / V_target / other_recorded_Draft_GPU, window launch
+counts/sums, approximate per64-rotation allocation, per-rank Target sums, clipped physical
+union bounds and outside-observation time. `all_gpu_work_covered=false` is explicit.
+`pipeline_stage_semantics` labels D32/D64 aliases as proposal-only. New light results
+also expose target_host_envelopes_by_rank and host_costs_by_process without raw intervals.
+CUDA device reports add projection_version=integer-anchor-v2, anchor_before_ns and
+anchor_after_ns; existing elapsed times are retained, projection width becomes exact.
+Raw offline analysis adds clock_failure_details with inspected/failure counts and at
+most 16 original failing rows per attempt; legacy UNKNOWN remains UNKNOWN.

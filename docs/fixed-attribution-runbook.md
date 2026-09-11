@@ -1,5 +1,9 @@
 # Fixed64/32 retained timing analysis and optional two-mode short test
 
+Current opt-in persistence/timing addendum: [design](fixed-buffered-runtime-design.md) and
+[two-mode buffered-live runbook](fixed-buffered-runtime-runbook.md). Existing instructions
+below describe the original-live baseline and remain available; no old artifacts are changed.
+
 This revision adds CPU tooling only. It makes **no runtime optimization**. First use
 the already-retained data; no new GPU run is needed for export. The default action
 ends after offline analysis/export. GPU performance status is PENDING. The baseline

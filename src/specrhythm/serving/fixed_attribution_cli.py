@@ -126,6 +126,7 @@ def attach_events(raw, event_rows):
 def aggregate_clues(attempts):
     # Multiple repeats are left separate; never silently select a favorable attempt.
     by_mode = {}
+    raw_by_mode = {}
     for a in attempts:
         s = a.get("retained_summary", {})
         if s.get("valid") is True and all(
@@ -133,6 +134,7 @@ def aggregate_clues(attempts):
             for k in ("execution_status", "measurement_status", "cleanup_status")
         ):
             by_mode.setdefault(a["mode"], []).append(s)
+            raw_by_mode[a["mode"]] = a.get("raw", {})
     if any(len(v) != 1 for v in by_mode.values()):
         return {"status": "UNKNOWN", "reason": "multiple attempts; inspect each separately"}
     rows = {k: v[0] for k, v in by_mode.items()}
@@ -141,8 +143,33 @@ def aggregate_clues(attempts):
         serial, ping = rows["serial"], rows["pingpong"]
         s = serial["pipeline_stage_gpu_event_ms"]
         p = ping["pipeline_stage_gpu_event_ms"]
-        sf = s["D64"]["mean"] + s["V_SD64"]["mean"]
-        pf = 2 * (p["D32"]["mean"] + p["V_SD32"]["mean"])
+        parts = {}
+        for mode, values, batch_factor in (("serial", s, 1), ("pingpong", p, 2)):
+            raw = raw_by_mode.get(mode, {})
+            observed = raw.get("draft_model_gpu_event_ms_by_purpose", {})
+            rotations = raw.get("rotations", {}).get("complete_count", 0)
+            if not rotations or "commit" not in observed or "proposal" not in observed:
+                result["missing"] = "Draft commit/proposal event evidence or complete rotations"
+                result["incomplete_proposal_only_proxy_ms"] = {
+                    "serial": s["D64"]["mean"] + s["V_SD64"]["mean"],
+                    "pingpong": 2 * (p["D32"]["mean"] + p["V_SD32"]["mean"]),
+                }
+                return result
+            parts[mode] = {
+                "D_proposal": observed["proposal"]["sum_ms"] / rotations,
+                "D_commit_or_prefix_sync": observed["commit"]["sum_ms"] / rotations,
+                "V_target": batch_factor * values["V_SD" + str(64 // batch_factor)]["mean"],
+                "other_recorded_Draft_GPU": sum(
+                    v["sum_ms"] for k, v in observed.items() if k not in ("proposal", "commit")
+                )
+                / rotations,
+            }
+        sf, pf = (sum(parts[m].values()) for m in ("serial", "pingpong"))
+        result["approximate_recorded_forward_ms_per_rotation"] = parts
+        result["forward_semantics"] = (
+            "launch-selected observed model forwards only; "
+            "not matched initial-state stages, all GPU work, or critical path"
+        )
         gap = ping["actual_rotation_ms"]["mean"] - serial["actual_rotation_ms"]["mean"]
         result.update(
             serial_quoted_forward_sum_ms=sf,
@@ -223,6 +250,11 @@ def write_outputs(output, report):
                 f"| {a['mode']} | {s.get('window_ms')} | {s.get('window_throughput_tok_s')} "
                 f"| {rotation} | {independent} |"
             )
+            purpose = a.get("raw", {}).get("draft_model_gpu_event_ms_by_purpose", {})
+            lines.append(
+                "Draft model-forward sums by purpose (ms): "
+                + json.dumps({k: v["sum_ms"] for k, v in purpose.items()}, sort_keys=True)
+            )
             lines.extend(
                 [
                     "",
@@ -239,7 +271,10 @@ def write_outputs(output, report):
             "TP CUDA times are separate/max or interval union, never rank sums. "
             "Bounds are CUDA-event overlap, not exact kernel overlap.",
             "Legacy RPC receive/enqueue correlation and timer thread/parent IDs are absent. "
-            "No runtime optimization or GPU performance improvement is claimed.",
+            "This CPU analysis makes no GPU performance improvement claim.",
+            "D32/D64 denote proposal-only forwards. Commit/prefix-sync and other recorded "
+            "model forwards are separate; 2*max(D_proposal32,V32) "
+            "is not an end-to-end prediction.",
             "See attribution.json for counts, interval unions, purpose-separated Draft work, "
             "associations and precise missing evidence.",
         ]

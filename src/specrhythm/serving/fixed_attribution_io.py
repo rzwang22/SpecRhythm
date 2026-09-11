@@ -183,7 +183,7 @@ LIGHT_FIELDS = (
     "pipeline_stage_gpu_event_ms overlap host_observation warmup_ms drain_ms "
     "arrival_to_drain_ms startup_and_state_preparation_ms stop_reason valid_samples "
     "cross_run_token_equality cross_run_length_equality cross_run_EOS_equality "
-    "cross_run_round_equality uuid_query_by_rank"
+    "cross_run_round_equality uuid_query_by_rank recorded_gpu_costs diagnostic_logging"
 )
 
 

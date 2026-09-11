@@ -1,5 +1,9 @@
 # Fixed-concurrency batch control and timing decomposition
 
+Current opt-in persistence/timing addendum: [design](fixed-buffered-runtime-design.md) and
+[two-mode buffered-live runbook](fixed-buffered-runtime-runbook.md). Existing instructions
+below describe the original-live baseline and remain available; no old artifacts are changed.
+
 Implementation on the serving PR; real GPU timing/performance is **PENDING**. This is an
 independent diagnostic, not S2 qualification or Poisson serving. Existing S1/S2 defaults,
 chain drafting, sampled-row mapping, acceptance, EOS, K4, private KV ownership, terminal

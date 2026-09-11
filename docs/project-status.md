@@ -36,7 +36,41 @@ claims.
 | [#3 gpu-integration-v0.1](https://github.com/rzwang22/SpecRhythm/pull/3) | draft; Phase 3B.1 and corrected-20 Phase 3C.2 complete; Phase 3C.3 corrected-100 awaiting server run | hardened multi-rank primitives, corrected R3-real traces, common-prefix replay, request-bootstrap statistics, 2x shell decomposition and diagnostic learned ranker | user-run 3×A800 correctness artifacts plus Mac CPU tests; no packed-tree/serving engine, Dual-Batch, SLO, calibrated latency or speedup claim |
 | [#4 vllm-serving-v0.1](https://github.com/rzwang22/SpecRhythm/pull/4) | Draft/Open/unmerged; S0 CLOSED/PASS; S1-P G0–G3 PASS at `5a00049`; S2 G1 at `24b31a9` reported zero process exits/clean cleanup but rejected terminal-tail overlap; S2-only contract refinement awaiting retest | independent prefilled-KV resident pool, dynamic Poisson arrival/admission, Target/Serial/PingPong and engineering SLO/goodput | CPU/source contracts are not GPU qualification; finite-trace ideal PD-delivery boundary only |
 
-## Fixed64/32 b424 timing attribution
+## Fixed64/32 buffered-live runtime experiment (GPU PENDING)
+
+Based on e7452fc (clean serving HEAD), reviewed the new original-event attribution JSON,
+not only its Markdown: PingPong ZERO has complete coverage, join errors=0, 12 rotations,
+24/24 opposite-cohort owner operations finished before Target model launch. Draft commit
+forward was missing from earlier proposal-only arithmetic: recorded per64 sums are
+239.3625 ms Serial / 411.3140 ms PingPong; residual gap is 280.2046 ms, not CPU time.
+
+Fixed-only `prepare --observation buffered-live` batches a reviewed post-run JSONL
+whitelist within 256 records/1 MiB, preserves checksums/order/immediate contract validation,
+and requires four conserving final-flush receipts within the shared drain deadline.
+Default original-live and live UUID checks remain. Protocol sockets/control/ready and
+release/error evidence stay immediate. No scheduler, model, precision, K, 64/32, KV or
+proposal/accounting changes. No metadata cache, barrier removal or artificial overlap.
+Summary now separates Draft proposal/commit, Target, other recorded GPU work, window
+clipping, per-rank host costs, and final flush/drain. Proposal-only max formula is no
+longer presented as an end-to-end prediction.
+
+Independent integer-anchor projection fixes a CPU-reproduced 3 ns double-rounding
+width error without adding tolerance or GPU synchronization. The real Serial-split
+failure row is absent locally, so its old UNKNOWN remains; bounded bad-row details are
+now emitted by CPU analysis into a new output. Full audit remains separate.
+
+Local CPU validation: 1736 passed, 3 GPU skips; Ruff, compileall, Python 3.9 grammar,
+Bash/runbook syntax and diff checks passed. Linux CI final status is in the delivery;
+these checks do not qualify GPU performance.
+Next: operator prepare/capacity, buffered Serial once, then buffered PingPong once only
+after all Serial checks pass; stop and return evidence. No AutoDL connection/GPU run by
+agent, no merge, no changes to PR2/3. See [design](fixed-buffered-runtime-design.md),
+[schema](fixed-concurrency-diagnostic-schema.md), [runbook](fixed-buffered-runtime-runbook.md).
+
+## Historical fixed64/32 b424 timing attribution (proposal-only first analysis)
+
+The first-pass arithmetic below is retained as history; the new purpose-complete
+recorded-forward correction above supersedes its 320.402 ms residual.
 
 The operator's four continuous b424 points report execution/measurement/cleanup PASS:
 Target 172.290, Serial 167.218, Serial-split 91.722 and PingPong 119.020 tok/s.

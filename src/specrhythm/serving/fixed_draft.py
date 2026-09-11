@@ -18,6 +18,7 @@ def serve(config, directory, socket_path, mode, *, backend_class=None):
     """Only the fixed diagnostic service opts into the explicit stop protocol."""
     from specrhythm.phase4.dual_service import DualDraftUnixServer
     from specrhythm.phase4.transport import CheckpointJsonl
+    from specrhythm.serving.fixed_artifacts import record_error
     from specrhythm.serving.fixed_settle import DiagnosticDualController, DiagnosticDualMachine
     from specrhythm.serving.s1_workload import write_once
 
@@ -39,20 +40,45 @@ def serve(config, directory, socket_path, mode, *, backend_class=None):
             ready_path=ready,
             transport_log=CheckpointJsonl(directory / "draft-transport.jsonl"),
         )
+        failure = None
         try:
             server.serve()
+        except BaseException as error:
+            failure = error
+            record_error(directory, error, "draft_server")
+            raise
         finally:
-            controller.shutdown(failed=server.running)
+            try:
+                controller.shutdown(failed=server.running)
+            except Exception as error:
+                record_error(directory, error, "draft_owner_cleanup")
+                if failure is None:
+                    raise
     else:
         machine = factory()
+        failure = None
         try:
             DiagnosticSerialServer(socket_path, machine, event_log=events).serve(ready)
+        except BaseException as error:
+            failure = error
+            record_error(directory, error, "draft_server")
+            raise
         finally:
-            if not machine.backend.closed:
-                machine.backend._fail()
-                machine.backend.shutdown()
-                if not report.exists():
-                    write_once(report, machine.backend.report())
+            try:
+                if not machine.backend.closed:
+                    machine.backend._fail()
+                    machine.backend.shutdown()
+                    if not report.exists():
+                        write_once(report, machine.backend.report())
+            except Exception as error:
+                record_error(directory, error, "draft_backend_cleanup")
+                if failure is None:
+                    raise
+    # The final socket response precedes its transport log; finalize only after
+    # server exit and owner join. The coordinator waits for this receipt in drain.
+    from specrhythm.serving.fixed_logging import finish_current
+
+    finish_current("draft")
 
 
 class FixedDraftBackend(S2DraftBackend):
@@ -117,9 +143,13 @@ class FixedDraftBackend(S2DraftBackend):
         super().shutdown()
 
     def report(self):
+        from specrhythm.serving.fixed_logging import current
+
+        logs = current()
         return {
             **super().report(),
             "fixed_proposals": self.fixed_proposals,
+            "diagnostic_logging": logs.snapshot() if logs else None,
             "fixed_device": self.fixed_device_report,
             "fixed_host": TIMERS.report(),
         }

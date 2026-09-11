@@ -19,9 +19,11 @@ from specrhythm.serving.s2_plan import sealed
 
 def test_default_environment_preserves_live_and_strips_diagnostic_leak(monkeypatch):
     monkeypatch.setenv("SR_FIXED_POINT", "/old/point.json")
+    monkeypatch.setenv("SR_FIXED_OBSERVATION", "buffered-live")
     for mode in ("target", "serial", "pingpong"):
         env = clean_environment(mode)
         assert "SR_FIXED_POINT" not in env
+        assert "SR_FIXED_OBSERVATION" not in env
         assert env["SR_PHASE4_DUAL_UUID_QUERY_MODE"] == "live"
 
 

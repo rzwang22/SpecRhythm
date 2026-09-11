@@ -54,7 +54,9 @@ def settings(
             "invalid diagnostic timeout",
             field=name,
         )
-    require(observation == "original-live", "only original live UUID/full pool audits supported")
+    from specrhythm.serving.fixed_logging import MODES as OBSERVATIONS
+
+    require(observation in OBSERVATIONS, "unknown fixed observation configuration")
     return dict(
         warmup_steps=warmup_steps,
         samples=samples,

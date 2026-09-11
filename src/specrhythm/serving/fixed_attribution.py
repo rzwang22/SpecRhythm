@@ -89,6 +89,12 @@ def gpu_bounds(device, start, end):
     )
     uncertainty = device.get("anchor_uncertainty_ns")
     check(type(uncertainty) is int and uncertainty >= 0, "missing CUDA anchor uncertainty")
+    integer_anchor = device.get("projection_version") == "integer-anchor-v2"
+    if integer_anchor:
+        check(
+            device["anchor_after_ns"] - device["anchor_before_ns"] == uncertainty,
+            "integer CUDA anchor bracket disagrees with uncertainty",
+        )
     lower, upper = [], []
     for row in device.get("forwards", []):
         a, b, c, d = (
@@ -100,7 +106,8 @@ def gpu_bounds(device, start, end):
             "malformed projected CUDA bounds",
         )
         check(
-            abs(b - a - uncertainty) <= 2 and abs(d - c - uncertainty) <= 2,
+            abs(b - a - uncertainty) <= (0 if integer_anchor else 2)
+            and abs(d - c - uncertainty) <= (0 if integer_anchor else 2),
             "CUDA bounds disagree with anchor uncertainty",
         )
         check(
@@ -480,12 +487,24 @@ def analyze_raw(runtime, backend):
                         <= s["target_model_host_start_ns"],
                     }
                 )
+    from specrhythm.serving.fixed_timing import recorded_costs
+
+    rotation_report = rotations(samples, start)
     return {
+        "recorded_gpu_costs": recorded_costs(
+            [r["device"] for r in runtime["target_devices"]],
+            backend["fixed_device"],
+            [{"gpu_event_ms": r["target_gpu_event_ms"]} for r in samples],
+            start,
+            end,
+            rotation_report["complete_count"],
+        ),
+        "clock_failure_details": clock_failures(runtime, backend, start, end),
         "status": "INSUFFICIENT" if join_errors or gpu["status"] == "UNKNOWN" else "OBSERVED",
         "measurement_start_ns": start,
         "measurement_end_ns": end,
         "window_ms": (end - start) / 1e6,
-        "rotations": rotations(samples, start),
+        "rotations": rotation_report,
         "steps": samples[:32],
         "join_errors": join_errors[:128],
         "join_error_count": len(join_errors),
@@ -514,4 +533,61 @@ def analyze_raw(runtime, backend):
             "request-correlated enqueue/owner receive and ready publication "
             "are not timestamped by the legacy producer"
         ],
+    }
+
+
+def clock_failures(runtime, backend, start, end, limit=16):
+    """Bounded raw bad rows, including old producer values, without relaxing validation."""
+    bad, count, inspected = [], 0, 0
+    devices = [("runtime.json", r["device"]) for r in runtime["target_devices"]]
+    devices.append(("draft-backend-report.json", backend["fixed_device"]))
+    for artifact, device in devices:
+        for i, row in enumerate(device.get("forwards", [])):
+            inspected += 1
+            try:
+                gpu_bounds({**device, "forwards": [row]}, start, end)
+            except (KeyError, ValueError, TypeError) as error:
+                count += 1
+                if len(bad) < limit:
+                    u = device.get("anchor_uncertainty_ns")
+                    fields = {
+                        k: row.get(k)
+                        for k in (
+                            "host_start_ns",
+                            "host_launch_end_ns",
+                            "start_lower_ns",
+                            "start_upper_ns",
+                            "end_lower_ns",
+                            "end_upper_ns",
+                            "gpu_event_ms",
+                            "purpose",
+                            "B",
+                        )
+                    }
+                    delta = {}
+                    if type(u) is int:
+                        for side in ("start", "end"):
+                            a, b = (row.get(side + k) for k in ("_lower_ns", "_upper_ns"))
+                            if type(a) is int and type(b) is int:
+                                delta[side + "_width_minus_uncertainty_ns"] = b - a - u
+                    bad.append(
+                        dict(
+                            artifact=artifact,
+                            forward_index=i,
+                            identity=device.get("identity"),
+                            error=str(error),
+                            **fields,
+                            anchor_uncertainty_ns=u,
+                            **delta,
+                            projection_version=device.get("projection_version", "legacy"),
+                            anchor_before_ns=device.get("anchor_before_ns"),
+                            anchor_after_ns=device.get("anchor_after_ns"),
+                        )
+                    )
+    return {
+        "inspected_forwards": inspected,
+        "failure_count": count,
+        "rows": bad,
+        "truncated": count > len(bad),
+        "legacy_anchor_offsets_not_retained": True,
     }

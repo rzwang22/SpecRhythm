@@ -305,6 +305,11 @@ def summarize(manifest_path, directory, point, *, probe=False):
         checks = execution_checks(
             runtime, definitions, backend, lifecycle, manifest["execution"]["eos_token_ids"]
         )
+        from specrhythm.serving.fixed_logging import qualify
+
+        base["diagnostic_logging"] = qualify(
+            directory, manifest["fixed_diagnostic"]["options"].get("observation", "original-live")
+        )
         base.update(draft_backend_checks=checks, execution_status="PASS")
         if probe:
             return {
@@ -419,6 +424,7 @@ def measurements(manifest, runtime, backend, point):
     accepted = rejected = proposed = committed_verified = verifies = 0
     q = roots = 0
     target_samples, rotations = [], []
+    pre_model, model_call, after_model = defaultdict(list), defaultdict(list), defaultdict(list)
     pending_cohort = None
     rotation_boundary = start
     for i, s in enumerate(steps):
@@ -467,6 +473,12 @@ def measurements(manifest, runtime, backend, point):
         q += sample_q
         roots += sample_roots
         by_rank = {str(rank): value["gpu_event_ms"] for rank, value in batches[i].items()}
+        for rank, f in batches[i].items():
+            # Host envelopes are not isolated CPU work; return precedes completion fences.
+            if "host_launch_end_ns" in f:
+                pre_model[str(rank)].append((f["host_start_ns"] - s["start_ns"]) / 1e6)
+                model_call[str(rank)].append((f["host_launch_end_ns"] - f["host_start_ns"]) / 1e6)
+                after_model[str(rank)].append((s["end_ns"] - f["host_launch_end_ns"]) / 1e6)
         sample = {
             "B": s["B"],
             "Q": sample_q,
@@ -523,9 +535,12 @@ def measurements(manifest, runtime, backend, point):
     for p in backend["fixed_proposals"]:
         # Sorted cumulative sums avoid proposal x forward joins.
         p["wall_ms"] = (p["end_ns"] - p["start_ns"]) / 1e6
-    starts = [f["host_start_ns"] for f in draft_forwards]
+    proposal_forwards = sorted(
+        (f for f in draft_forwards if f["purpose"] == "proposal"), key=lambda f: f["host_start_ns"]
+    )
+    starts = [f["host_start_ns"] for f in proposal_forwards]
     cumulative = [0.0]
-    for f in draft_forwards:
+    for f in proposal_forwards:
         require(
             type(f["gpu_event_ms"]) in (int, float)
             and math.isfinite(f["gpu_event_ms"])
@@ -570,7 +585,42 @@ def measurements(manifest, runtime, backend, point):
                 / (count - len(r["commits"][0]["token_ids"]))
             )
     target_intervals = [(s["start_ns"], s["end_ns"]) for s in target_samples]
+    from specrhythm.serving.fixed_attribution import host_costs
+    from specrhythm.serving.fixed_timing import recorded_costs
+
     return {
+        "host_costs_by_process": host_costs(
+            {
+                "coordinator": runtime["host"],
+                "draft": backend["fixed_host"],
+                **{
+                    "target-rank-" + str(d["device"]["identity"]["global_rank"]): d["host"]
+                    for d in devices
+                },
+            },
+            start,
+            end,
+        )["sources"],
+        "target_host_envelopes_by_rank": {
+            rank: {
+                "pre_model_ms": stats(pre_model[rank]),
+                "model_call_host_ms": stats(model_call[rank]),
+                "after_model_call_ms": stats(after_model[rank]),
+            }
+            for rank in ("0", "1")
+        },
+        "target_host_envelope_semantics": "step-start to model hook, model hooks, then step-end; "
+        "post-call includes GPU completion waits and other host operations, not pure CPU time",
+        "recorded_gpu_costs": recorded_costs(
+            [d["device"] for d in devices],
+            backend["fixed_device"],
+            target_samples,
+            start,
+            end,
+            len(rotations),
+        ),
+        "pipeline_stage_semantics": "D32/D64 are proposal-only aliases; commit/prefix "
+        "forward is reported separately in recorded_gpu_costs; not complete Draft cost",
         "measurement_status": "PASS",
         "valid_samples": len(target_samples),
         "warmup_steps": runtime["warmup_steps"],
@@ -913,7 +963,6 @@ def comparisons(root):
         name: stats(stages[name], "no qualified initial-state B/K sample")
         for name in ("D32", "D64", "V_SD32", "V_SD64", "V_AR32", "V_AR64")
     }
-    stage_means = {k: v["mean"] for k, v in stage_values.items()}
     pairs = {}
     for before, after in (
         ("serial", "serial-split"),
@@ -955,14 +1004,20 @@ def comparisons(root):
                     if r["g_per_request_per_verification"] is not None
                 ]
             ),
-            "label": "production vLLM Batched Draft end-to-end improvement",
+            "label": "fixed diagnostic end-to-end runtime comparison",
+            "observation_before": sorted(
+                {r.get("diagnostic_logging", {}).get("observation", "original-live") for r in a}
+            ),
+            "observation_after": sorted(
+                {r.get("diagnostic_logging", {}).get("observation", "original-live") for r in b}
+            ),
+            "algorithm_improvement_claim": False,
             "pure_batching_claim": False,
             "work_matching": "different modes may commit different work; actual counters retained",
         }
     contrasts = matched_shape_contrasts(reports)
-    v32, v64, d32, d64 = (stage_means[k] for k in ("V_SD32", "V_SD64", "D32", "D64"))
-    ideal_serial = d64 + v64 if d64 is not None and v64 is not None else None
-    ideal_ping = 2 * max(d32, v32) if d32 is not None and v32 is not None else None
+    # Initial-state D aliases omit continuation commit work; no end-to-end prediction.
+    ideal_serial = ideal_ping = None
     return {
         "schema_version": "specrhythm.fixed-comparison.v1",
         "scenario": SCENARIO,
@@ -995,6 +1050,10 @@ def comparisons(root):
                     "actual_rotation_ms",
                     "window_throughput_tok_s",
                     "g_per_request_per_verification",
+                    "recorded_gpu_costs",
+                    "diagnostic_logging",
+                    "drain_ms",
+                    "arrival_to_drain_ms",
                 )
             }
             for r in reports
@@ -1005,9 +1064,12 @@ def comparisons(root):
         "D32_over_V_SD32": contrasts["D32_over_V_SD32"]["mean"],
         "measured_comparisons": pairs,
         "prediction": {
-            "T_serial": "D64 + V_SD64 + H_serial",
-            "T_pingpong": "2 * (max(D32, V_SD32) + H_pingpong)",
-            "assumptions": "balanced full A/B, comparable context/K, own g per mode",
+            "T_serial": "D_proposal64 + D_commit_or_prefix_sync64 + V_SD64 + H_serial",
+            "T_pingpong": "dependency schedule of A/B D_proposal, "
+            "D_commit_or_prefix_sync, V_target; "
+            "no scalar max prediction without their dependency/overlap evidence",
+            "assumptions": "requires matched contexts, commit work and dependency schedule; "
+            "2*max(D_proposal32,V32) alone is incomplete and not a prediction",
             "unexplained_time": "report measured wall residual; no automatic causal attribution",
             "H_is_not_sum_of_nested_host_timers": True,
             "ideal_serial_gpu_stage_ms": ideal_serial,

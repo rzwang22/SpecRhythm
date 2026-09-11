@@ -58,7 +58,7 @@ def wrap(owner, name, category):
     return measured
 
 
-def install_host_observation():
+def install_host_observation(role=None):
     """Called only by the independent diagnostic child/worker startup, never S1/S2."""
     global _INSTALLED
     if _INSTALLED:
@@ -74,14 +74,9 @@ def install_host_observation():
     from specrhythm.serving import s2_pool
 
     wrap(DualVerificationUuidQuery, "for_verification", "live_uuid_validation")
-    append = wrap(transport.CheckpointJsonl, "append", "checkpoint_log_write")
+    from specrhythm.serving.fixed_logging import install_checkpoint_logging
 
-    @functools.wraps(append)
-    def retain(log, row):
-        append(log, row)
-        capture(row)
-
-    transport.CheckpointJsonl.append = retain
+    install_checkpoint_logging(role, capture, TIMERS)
     wrap(os, "fsync", "log_fsync")
     wrap(transport.UnixDraftClient, "call", "ipc")
     wrap(dual_service.DualDraftClient, "call", "ipc")
@@ -165,6 +160,8 @@ class DeviceTimeline:
         self.current = None
 
     def report(self):
+        from specrhythm.serving.fixed_timing import project_anchor
+
         rows = []
         for start, end, host, launch_end, meta in self.pending:
             require(end.query(), "final fence did not complete diagnostic CUDA events")
@@ -176,16 +173,16 @@ class DeviceTimeline:
                     "host_start_ns": host,
                     "host_launch_end_ns": launch_end,
                     "gpu_event_ms": (b - a) / 1e6,
-                    "start_lower_ns": round(self.anchor_before_ns + a),
-                    "start_upper_ns": round(self.anchor_after_ns + a),
-                    "end_lower_ns": round(self.anchor_before_ns + b),
-                    "end_upper_ns": round(self.anchor_after_ns + b),
+                    **project_anchor(self.anchor_before_ns, self.anchor_after_ns, a, b),
                 }
             )
         return {
             "identity": self.identity,
             "forwards": rows,
             "clock": "CUDA elapsed events projected onto bracketed host monotonic anchor",
+            "projection_version": "integer-anchor-v2",
+            "anchor_before_ns": self.anchor_before_ns,
+            "anchor_after_ns": self.anchor_after_ns,
             "anchor_uncertainty_ns": self.anchor_after_ns - self.anchor_before_ns,
             "extra_per_round_synchronization": False,
             "kernel_overlap_exact": False,
@@ -199,6 +196,9 @@ def target_startup(worker):
     snapshot = (
         initialize_pingpong_worker if os.environ["SR_S2_MODE"] == "pingpong" else target_snapshot
     )(worker)
+    from specrhythm.serving.fixed_logging import current
+
+    current("target-rank-" + str(snapshot["global_rank"]))
     runner = worker.model_runner
     import torch
 
@@ -224,9 +224,13 @@ def target_startup(worker):
 
 
 def target_report(worker):
+    from specrhythm.serving.fixed_logging import current
+
+    logs = current()
     # The coordinator has already performed its normal final target_fence RPC.
     return {
         "device": worker.fixed_timeline.report(),
+        "diagnostic_logging": logs.snapshot() if logs else None,
         "host": TIMERS.report(),
         "rounds": ROUNDS,
         "target_rows": TARGET_ROWS,

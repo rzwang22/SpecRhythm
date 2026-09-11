@@ -516,6 +516,9 @@ def run(root, manifest_path, directory, point, *, probe=False):
             require(
                 result["draft_shutdown"].get("shutdown") is True, "Draft probe shutdown incomplete"
             )
+            from specrhythm.serving.fixed_logging import finalize_drain
+
+            probe_drain["logging_finalization"] = finalize_drain(llm, directory, probe_deadline)
             remaining(probe_deadline)
             probe_drain.update(
                 status="COMPLETE", phase="await_coordinator_exit", end_ns=time.monotonic_ns()

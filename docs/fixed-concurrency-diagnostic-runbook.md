@@ -1,5 +1,9 @@
 # Fixed64/32 foreground diagnostic runbook
 
+Current opt-in persistence/timing addendum: [design](fixed-buffered-runtime-design.md) and
+[two-mode buffered-live runbook](fixed-buffered-runtime-runbook.md). Existing instructions
+below describe the original-live baseline and remain available; no old artifacts are changed.
+
 For the b424 timing-attribution follow-up, start with the separate
 [CPU-only analysis/export runbook](fixed-attribution-runbook.md). That revision changes
 no runtime behavior and requires no new GPU run. Its optional retest is Serial then
