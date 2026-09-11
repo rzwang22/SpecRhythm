@@ -61,7 +61,7 @@ class FrozenPromptIdentityMap:
         internal_id = str(internal_request_id)
         if not internal_id:
             raise RuntimeError("vLLM internal request ID is empty")
-        stable_id = self.match(physical_token_prefix)
+        stable_id = self._match_for_binding(internal_id, physical_token_prefix)
         previous_stable = self.internal_to_stable.get(internal_id)
         if previous_stable is not None and previous_stable != stable_id:
             raise RuntimeError("vLLM internal request ID changed stable prompt identity")
@@ -71,6 +71,10 @@ class FrozenPromptIdentityMap:
         self.internal_to_stable[internal_id] = stable_id
         self.stable_to_internal[stable_id] = internal_id
         return stable_id
+
+    def _match_for_binding(self, internal_id: str, physical_token_prefix: Sequence[int]) -> str:
+        """Default full matching; fixed diagnostics may specialize pure prompt lookup."""
+        return self.match(physical_token_prefix)
 
     def stable_id(self, internal_request_id: str) -> str:
         internal_id = str(internal_request_id)

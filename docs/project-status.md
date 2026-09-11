@@ -36,7 +36,37 @@ claims.
 | [#3 gpu-integration-v0.1](https://github.com/rzwang22/SpecRhythm/pull/3) | draft; Phase 3B.1 and corrected-20 Phase 3C.2 complete; Phase 3C.3 corrected-100 awaiting server run | hardened multi-rank primitives, corrected R3-real traces, common-prefix replay, request-bootstrap statistics, 2x shell decomposition and diagnostic learned ranker | user-run 3×A800 correctness artifacts plus Mac CPU tests; no packed-tree/serving engine, Dual-Batch, SLO, calibrated latency or speedup claim |
 | [#4 vllm-serving-v0.1](https://github.com/rzwang22/SpecRhythm/pull/4) | Draft/Open/unmerged; S0 CLOSED/PASS; S1-P G0–G3 PASS at `5a00049`; S2 G1 at `24b31a9` reported zero process exits/clean cleanup but rejected terminal-tail overlap; S2-only contract refinement awaiting retest | independent prefilled-KV resident pool, dynamic Poisson arrival/admission, Target/Serial/PingPong and engineering SLO/goodput | CPU/source contracts are not GPU qualification; finite-trace ideal PD-delivery boundary only |
 
-## Fixed64/32 buffered-live runtime experiment (GPU PENDING)
+## Fixed64/32 bound-prefix matching experiment (GPU performance PENDING)
+
+Serving HEAD was clean at c1dd96d8c86e321d66d52aea31eb7396bf06786b. The new supplied
+buffered-live archive's independent JSON and nine export hashes were reviewed;
+CPU reanalysis retained PingPong POSITIVE (752.749–758.354 ms, 20/24 positive steps)
+and Serial ZERO with clean joins/clocks. Actual complete64 rotations are
+1150.924 / 1354.666 ms; no new GPU execution or performance improvement is claimed.
+
+One opt-in `--identity-matching bound-prefix` mechanism reuses validated frozen
+prompt bindings after an immutable prefix-free proof, while comparing the current
+full prompt on every bind and retaining original alias/change/errors. All fixed
+scheduler modes and Target-worker proposers use the same definition; default linear
+and S1/S2 remain unchanged. KV audits, proposal/prefix/version checks, required
+barriers, live UUID, buffered logs, primary-error and bounded drain are retained.
+Runtime/light/export metadata include actual owner counters and measured scheduler
+deltas; the old 52.70 ms arithmetic residual is explicitly not a critical path.
+
+CPU regressions exercise real fixed/S2/resident/Dual scheduling, physical-pool
+checks and TP startup, and demonstrate fewer actual full identity scans with equal
+selection/root/candidate accounting. GPU throughput impact remains unknown. See
+[design/evidence](fixed-identity-runtime-design.md) and the
+[two-mode runbook](fixed-identity-runtime-runbook.md). Next gate: new root,
+prepare/capacity, Serial PASS before PingPong, then lightweight summary/bundle.
+No AutoDL, GPU, full audit, stages, other short modes, G2/G3 or parameter grid by the
+agent. PR #4 Draft/Open/unmerged; PR #2/#3 untouched. Stop after delivery.
+
+Local validation: full pytest and focused fixed/S1/S2/Phase4 contracts PASS; Ruff,
+compileall, Python 3.9 grammar, Bash/runbook syntax and git diff checks PASS.
+Linux CI is checked against the pushed final SHA and reported in the delivery.
+
+## Earlier fixed64/32 buffered-live runtime experiment
 
 Based on e7452fc (clean serving HEAD), reviewed the new original-event attribution JSON,
 not only its Markdown: PingPong ZERO has complete coverage, join errors=0, 12 rotations,

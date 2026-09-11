@@ -200,6 +200,9 @@ def target_startup(worker):
 
     current("target-rank-" + str(snapshot["global_rank"]))
     runner = worker.model_runner
+    from specrhythm.serving.fixed_identity import install
+
+    install(runner.drafter, "identity")
     import torch
 
     def metadata():
@@ -224,11 +227,13 @@ def target_startup(worker):
 
 
 def target_report(worker):
+    from specrhythm.serving.fixed_identity import report
     from specrhythm.serving.fixed_logging import current
 
     logs = current()
     # The coordinator has already performed its normal final target_fence RPC.
     return {
+        "identity_matching": report(worker.model_runner.drafter.identity),
         "device": worker.fixed_timeline.report(),
         "diagnostic_logging": logs.snapshot() if logs else None,
         "host": TIMERS.report(),

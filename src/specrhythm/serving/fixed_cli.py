@@ -197,6 +197,9 @@ def parser():
     from specrhythm.serving.fixed_logging import MODES as OBSERVATIONS
 
     p.add_argument("--observation", choices=OBSERVATIONS, default="original-live")
+    from specrhythm.serving.fixed_identity import MODES as IDENTITY_MODES
+
+    p.add_argument("--identity-matching", choices=IDENTITY_MODES, default="linear")
     p.add_argument("--warmup-steps", type=int, default=2)
     p.add_argument("--samples", type=int, default=12)
     p.add_argument("--repeats", type=int, default=1)
@@ -275,6 +278,7 @@ def main(argv=None):
                 setup_timeout=args.setup_timeout,
                 drain_timeout=args.drain_timeout,
                 observation=args.observation,
+                identity_matching=args.identity_matching,
             )
             prepare(root, args.s1.resolve(), options)
             value = {"prepared": str(root), "capacity": "PENDING", "GPU_timing": "PENDING"}

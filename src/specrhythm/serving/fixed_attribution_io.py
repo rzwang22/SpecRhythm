@@ -183,7 +183,8 @@ LIGHT_FIELDS = (
     "pipeline_stage_gpu_event_ms overlap host_observation warmup_ms drain_ms "
     "arrival_to_drain_ms startup_and_state_preparation_ms stop_reason valid_samples "
     "cross_run_token_equality cross_run_length_equality cross_run_EOS_equality "
-    "cross_run_round_equality uuid_query_by_rank recorded_gpu_costs diagnostic_logging"
+    "cross_run_round_equality uuid_query_by_rank recorded_gpu_costs diagnostic_logging "
+    "identity_matching"
 )
 
 
@@ -199,7 +200,7 @@ def project(name, value):
             value,
             "schema_version point measurement_start_ns measurement_end_ns "
             "warmup_start_ns warmup_end_ns warmup_steps sample_count stop_reason "
-            "start_ns end_ns target_steps host prompt_lengths events population",
+            "start_ns end_ns target_steps host prompt_lengths events population identity_matching",
         )
         result["requests"] = [
             keep(
@@ -210,7 +211,8 @@ def project(name, value):
             for r in value.get("requests", [])
         ]
         result["target_devices"] = [
-            keep(d, "device host rounds target_rows") for d in value.get("target_devices", [])
+            keep(d, "device host rounds target_rows identity_matching")
+            for d in value.get("target_devices", [])
         ]
         return result
     result = keep(

@@ -176,6 +176,10 @@ def aggregate_clues(attempts):
             pingpong_nonoverlap_quoted_forward_sum_ms=pf,
             rotation_gap_ms=gap,
             unattributed_arithmetic_gap_ms=gap - (pf - sf),
+            arithmetic_gap_semantics="rotation difference minus unadjusted forward-sum "
+            "difference; NOT unobserved time, exclusive overhead or remaining critical path; "
+            "does not subtract CUDA-event overlap",
+            arithmetic_gap_critical_path_use="NOT_VALID",
         )
         if "serial-split" in rows:
             split = rows["serial-split"]
@@ -275,6 +279,9 @@ def write_outputs(output, report):
             "D32/D64 denote proposal-only forwards. Commit/prefix-sync and other recorded "
             "model forwards are separate; 2*max(D_proposal32,V32) "
             "is not an end-to-end prediction.",
+            "unattributed_arithmetic_gap_ms is a legacy arithmetic field, not unobserved "
+            "time, exclusive overhead or remaining critical path. In particular, forward "
+            "sums do not adjust for POSITIVE overlap; do not interpret that residual as savings.",
             "See attribution.json for counts, interval unions, purpose-separated Draft work, "
             "associations and precise missing evidence.",
         ]

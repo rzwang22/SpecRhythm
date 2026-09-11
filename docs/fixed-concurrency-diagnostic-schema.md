@@ -133,3 +133,32 @@ CUDA device reports add projection_version=integer-anchor-v2, anchor_before_ns a
 anchor_after_ns; existing elapsed times are retained, projection width becomes exact.
 Raw offline analysis adds clock_failure_details with inspected/failure counts and at
 most 16 original failing rows per attempt; legacy UNKNOWN remains UNKNOWN.
+# Addendum: fixed identity matching (2026-09-11)
+
+`diagnostic-config.json.options.identity_matching` and
+`manifest.fixed_diagnostic.options.identity_matching`: `linear` (default) or
+`bound-prefix` (opt-in), independent of `observation`. Old missing fields mean linear.
+Only fixed owned launchers export `SR_FIXED_IDENTITY_MATCHING`; S1/S2 strip it.
+
+New runtime fields: `identity_matching` for the scheduler and
+`target_devices[].identity_matching` for each TP proposer. Bound-prefix evidence:
+`mode`, `prefix_free`, `frozen_prompt_count`, `live_state_cached=false`,
+`bind_calls`, `validated_binding_reuses`, `full_scans`, `candidate_comparisons`,
+`linear_candidate_comparisons`, `binding_errors`, `inclusive_host_ns`.
+The last field is inclusive host matching time, not exclusive CPU cost or GPU savings.
+Linear reports `mode=linear`; uninstrumented old operation counts remain unavailable.
+Zero binding accesses are valid for idle TP ranks and capacity probes.
+
+Existing `target_steps[].identity_matching` contains per-schedule counter deltas.
+Light results preserve `identity_matching.by_owner` for startup→final snapshot and
+`measured_scheduler` for measured steps, plus `measured_scheduler_steps`.
+Final selection is checked against frozen configuration. Measurement snapshots
+also retain `diagnostic_options` on failure. Bundle/export/summary preserve the new
+small metadata; no raw prefixes/KV maps or extra per-token events are added.
+
+Offline `aggregate_clues.unattributed_arithmetic_gap_ms` is a legacy arithmetic
+number only. `arithmetic_gap_critical_path_use=NOT_VALID` and
+`arithmetic_gap_semantics` explicitly forbid treating it as unobserved/exclusive
+time or remaining critical path, particularly with positive overlap.
+See [proof, boundaries and tests](fixed-identity-runtime-design.md) and
+[foreground runbook](fixed-identity-runtime-runbook.md). No old result is rewritten.

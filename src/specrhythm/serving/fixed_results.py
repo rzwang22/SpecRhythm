@@ -310,6 +310,11 @@ def summarize(manifest_path, directory, point, *, probe=False):
         base["diagnostic_logging"] = qualify(
             directory, manifest["fixed_diagnostic"]["options"].get("observation", "original-live")
         )
+        from specrhythm.serving.fixed_identity import qualify as qualify_identity
+
+        base["identity_matching"] = qualify_identity(
+            runtime, manifest["fixed_diagnostic"]["options"].get("identity_matching", "linear")
+        )
         base.update(draft_backend_checks=checks, execution_status="PASS")
         if probe:
             return {
@@ -1012,6 +1017,12 @@ def comparisons(root):
                 {r.get("diagnostic_logging", {}).get("observation", "original-live") for r in b}
             ),
             "algorithm_improvement_claim": False,
+            "identity_matching_before": sorted(
+                {r.get("identity_matching", {}).get("mode", "linear") for r in a}
+            ),
+            "identity_matching_after": sorted(
+                {r.get("identity_matching", {}).get("mode", "linear") for r in b}
+            ),
             "pure_batching_claim": False,
             "work_matching": "different modes may commit different work; actual counters retained",
         }
@@ -1052,6 +1063,7 @@ def comparisons(root):
                     "g_per_request_per_verification",
                     "recorded_gpu_costs",
                     "diagnostic_logging",
+                    "identity_matching",
                     "drain_ms",
                     "arrival_to_drain_ms",
                 )

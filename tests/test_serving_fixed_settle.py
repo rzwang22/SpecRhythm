@@ -242,7 +242,9 @@ def test_capacity_runtime_zero_verification_uses_actual_empty_machine_shutdown(
     )
     llm = SimpleNamespace(
         llm_engine=SimpleNamespace(
-            vllm_config=cfg, engine_core=SimpleNamespace(shutdown=lambda: None)
+            vllm_config=cfg, engine_core=SimpleNamespace(
+                shutdown=lambda: None, engine_core=SimpleNamespace(scheduler=SimpleNamespace())
+            )
         ),
         collective_rpc=lambda callback, **kw: (
             [{"batch_invariant_effective": True, "s2_capacity": {}, "s1_effective_capacity": {}}]

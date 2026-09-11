@@ -20,10 +20,12 @@ from specrhythm.serving.s2_plan import sealed
 def test_default_environment_preserves_live_and_strips_diagnostic_leak(monkeypatch):
     monkeypatch.setenv("SR_FIXED_POINT", "/old/point.json")
     monkeypatch.setenv("SR_FIXED_OBSERVATION", "buffered-live")
+    monkeypatch.setenv("SR_FIXED_IDENTITY_MATCHING", "bound-prefix")
     for mode in ("target", "serial", "pingpong"):
         env = clean_environment(mode)
         assert "SR_FIXED_POINT" not in env
         assert "SR_FIXED_OBSERVATION" not in env
+        assert "SR_FIXED_IDENTITY_MATCHING" not in env
         assert env["SR_PHASE4_DUAL_UUID_QUERY_MODE"] == "live"
 
 
@@ -74,13 +76,16 @@ def test_short_runs_only_four_points_without_s2_grid(tmp_path, monkeypatch):
     assert modes == ["target", "serial", "serial-split", "pingpong"]
 
 
-def test_diagnostic_launcher_preserves_real_rc_and_source_logs(tmp_path, monkeypatch, capsys):
+@pytest.mark.parametrize("matching", ["linear", "bound-prefix"])
+def test_diagnostic_launcher_preserves_real_rc_and_source_logs(
+    tmp_path, monkeypatch, capsys, matching
+):
     path, manifest, _ = profile(
         tmp_path / "inputs",
         execution={"git_commit": "a" * 40, "eos_token_ids": [999], "vllm_source": str(tmp_path)},
     )
     manifest.pop("sha256")
-    manifest["fixed_diagnostic"] = {"options": settings()}
+    manifest["fixed_diagnostic"] = {"options": settings(identity_matching=matching)}
     path.write_text(json.dumps(sealed(manifest)))
     monkeypatch.setattr(s2_cli, "validate_execution_files", lambda *a: None)
     monkeypatch.setattr(s2_cli, "qualify", lambda *a: pytest.fail("heavy qualifier called"))
@@ -91,6 +96,10 @@ def test_diagnostic_launcher_preserves_real_rc_and_source_logs(tmp_path, monkeyp
 
         def child(kind, root, mode, manifest, out, probe=False, *, diagnostic=False):
             assert diagnostic is True and mode == "pingpong"
+            import os
+
+            assert os.environ["SR_FIXED_IDENTITY_MATCHING"] == matching
+            assert os.environ["SR_PHASE4_DUAL_UUID_QUERY_MODE"] == "live"
             if kind == "draft-child":
                 script = """import os,socket,time
 from pathlib import Path

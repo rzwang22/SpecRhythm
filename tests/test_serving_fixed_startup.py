@@ -15,10 +15,16 @@ startup = _startup
 
 
 @pytest.mark.parametrize("probe", [False, True])
+@pytest.mark.parametrize("matching", ["linear", "bound-prefix"])
 def test_observed_startup_initializes_each_rank_once_before_verification(
-    startup, monkeypatch, probe
+    startup, monkeypatch, probe, matching
 ):
     h = startup
+    from specrhythm.serving import fixed_logging
+
+    monkeypatch.setattr(fixed_logging, "_CURRENT", None)
+    monkeypatch.setenv("SR_FIXED_POINT", str(h.directory / "cpu-point.json"))
+    monkeypatch.setenv("SR_FIXED_IDENTITY_MATCHING", matching)
     monkeypatch.setattr(fixed_observe, "install_host_observation", lambda: None)
     observed = []
 
@@ -50,6 +56,9 @@ def test_observed_startup_initializes_each_rank_once_before_verification(
     assert len(observed) == 2
     assert {r["physical_gpu_id"] for r in observed} == {1, 2}
     for worker in h.workers:
+        from specrhythm.serving.fixed_identity import report
+
+        assert report(worker.model_runner.drafter.identity)["mode"] == matching
         evidence = worker.model_runner.drafter.uuid_queries.evidence()
         assert evidence["uuid_initial_validation_count"] == 1
         assert evidence["uuid_query_mode"] == "live"

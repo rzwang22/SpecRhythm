@@ -68,6 +68,7 @@ def checkpoint(
         "git_commit": manifest.get("git_commit", manifest.get("execution", {}).get("git_commit")),
         "execution_sha256": manifest["sha256"],
         "execution_identity": manifest.get("execution", {}),
+        "diagnostic_options": manifest.get("fixed_diagnostic", {}).get("options", {}),
         "stop_reason": window.reason,
         "measurement_start_ns": start,
         "measurement_end_ns": end,

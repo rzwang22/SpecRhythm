@@ -5,11 +5,17 @@ from __future__ import annotations
 import time
 
 from specrhythm.serving.common import require
+from specrhythm.serving.fixed_identity import COUNTERS, install, scheduler_report
 from specrhythm.serving.fixed_observe import TIMERS
 from specrhythm.serving.s2_scheduler import S2PingScheduler, S2SerialScheduler, S2TargetScheduler
 
 
 class FixedBatch:
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        install(self, "_resident_identity" if hasattr(self, "_resident_identity")
+                else "_dual_identity")
+
     def schedule(self, *args, **kwargs):
         # Control is refreshed by PoolScheduler. The preceding snapshot is used
         # only to tag evidence after super has read the current atomic packet.
@@ -17,6 +23,7 @@ class FixedBatch:
             i: (int(r.num_computed_tokens), len(r.all_token_ids)) for i, r in self.requests.items()
         }
         start = time.monotonic_ns()
+        identity_before = scheduler_report(self)
         with TIMERS.span("scheduler"):
             output = super().schedule(*args, **kwargs)
         if self.s2_control["barrier_ns"] is not None:
@@ -56,6 +63,12 @@ class FixedBatch:
                 population=self.s2_control.get("population"),
                 phase=self.s2_control.get("diagnostic_phase"),
             )
+            identity_after = scheduler_report(self)
+            self.s2_steps[-1]["identity_matching"] = {
+                "mode": identity_after["mode"],
+                **{k: identity_after[k] - identity_before[k] for k in COUNTERS
+                   if k in identity_after},
+            }
         return output
 
 

@@ -88,3 +88,31 @@ def test_real_join_costs_and_legacy_corrupt_clock_remains_unknown_with_small_fai
     d["forwards"] = [copy.deepcopy(bad) for _ in range(10_000)]
     r = clock_failures(runtime, backend, 0, 10**12)
     assert r["failure_count"] == 10_000 and len(r["rows"]) == 16 and r["truncated"]
+
+
+def test_positive_overlap_arithmetic_residual_is_not_a_critical_path_estimate():
+    from specrhythm.serving.fixed_attribution_cli import aggregate_clues
+
+    attempts = []
+    for mode in ("serial", "pingpong"):
+        runtime, backend = artifacts(mode)
+        if mode == "pingpong":
+            backend["fixed_device"]["forwards"].append(forward(["other"], 140, 145, "prefill"))
+        raw = analyze_raw(runtime, backend)
+        attempts.append({
+            "mode": mode, "raw": raw,
+            "retained_summary": {
+                "valid": True, "execution_status": "PASS", "measurement_status": "PASS",
+                "cleanup_status": "PASS",
+                "pipeline_stage_gpu_event_ms": {
+                    "D32": {"mean": 1}, "D64": {"mean": 1},
+                    "V_SD32": {"mean": 1}, "V_SD64": {"mean": 1},
+                },
+                "actual_rotation_ms": {"mean": 100},
+            },
+        })
+    assert attempts[1]["raw"]["overlap"]["status"] == "POSITIVE"
+    clue = aggregate_clues(attempts)
+    assert "unattributed_arithmetic_gap_ms" in clue  # legacy consumers remain supported
+    assert clue["arithmetic_gap_critical_path_use"] == "NOT_VALID"
+    assert "NOT unobserved time" in clue["arithmetic_gap_semantics"]

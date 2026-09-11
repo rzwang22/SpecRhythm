@@ -10,6 +10,7 @@ from specrhythm.phase4.stock_vllm import validate_worker_ranks
 from specrhythm.serving.common import read_json, require
 from specrhythm.serving.fixed_artifacts import checkpoint, record_error
 from specrhythm.serving.fixed_drain import settle
+from specrhythm.serving.fixed_identity import scheduler_report
 from specrhythm.serving.fixed_observe import TIMERS, target_report, target_startup
 from specrhythm.serving.fixed_plan import capacity_metadata
 from specrhythm.serving.fixed_settle import remaining
@@ -371,6 +372,7 @@ def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5):
             "draft_status": polls,
             "target_devices": devices,
             "host": TIMERS.report(),
+            "identity_matching": scheduler_report(scheduler),
             "target_pool_final": scheduler.s2_pool.report(),
             "target_requests_final": len(scheduler.requests),
             "draft_shutdown": draft_shutdown,
@@ -530,6 +532,10 @@ def run(root, manifest_path, directory, point, *, probe=False):
             )
         if not probe:
             result["startup_and_state_preparation_ms"] = (result["start_ns"] - started) / 1e6
+        else:
+            result["identity_matching"] = scheduler_report(
+                llm.llm_engine.engine_core.engine_core.scheduler
+            )
         result["capacity"].update(
             target_effective_by_rank=actual["target_effective_by_rank"],
             draft_effective=actual["draft_effective"],

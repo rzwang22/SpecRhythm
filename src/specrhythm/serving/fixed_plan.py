@@ -37,6 +37,7 @@ def settings(
     setup_timeout=900,
     drain_timeout=60,
     observation="original-live",
+    identity_matching="linear",
 ):
     for name, value, minimum in (
         ("warmup_steps", warmup_steps, 0),
@@ -57,6 +58,9 @@ def settings(
     from specrhythm.serving.fixed_logging import MODES as OBSERVATIONS
 
     require(observation in OBSERVATIONS, "unknown fixed observation configuration")
+    from specrhythm.serving.fixed_identity import MODES as IDENTITY_MODES
+
+    require(identity_matching in IDENTITY_MODES, "unknown fixed identity matching mode")
     return dict(
         warmup_steps=warmup_steps,
         samples=samples,
@@ -65,6 +69,7 @@ def settings(
         setup_timeout=setup_timeout,
         drain_timeout=drain_timeout,
         observation=observation,
+        identity_matching=identity_matching,
     )
 
 
