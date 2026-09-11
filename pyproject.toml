@@ -33,6 +33,7 @@ specrhythm = "specrhythm.cli:main"
 specrhythm-s0 = "specrhythm.serving.cli:main"
 specrhythm-s1 = "specrhythm.serving.s1_cli:main"
 specrhythm-s2 = "specrhythm.serving.s2_cli:main"
+specrhythm-fixed = "specrhythm.serving.fixed_cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

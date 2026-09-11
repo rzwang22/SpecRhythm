@@ -56,11 +56,11 @@ def environment(mode, manifest_path, directory):
     return env
 
 
-def child_command(kind, root, mode, manifest, directory, probe=False):
+def child_command(kind, root, mode, manifest, directory, probe=False, *, diagnostic=False):
     return [
         sys.executable,
         "-m",
-        "specrhythm.serving.s2_cli",
+        "specrhythm.serving.fixed_cli" if diagnostic else "specrhythm.serving.s2_cli",
         kind,
         "--root",
         str(root),
@@ -106,7 +106,8 @@ def failed_report(directory, mode, manifest, rc, error=None):
     }
 
 
-def execute(root, gate, mode, manifest_path, directory, *, probe=False, policy=None):
+def execute(root, gate, mode, manifest_path, directory, *, probe=False, policy=None,
+            diagnostic=None):
     manifest, definitions = load_s2(str(manifest_path))
     validate_execution_files(root, manifest["execution"])
     publish(
@@ -127,6 +128,10 @@ def execute(root, gate, mode, manifest_path, directory, *, probe=False, policy=N
         },
     )
     env = environment(mode, manifest_path, directory)
+    if diagnostic is not None:
+        # Explicit new entry point only; old S2 keeps the original launcher and qualifier.
+        env["SR_FIXED_POINT"] = str(directory / "point.json")
+        options = manifest["fixed_diagnostic"]["options"]
     socket = Path("/tmp") / ("sr-s2-" + uuid.uuid4().hex[:16] + ".sock")
     env["SR_S2_DRAFT_SOCKET"] = str(socket)
     saved_env = dict(os.environ)
@@ -134,14 +139,16 @@ def execute(root, gate, mode, manifest_path, directory, *, probe=False, policy=N
     rc = 1
     report = None
     cleanup_failed = False
-    with RunConsole(directory, mode, label=f"S2 {gate}"):
+    display_mode = mode if diagnostic is None else diagnostic["mode"]
+    with RunConsole(directory, display_mode, label=f"S2 {gate}"):
         try:
             os.environ.clear()
             os.environ.update(env)
             token = uuid.uuid4().hex
             with (directory / "draft-service.log").open("x") as log:
                 draft = subprocess.Popen(
-                    child_command("draft-child", root, mode, manifest_path, directory),
+                    child_command("draft-child", root, mode, manifest_path, directory,
+                                  **({"diagnostic": True} if diagnostic is not None else {})),
                     env={
                         **env,
                         "CUDA_VISIBLE_DEVICES": "0",
@@ -163,7 +170,7 @@ def execute(root, gate, mode, manifest_path, directory, *, probe=False, policy=N
                     "draft_socket": str(socket),
                 },
             )
-            deadline = time.monotonic() + 900
+            deadline = time.monotonic() + (900 if diagnostic is None else options["setup_timeout"])
             while not (socket.is_socket() and (directory / "draft-service-ready.json").is_file()):
                 if draft.poll() is not None or time.monotonic() >= deadline:
                     rc = draft.returncode if draft.returncode not in (None, 0) else 124
@@ -177,7 +184,8 @@ def execute(root, gate, mode, manifest_path, directory, *, probe=False, policy=N
                     "draft_socket_proven": socket_owned_by_pid(socket, draft.pid),
                 },
             )
-            command = child_command("child", root, mode, manifest_path, directory, probe)
+            command = child_command("child", root, mode, manifest_path, directory, probe,
+                                    **({"diagnostic": True} if diagnostic is not None else {}))
             write_once(
                 directory / "command.json",
                 {
@@ -195,7 +203,9 @@ def execute(root, gate, mode, manifest_path, directory, *, probe=False, policy=N
                 draft_pid=draft.pid,
                 draft_socket=socket,
                 ownership_journal=directory / "ownership.json",
-                timeout_seconds=14400,
+                timeout_seconds=(14400 if diagnostic is None else
+                                 2 * options["setup_timeout"] + options["window_seconds"]
+                                 + options["drain_timeout"] + 60),
             )
             draft_rc = draft.wait(timeout=15)
             if rc == 0 and draft_rc != 0:
@@ -214,6 +224,10 @@ def execute(root, gate, mode, manifest_path, directory, *, probe=False, policy=N
                 cleanup_attempt(directory)
             if rc:
                 report = failed_report(directory, mode, manifest, rc)
+            elif diagnostic is not None:
+                from specrhythm.serving.fixed_results import summarize
+
+                report = summarize(manifest_path, directory, diagnostic, probe=probe)
             elif probe:
                 from specrhythm.serving.s1_results import draft_backend_checks
 
@@ -266,7 +280,11 @@ def execute(root, gate, mode, manifest_path, directory, *, probe=False, policy=N
             os.environ.clear()
             os.environ.update(saved_env)
         # The display thread must drain final raw logs before hashing them.
-    if cleanup_failed:
+    if diagnostic is not None:
+        from specrhythm.serving.fixed_results import emit_result
+
+        report = emit_result(directory, report, diagnostic)
+    elif cleanup_failed:
         write_once(directory / "result.json", report)
     else:
         seal_result(directory, report)

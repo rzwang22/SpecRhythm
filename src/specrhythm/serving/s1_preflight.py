@@ -52,7 +52,8 @@ def git_identity():
 
 def clean_environment(mode, manifest_path=None):
     env = {
-        k: v for k, v in os.environ.items() if not k.startswith(("SR_PHASE4", "PHASE4B", "SR_S1"))
+        k: v for k, v in os.environ.items()
+        if not k.startswith(("SR_PHASE4", "PHASE4B", "SR_S1", "SR_FIXED"))
     }
     for key in ("USE_TORCH", "USE_TF", "USE_FLAX", "RANK", "WORLD_SIZE", "LOCAL_RANK"):
         env.pop(key, None)

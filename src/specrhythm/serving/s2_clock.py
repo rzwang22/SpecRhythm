@@ -12,7 +12,8 @@ from specrhythm.serving.s2_plan import check_seal
 
 class ServingClock:
     def __init__(
-        self, definitions, trace, bootstraps, *, active_limit=128, mode="target", emit=None
+        self, definitions, trace, bootstraps, *, active_limit=128, mode="target", emit=None,
+        per_cohort_capacity=None, fixed_assignment=None
     ):
         check_seal(trace)
         require(mode in ("target", "serial", "pingpong"), "unknown S2 mode")
@@ -25,6 +26,19 @@ class ServingClock:
         )
         self.trace, self.bootstraps = trace, bootstraps
         self.active_limit, self.mode = active_limit, mode
+        require(
+            per_cohort_capacity is None or (
+                mode == "pingpong" and type(per_cohort_capacity) is int
+                and per_cohort_capacity > 0 and 2 * per_cohort_capacity >= active_limit
+            ), "invalid explicit cohort capacity",
+        )
+        self.per_cohort_capacity = per_cohort_capacity
+        self.fixed_assignment = dict(fixed_assignment or {})
+        require(
+            set(self.fixed_assignment) <= set(ids)
+            and all(c in ("A", "B") for c in self.fixed_assignment.values()),
+            "invalid frozen cohort assignment",
+        )
         self.emit = emit or (lambda row: None)
         self.lock = threading.RLock()
         self.events, self.queue = [], deque()
@@ -132,7 +146,12 @@ class ServingClock:
             while self.queue and len(held) < self.active_limit:
                 cohort = None
                 if self.mode == "pingpong":
-                    choices = [c for c in ("A", "B") if c not in busy_cohorts]
+                    choices = [
+                        c for c in ("A", "B") if c not in busy_cohorts
+                        and (self.per_cohort_capacity is None or
+                             sum(r["cohort"] == c for r in held) < self.per_cohort_capacity)
+                        and self.fixed_assignment.get(self.queue[0], c) == c
+                    ]
                     if not choices:
                         break
                     cohort = min(choices, key=lambda c: (sum(r["cohort"] == c for r in held), c))

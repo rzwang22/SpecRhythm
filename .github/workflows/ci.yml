@@ -31,6 +31,9 @@ jobs:
       - run: python -m pytest -q tests/test_phase4.py
       - run: specrhythm-s0 --help
       - run: python -m pytest -q tests/test_serving_s0.py
+      - run: specrhythm-fixed --help
+      - run: python -m pytest -q tests/test_serving_fixed.py tests/test_serving_fixed_cli.py tests/test_serving_fixed_results.py tests/test_serving_fixed_runtime.py tests/test_serving_fixed_startup.py
+      - run: bash -n scripts/run_fixed_diagnostic.sh
       - run: specrhythm-s2 --help
       - run: python -m pytest -q tests/test_serving_s2.py tests/test_serving_s2_runtime.py tests/test_serving_s2_cli.py tests/test_serving_s2_results.py tests/test_serving_s2_uuid.py tests/test_serving_s2_terminal_drain.py
       - run: specrhythm-s1 --help
@@ -50,6 +53,6 @@ jobs:
           ref: 752a3a504485790a2e8491cacbb35c137339ad34
           path: tmp/phase4b3-vllm-source
           sparse-checkout: vllm
-      - run: python -m pytest tests/test_phase4_vllm_draft.py tests/test_phase4_vllm_draft_source.py tests/test_phase4_pingpong_source.py tests/test_serving_s2_source.py
+      - run: python -m pytest tests/test_phase4_vllm_draft.py tests/test_phase4_vllm_draft_source.py tests/test_phase4_pingpong_source.py tests/test_serving_s2_source.py tests/test_serving_fixed_source.py
         env:
           SR_PHASE4B3_SOURCE_AUDIT: tmp/phase4b3-vllm-source

@@ -238,13 +238,13 @@ class S2DualMachine(BatchedDualDraftMachine):
         return [{**r, "logical_cohort": cohort} for r in results]
 
 
-def serve(config, directory, socket_path, mode):
+def serve(config, directory, socket_path, mode, *, backend_class=S2DraftBackend):
     report = directory / "draft-backend-report.json"
     ready = directory / "draft-service-ready.json"
     events = CheckpointJsonl(directory / "draft-work-events.jsonl")
 
     def factory():
-        backend = S2DraftBackend(config)
+        backend = backend_class(config)
         write_once(directory / "draft-startup.json", backend.provenance)
         cls = S2DualMachine if mode == "pingpong" else BatchedDraftStateMachine
         return cls(backend, candidate_budget=4, report_path=report)

@@ -157,7 +157,7 @@ def target_fence(worker):
     return {"rank": worker.rank, "timestamp_ns": time.monotonic_ns()}
 
 
-def make_engine(config, mode):
+def make_engine(config, mode, *, classes=None, sequence_limit=POOL_SLOTS, query_limit=QUERY_LIMIT):
     # Must be configured before importing vLLM. Its in-process client performs exactly
     # one EngineCore step per get_output; there is no autonomous scheduler busy loop.
     require(
@@ -166,7 +166,7 @@ def make_engine(config, mode):
     )
     from vllm import LLM
 
-    scheduler, proposer = CLASSES[mode]
+    scheduler, proposer = (classes or CLASSES)[mode]
     return LLM(
         model=str(config.target.resolved_model_path),
         tokenizer=str(config.target.resolved_tokenizer_path),
@@ -178,8 +178,8 @@ def make_engine(config, mode):
         seed=config.sampling.seed,
         gpu_memory_utilization=config.target.gpu_memory_utilization,
         max_model_len=4096,
-        max_num_seqs=POOL_SLOTS,
-        max_num_batched_tokens=QUERY_LIMIT,
+        max_num_seqs=sequence_limit,
+        max_num_batched_tokens=query_limit,
         enforce_eager=True,
         enable_prefix_caching=False,
         enable_dbo=False,
@@ -269,111 +269,8 @@ def drive(
     timeout=14400,
     logprobs=5,
 ):
-    from vllm import SamplingParams
-    from vllm.v1.engine.core_client import InprocClient
-
-    engine = llm.llm_engine
-    require(
-        isinstance(engine.engine_core, InprocClient), "S2 engine has an autonomous scheduling loop"
-    )
-    scheduler = engine.engine_core.engine_core.scheduler
-    client = client_for(mode)
-    started = time.monotonic_ns()
-    setup_outputs = {}
-    for row in definitions:
-        tokenizer = llm.get_tokenizer()
-        require(
-            tokenizer.encode(row.prompt_text, add_special_tokens=False)
-            == list(row.prompt_token_ids),
-            "S2 tokenizer differs from frozen S0 prompt",
-            request_id=row.request_id,
-        )
-        params = SamplingParams(
-            temperature=0.0,
-            top_p=1.0,
-            max_tokens=row.maximum_new_tokens,
-            seed=row.sampling_seed,
-            n=1,
-            logprobs=logprobs,
-        )
-        params.update_from_generation_config(
-            engine.vllm_config.model_config.try_get_generation_config(), tokenizer.eos_token_id
-        )
-        params.update_from_tokenizer(tokenizer)
-        require(
-            sorted(set([params.eos_token_id] + list(params.stop_token_ids or ()))) == eos,
-            "S2 effective EOS differs from frozen policy",
-        )
-        engine.add_request(
-            row.request_id,
-            {"prompt_token_ids": list(row.prompt_token_ids)},
-            params,
-            prompt_text=row.prompt_text,
-        )
-    deadline = time.monotonic() + timeout
-    while not (directory / "setup-ready.json").exists() or len(setup_outputs) < len(definitions):
-        require(time.monotonic() < deadline, "S2 setup timeout")
-        for output in engine.step():
-            require(
-                len(output.outputs) == 1 and len(output.outputs[0].token_ids) == 1,
-                "S2 setup advanced beyond one bootstrap",
-                request_id=output.request_id,
-            )
-            setup_outputs[output.request_id] = output
-    manifest = load_decode_ready_manifest(read_json(directory / "decode-ready-manifest.json"))
-    warm = {r.request_id: r for r in manifest.requests}
-    require(set(warm) == {r.request_id for r in definitions}, "S2 resident manifest incomplete")
-    bootstrap = {}
-    for r in definitions:
-        w = warm[r.request_id]
-        output = setup_outputs[r.request_id]
-        token = output.outputs[0].token_ids[0]
-        require(
-            w.bootstrap_token_id == token
-            and w.target_materialized_kv_token_count == r.prompt_length
-            and w.draft_materialized_kv_token_count == r.prompt_length + 1
-            and w.target_pending_input_token_id == token
-            and w.logical_committed_prefix_token_ids == r.prompt_token_ids + (token,),
-            "S2 resident bootstrap/KV/next-input contract differs",
-            request_id=r.request_id,
-        )
-        terminal = token in eos or r.maximum_new_tokens == 1
-        require(output.finished == terminal, "S2 bootstrap terminal status differs")
-        bootstrap[r.request_id] = {
-            "token": token,
-            "terminal": terminal,
-            "finish_reason": output.outputs[0].finish_reason,
-        }
-    # Finished-in-setup Target/Serial provider requests may still hold Draft prefixes.
-    if mode != "pingpong":
-        for rid, b in bootstrap.items():
-            if b["terminal"]:
-                client.call("finish_request", {"request_id": rid})
-    pool = scheduler.freeze_pool()
-    draft_pool = read_json(directory / "draft-pool.json")
-    active_ids = {r for r, b in bootstrap.items() if not b["terminal"]}
-    require(
-        set(pool["initial"]) == set(draft_pool["rows"]) == active_ids,
-        "S2 initial physical resident request set incomplete",
-    )
-    initial_ranks = llm.collective_rpc(target_snapshot)
-    llm.collective_rpc(target_fence)
-    setup_end = time.monotonic_ns()
-    write_once(
-        directory / "resident-pool.json",
-        {
-            "target": pool,
-            "target_rank_initial_memory": initial_ranks,
-            "draft": draft_pool,
-            "prefill_setup_ns": setup_end - started,
-            "selected_requests": len(definitions),
-            "resident_requests": len(active_ids),
-            "bootstrap_terminal_requests": len(definitions) - len(active_ids),
-            "target_bootstrap_materialized": False,
-            "draft_bootstrap_materialized": True,
-            "restore_method": "fresh process/engine and prefill; no continuation reuse",
-        },
-    )
+    prepared = prepare_resident(llm, definitions, directory, mode, eos, timeout, logprobs)
+    engine, scheduler, client, warm, bootstrap, deadline = prepared
     clock = ServingClock(definitions, trace, bootstrap, active_limit=active_limit, mode=mode)
     packet = {"initial_proposals": {}, "initial_enqueues": {}, "eos_token_ids": eos}
     clock.start(time.monotonic_ns())
@@ -483,6 +380,116 @@ def drive(
                 "initial_admissions": initial_records,
             },
         )
+
+
+def prepare_resident(llm, definitions, directory, mode, eos, timeout=14400, logprobs=5):
+    """Shared real prefill/bootstrap, private pool validation and safe initial fence."""
+    from vllm import SamplingParams
+    from vllm.v1.engine.core_client import InprocClient
+
+    engine = llm.llm_engine
+    require(
+        isinstance(engine.engine_core, InprocClient), "S2 engine has an autonomous scheduling loop"
+    )
+    scheduler = engine.engine_core.engine_core.scheduler
+    client = client_for(mode)
+    started = time.monotonic_ns()
+    setup_outputs = {}
+    for row in definitions:
+        tokenizer = llm.get_tokenizer()
+        require(
+            tokenizer.encode(row.prompt_text, add_special_tokens=False)
+            == list(row.prompt_token_ids),
+            "S2 tokenizer differs from frozen S0 prompt",
+            request_id=row.request_id,
+        )
+        params = SamplingParams(
+            temperature=0.0,
+            top_p=1.0,
+            max_tokens=row.maximum_new_tokens,
+            seed=row.sampling_seed,
+            n=1,
+            logprobs=logprobs,
+        )
+        params.update_from_generation_config(
+            engine.vllm_config.model_config.try_get_generation_config(), tokenizer.eos_token_id
+        )
+        params.update_from_tokenizer(tokenizer)
+        require(
+            sorted(set([params.eos_token_id] + list(params.stop_token_ids or ()))) == eos,
+            "S2 effective EOS differs from frozen policy",
+        )
+        engine.add_request(
+            row.request_id,
+            {"prompt_token_ids": list(row.prompt_token_ids)},
+            params,
+            prompt_text=row.prompt_text,
+        )
+    deadline = time.monotonic() + timeout
+    while not (directory / "setup-ready.json").exists() or len(setup_outputs) < len(definitions):
+        require(time.monotonic() < deadline, "S2 setup timeout")
+        for output in engine.step():
+            require(
+                len(output.outputs) == 1 and len(output.outputs[0].token_ids) == 1,
+                "S2 setup advanced beyond one bootstrap",
+                request_id=output.request_id,
+            )
+            setup_outputs[output.request_id] = output
+    manifest = load_decode_ready_manifest(read_json(directory / "decode-ready-manifest.json"))
+    warm = {r.request_id: r for r in manifest.requests}
+    require(set(warm) == {r.request_id for r in definitions}, "S2 resident manifest incomplete")
+    bootstrap = {}
+    for r in definitions:
+        w = warm[r.request_id]
+        output = setup_outputs[r.request_id]
+        token = output.outputs[0].token_ids[0]
+        require(
+            w.bootstrap_token_id == token
+            and w.target_materialized_kv_token_count == r.prompt_length
+            and w.draft_materialized_kv_token_count == r.prompt_length + 1
+            and w.target_pending_input_token_id == token
+            and w.logical_committed_prefix_token_ids == r.prompt_token_ids + (token,),
+            "S2 resident bootstrap/KV/next-input contract differs",
+            request_id=r.request_id,
+        )
+        terminal = token in eos or r.maximum_new_tokens == 1
+        require(output.finished == terminal, "S2 bootstrap terminal status differs")
+        bootstrap[r.request_id] = {
+            "token": token,
+            "terminal": terminal,
+            "finish_reason": output.outputs[0].finish_reason,
+        }
+    # Finished-in-setup Target/Serial provider requests may still hold Draft prefixes.
+    if mode != "pingpong":
+        for rid, b in bootstrap.items():
+            if b["terminal"]:
+                client.call("finish_request", {"request_id": rid})
+    pool = scheduler.freeze_pool()
+    draft_pool = read_json(directory / "draft-pool.json")
+    active_ids = {r for r, b in bootstrap.items() if not b["terminal"]}
+    require(
+        set(pool["initial"]) == set(draft_pool["rows"]) == active_ids,
+        "S2 initial physical resident request set incomplete",
+    )
+    initial_ranks = llm.collective_rpc(target_snapshot)
+    llm.collective_rpc(target_fence)
+    setup_end = time.monotonic_ns()
+    write_once(
+        directory / "resident-pool.json",
+        {
+            "target": pool,
+            "target_rank_initial_memory": initial_ranks,
+            "draft": draft_pool,
+            "prefill_setup_ns": setup_end - started,
+            "selected_requests": len(definitions),
+            "resident_requests": len(active_ids),
+            "bootstrap_terminal_requests": len(definitions) - len(active_ids),
+            "target_bootstrap_materialized": False,
+            "draft_bootstrap_materialized": True,
+            "restore_method": "fresh process/engine and prefill; no continuation reuse",
+        },
+    )
+    return engine, scheduler, client, warm, bootstrap, deadline
 
 
 def release_finished(clock, inflight):

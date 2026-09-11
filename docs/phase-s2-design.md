@@ -290,3 +290,11 @@ contracts. They cannot prove real GPU residency, model correctness, capacity, as
 join/leave performance or speedup. Those remain the operator's G0–G3 validation work.
 
 See [schema](phase-s2-schema.md) and [server runbook](phase-s2-runbook.md).
+
+## Independent fixed64/32 diagnostic (2026-09-11)
+
+The new [diagnostic entry](fixed-concurrency-diagnostic-design.md) reuses the S2 private
+resident setup and readiness contracts through optional capacity/observer parameters.
+It does not change this document's S2 defaults or Poisson/arrival-to-drain interpretation.
+Its short-window cancellations, initial-state stages and separate lightweight/audit
+statuses must not be passed off as S2 full-trace qualification.

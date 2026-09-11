@@ -1,6 +1,6 @@
 # SpecRhythm project status
 
-Last updated: 2026-09-10
+Last updated: 2026-09-11
 
 Maintenance rule: every code-changing PR updates this file with its scope, status, evidence,
 known limitations, and next gate before that PR is considered complete.
@@ -35,6 +35,38 @@ claims.
 | [#2 simulator-semantics-v0.2](https://github.com/rzwang22/SpecRhythm/pull/2) | frozen draft; Phase 2 complete, not merged | proposal lifecycle, deterministic tree oracle, tree-aware allocators, base-preserving residual controls, Phase-2 nested search pools and common-snapshot oracle replay, path-aware eager and accounting | pure-Python proxy and oracle upper bounds only; no deployable oracle, measured search cost, GPU integration, or performance claim |
 | [#3 gpu-integration-v0.1](https://github.com/rzwang22/SpecRhythm/pull/3) | draft; Phase 3B.1 and corrected-20 Phase 3C.2 complete; Phase 3C.3 corrected-100 awaiting server run | hardened multi-rank primitives, corrected R3-real traces, common-prefix replay, request-bootstrap statistics, 2x shell decomposition and diagnostic learned ranker | user-run 3×A800 correctness artifacts plus Mac CPU tests; no packed-tree/serving engine, Dual-Batch, SLO, calibrated latency or speedup claim |
 | [#4 vllm-serving-v0.1](https://github.com/rzwang22/SpecRhythm/pull/4) | Draft/Open/unmerged; S0 CLOSED/PASS; S1-P G0–G3 PASS at `5a00049`; S2 G1 at `24b31a9` reported zero process exits/clean cleanup but rejected terminal-tail overlap; S2-only contract refinement awaiting retest | independent prefilled-KV resident pool, dynamic Poisson arrival/admission, Target/Serial/PingPong and engineering SLO/goodput | CPU/source contracts are not GPU qualification; finite-trace ideal PD-delivery boundary only |
+
+## Independent fixed64/32 timing diagnostic
+
+Based on `50025b734ed02086533f2302ed2b2951c262ec45`, PR #4 adds a separate foreground
+`fixed_cli`/`specrhythm-fixed` entry and committed server script/runbook. It reuses the
+existing mixed100, real resident prefill/KV and production Draft/Target paths. Main
+modes are target64, serial64, serial-split32+32 and pingpong32+32; models/TP/K4 stay
+fixed. Explicit per-cohort capacity cannot overfill the other group while one is busy;
+held terminal slots remain charged through real release. S1/S2 defaults are unchanged.
+
+Initial-state 32/64 shape samples use fresh processes/prefill and are distinct from
+short continuous windows. Serial-split waits for actual owner completion before each
+Target step. New in-memory host/CUDA evidence records control, UUID, pool audits,
+serialization, sync and logs; per-round fences are not added. Actual TP rank times and
+clock-bounded event-union overlap are not summed into fake kernel overlap/time savings.
+
+Light execution/accounting/measurement summaries return without the full S2 qualifier.
+The full CPU artifact audit is an explicit separate command and initially PENDING.
+Window cancellations are not natural completions or full-request SLO attainment.
+Cross-mode token/length/EOS/round equality remains NOT_REQUIRED. Split-cost formulas
+require actual union/context/K shape evidence; missing samples remain null with reasons.
+
+Validation: 60 focused CPU owner/coordinator/TP startup, shape/accounting, interval and
+foreground-error regressions pass; S1/S2/fixed compatibility tests total 240 passes.
+Full local Python 3.11 pytest with pinned source audit: 1665 passed, 3 skipped (GPU
+opt-in and two Linux-only process cases). Ruff, compileall, Python 3.9 syntax, nine
+Bash scripts and eight runbook blocks pass; exact-commit Linux CI is recorded with
+the delivered commit. **No AutoDL connection or GPU execution by
+the agent; GPU timing/performance PENDING.** Existing S2 failures/results are retained,
+and this diagnostic does not confer S2 G1/G2/G3 PASS. Next action is the operator's
+short run using [the committed runbook](fixed-concurrency-diagnostic-runbook.md), then
+return the small bundle. [Design and measurement contracts](fixed-concurrency-diagnostic-design.md).
 
 ## Phase S: Serving Workloads & Arrival Replay
 
