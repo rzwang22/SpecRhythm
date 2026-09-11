@@ -8,8 +8,11 @@ import time
 
 from specrhythm.phase4.stock_vllm import validate_worker_ranks
 from specrhythm.serving.common import read_json, require
+from specrhythm.serving.fixed_artifacts import checkpoint, record_error
+from specrhythm.serving.fixed_drain import settle
 from specrhythm.serving.fixed_observe import TIMERS, target_report, target_startup
 from specrhythm.serving.fixed_plan import capacity_metadata
+from specrhythm.serving.fixed_settle import remaining
 from specrhythm.serving.s1_workload import write_once
 from specrhythm.serving.s2_clock import ServingClock
 from specrhythm.serving.s2_plan import capacity_for
@@ -22,7 +25,6 @@ from specrhythm.serving.s2_runtime import (
     prepare_resident,
     release_finished,
     target_fence,
-    target_snapshot,
 )
 
 CLASSES = {
@@ -51,12 +53,12 @@ def population(clock, inflight=()):
     }
 
 
-def wait_draft(client, timeout, *, sleep=time.sleep):
+def wait_draft(client, timeout, *, sleep=time.sleep, deadline_ns=None):
     """Read actual owner completion. Sleeping only polls; it never simulates work."""
-    deadline = time.monotonic() + timeout
+    deadline_ns = deadline_ns or time.monotonic_ns() + int(timeout * 1e9)
     with TIMERS.span("wait_draft_owner"):
         while True:
-            client.timeout_seconds = max(0.001, deadline - time.monotonic())
+            client.timeout_seconds = remaining(deadline_ns)
             status = client.call("status", {})
             require(
                 not status.get("failures"),
@@ -66,7 +68,7 @@ def wait_draft(client, timeout, *, sleep=time.sleep):
             if not status["inflight_request_ids"]:
                 return status
             require(
-                time.monotonic() < deadline,
+                time.monotonic_ns() < deadline_ns,
                 "diagnostic Draft drain timeout",
                 actual=status["inflight_request_ids"],
             )
@@ -195,6 +197,7 @@ def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5):
     polls, steps, phases = [], [], []
     first_admission = True
     failure = None
+    complete = False
     observation_deadline = time.monotonic() + options["setup_timeout"] + options["window_seconds"]
 
     def publish_control(inflight=()):
@@ -203,7 +206,9 @@ def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5):
             **clock.control(),
             **packet,
             "max_requests_per_target_forward": 32 if grouped else active,
-            "diagnostic_phase": "measurement" if window.start_ns else "warmup",
+            "diagnostic_phase": (
+                "drain" if window.end_ns else "measurement" if window.start_ns else "warmup"
+            ),
             "population": population(clock, inflight),
         }
         if current != last:
@@ -274,23 +279,31 @@ def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5):
             start = time.monotonic_ns()
             with TIMERS.span("target_step"):
                 outputs = engine.step()
-            with TIMERS.span("output_commit"):
-                commit_outputs(clock, outputs, packet, client, runtime_mode)
-            end = time.monotonic_ns()
             scheduled = scheduler.s2_steps[before:]
             require(len(scheduled) == 1, "diagnostic requires one scheduler step per engine step")
             row = scheduled[0]
-            steps.append(
-                {
-                    **row,
-                    "start_ns": start,
-                    "end_ns": end,
-                    "window": window.start_ns is not None,
-                    "population": pop,
-                    "supply_phase": phase,
-                }
-            )
-            if window.step_completed(len(row["request_ids"]), end):
+            committed = False
+            try:
+                with TIMERS.span("output_commit"):
+                    commit_outputs(clock, outputs, packet, client, runtime_mode)
+                committed = True
+            finally:
+                end = time.monotonic_ns()
+                # Preserve a completed engine step even if output/drain RPC fails.
+                steps.append(
+                    {
+                        **row,
+                        "start_ns": start,
+                        "end_ns": end,
+                        "window": window.start_ns is not None,
+                        "population": pop,
+                        "supply_phase": phase,
+                        "output_commit_complete": committed,
+                    }
+                )
+            stopping = window.step_completed(len(row["request_ids"]), end)
+            checkpoint(directory, manifest, point, window, clock, steps, phases)
+            if stopping:
                 break
             if not outputs:
                 with TIMERS.span("wait_ready", reason="no admissible proposal/Target work"):
@@ -300,48 +313,41 @@ def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5):
         # Stop submissions at this safe Target boundary. Work enqueued by the last
         # issued step is real work and remains charged through the drain below.
         clock._event("diagnostic-stop-submission", window.end_ns, reason=window.reason)
-        drain_deadline = time.monotonic() + options["drain_timeout"]
-
-        def drain_remaining():
-            remaining = drain_deadline - time.monotonic()
-            require(remaining > 0, "diagnostic total drain timeout")
-            client.timeout_seconds = remaining
-            return remaining
-
+        complete = window.reason != "operator_stop" and window.samples > 0
+        checkpoint(
+            directory, manifest, point, window, clock, steps, phases, measurement_complete=complete
+        )
         with TIMERS.span("drain"):
-            if grouped:
-                wait_draft(client, drain_remaining())
-            release_finished(clock, ())
-            publish_control()
-            llm.collective_rpc(target_fence, timeout=drain_remaining())
-            devices = llm.collective_rpc(target_report, timeout=drain_remaining())
-            cancelled = [rid for rid, r in clock.rows.items() if r["state"] != "FINISHED"]
-            # Preserve natural TERMINAL separately. No fabricated output/EOS/commit.
-            engine.abort_request(cancelled)
-            require(not engine.has_unfinished_requests(), "Target requests remain after abort")
-            require(
-                not scheduler.requests and not getattr(scheduler, "deferred_frees", ()),
-                "Target allocator still owns requests/deferred blocks after abort",
+            devices, draft_shutdown, final_ranks, drain = settle(
+                llm,
+                engine,
+                scheduler,
+                client,
+                clock,
+                warm,
+                steps,
+                directory,
+                runtime_mode,
+                options["drain_timeout"],
+                publish_control,
+                wait_draft,
             )
-            for rid in cancelled:
-                clock.rows[rid]["state"] = "DIAGNOSTIC_CANCELLED"
-                clock._event("diagnostic-cancelled", time.monotonic_ns(), request_id=rid)
-            publish_control()
-            drain_remaining()
-            draft_shutdown = client.call("shutdown", {})
-            require(draft_shutdown.get("shutdown") is True, "Draft shutdown incomplete")
-            released_ns = time.monotonic_ns()
-            # At this point all private Draft KV has been destroyed by its real
-            # owner shutdown and Target blocks by abort. No refill is allowed here.
-            for rid in cancelled:
-                clock.rows[rid]["resources_released"] = True
-                clock._event("cancelled-resources-released", released_ns, request_id=rid)
-            final_ranks = llm.collective_rpc(target_snapshot, timeout=drain_remaining())
+        checkpoint(
+            directory,
+            manifest,
+            point,
+            window,
+            clock,
+            steps,
+            phases,
+            measurement_complete=complete,
+            drain_complete=True,
+        )
         end = time.monotonic_ns()
         clock._event("diagnostic-drain-complete", end)
         publish_control()
         return {
-            "schema_version": "specrhythm.fixed-runtime.v1",
+            "schema_version": "specrhythm.fixed-runtime.v2",
             "point": point,
             "capacity": {
                 **capacity_metadata(mode, sum(not b["terminal"] for b in bootstrap.values())),
@@ -368,23 +374,45 @@ def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5):
             "target_pool_final": scheduler.s2_pool.report(),
             "target_requests_final": len(scheduler.requests),
             "draft_shutdown": draft_shutdown,
+            "diagnostic_drain": drain,
             "target_final_memory": final_ranks,
             "full_request_slo_attainment": None,
             "full_request_slo_reason": "diagnostic window, not a complete serving run",
         }
     except BaseException as error:
         failure = error
+        record_error(directory, error, "measurement_or_drain")
+        window.end_ns = window.end_ns or time.monotonic_ns()
+        window.reason = window.reason or "execution_failure"
+        try:
+            checkpoint(
+                directory,
+                manifest,
+                point,
+                window,
+                clock,
+                steps,
+                phases,
+                measurement_complete=complete,
+            )
+        except Exception as secondary:
+            record_error(directory, secondary, "measurement_snapshot")
         raise
     finally:
-        clock.close(failure=failure)
-        write_once(
-            directory / "arrival-output-events.json",
-            {
-                "requests": list(clock.rows.values()),
-                "events": clock.events,
-                "failure": str(failure) if failure else None,
-            },
-        )
+        try:
+            clock.close(failure=failure)
+            write_once(
+                directory / "arrival-output-events.json",
+                {
+                    "requests": list(clock.rows.values()),
+                    "events": clock.events,
+                    "failure": str(failure) if failure else None,
+                },
+            )
+        except Exception as error:
+            record_error(directory, error, "arrival_report")
+            if failure is None:
+                raise
 
 
 def run(root, manifest_path, directory, point, *, probe=False):
@@ -442,13 +470,57 @@ def run(root, manifest_path, directory, point, *, probe=False):
             expected="100 resident, 64 active; no silent capacity reduction",
         )
         if probe:
-            llm.collective_rpc(target_fence)
+            probe_started = time.monotonic_ns()
+            probe_deadline = probe_started + int(options["drain_timeout"] * 1e9)
+            publish(
+                directory / "measurement-snapshot.json",
+                {
+                    "schema_version": "specrhythm.fixed-measurement-snapshot.v1",
+                    "mode": point["mode"],
+                    "point": point,
+                    "git_commit": manifest["execution"]["git_commit"],
+                    "execution_sha256": manifest["sha256"],
+                    "stop_reason": "capacity_probe",
+                    "measurement_start_ns": None,
+                    "measurement_end_ns": None,
+                    "sample_count": 0,
+                    "committed_window_tokens": 0,
+                    "measurement_complete": False,
+                    "measurement_availability": "NOT_APPLICABLE",
+                    "drain_complete": False,
+                    "formal_comparison_eligible": False,
+                    "pending_checks": ["Draft shutdown", "owned process cleanup"],
+                },
+            )
+            probe_drain = {
+                "schema_version": "specrhythm.fixed-drain.v1",
+                "start_ns": probe_started,
+                "deadline_ns": probe_deadline,
+                "status": "RUNNING",
+                "phase": "capacity_shutdown",
+                "settled_requests": 0,
+                "receipts": [],
+            }
+            publish(directory / "drain-state.json", probe_drain)
+            llm.collective_rpc(target_fence, timeout=remaining(probe_deadline))
+            probe_client = client_for(mode)
+            probe_client.timeout_seconds = remaining(probe_deadline)
             result = {
                 "probe": True,
                 "capacity": capacity_metadata(point["mode"], 0),
-                "draft_shutdown": client_for(mode).call("shutdown", {}),
-                "target_devices": llm.collective_rpc(target_report),
+                "draft_shutdown": probe_client.call("shutdown", {}),
+                "target_devices": llm.collective_rpc(
+                    target_report, timeout=remaining(probe_deadline)
+                ),
             }
+            require(
+                result["draft_shutdown"].get("shutdown") is True, "Draft probe shutdown incomplete"
+            )
+            remaining(probe_deadline)
+            probe_drain.update(
+                status="COMPLETE", phase="await_coordinator_exit", end_ns=time.monotonic_ns()
+            )
+            publish(directory / "drain-state.json", probe_drain)
         else:
             result = drive(
                 llm, manifest, definitions, directory, point, options, logprobs=config.logprobs
@@ -465,15 +537,13 @@ def run(root, manifest_path, directory, point, *, probe=False):
         return result
     except BaseException as error:
         failure = error
+        record_error(directory, error, "runtime")
         raise
     finally:
         if llm is not None:
             try:
                 llm.llm_engine.engine_core.shutdown()
             except Exception as error:
+                record_error(directory, error, "target_engine_cleanup")
                 if failure is None:
                     raise
-                write_once(
-                    directory / "target-cleanup-secondary.json",
-                    {"error": str(error), "primary_error": str(failure)},
-                )

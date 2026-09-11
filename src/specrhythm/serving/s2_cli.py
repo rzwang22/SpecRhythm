@@ -203,6 +203,8 @@ def execute(root, gate, mode, manifest_path, directory, *, probe=False, policy=N
                 draft_pid=draft.pid,
                 draft_socket=socket,
                 ownership_journal=directory / "ownership.json",
+                **({"phase_deadline_path": directory / "drain-state.json"}
+                   if diagnostic is not None else {}),
                 timeout_seconds=(14400 if diagnostic is None else
                                  2 * options["setup_timeout"] + options["window_seconds"]
                                  + options["drain_timeout"] + 60),

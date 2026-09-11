@@ -5,7 +5,54 @@ from __future__ import annotations
 import time
 
 from specrhythm.serving.fixed_observe import TIMERS, DeviceTimeline
+from specrhythm.serving.fixed_settle import (
+    DiagnosticSerialMachine as diagnostic_serial_machine,
+)
+from specrhythm.serving.fixed_settle import (
+    DiagnosticSerialServer,
+)
 from specrhythm.serving.s2_draft import S2DraftBackend
+
+
+def serve(config, directory, socket_path, mode, *, backend_class=None):
+    """Only the fixed diagnostic service opts into the explicit stop protocol."""
+    from specrhythm.phase4.dual_service import DualDraftUnixServer
+    from specrhythm.phase4.transport import CheckpointJsonl
+    from specrhythm.serving.fixed_settle import DiagnosticDualController, DiagnosticDualMachine
+    from specrhythm.serving.s1_workload import write_once
+
+    report = directory / "draft-backend-report.json"
+    ready = directory / "draft-service-ready.json"
+    events = CheckpointJsonl(directory / "draft-work-events.jsonl")
+
+    def factory():
+        backend = (backend_class or FixedDraftBackend)(config)
+        write_once(directory / "draft-startup.json", backend.provenance)
+        cls = DiagnosticDualMachine if mode == "pingpong" else diagnostic_serial_machine
+        return cls(backend, candidate_budget=4, report_path=report)
+
+    if mode == "pingpong":
+        controller = DiagnosticDualController(factory, events)
+        server = DualDraftUnixServer(
+            socket_path,
+            controller,
+            ready_path=ready,
+            transport_log=CheckpointJsonl(directory / "draft-transport.jsonl"),
+        )
+        try:
+            server.serve()
+        finally:
+            controller.shutdown(failed=server.running)
+    else:
+        machine = factory()
+        try:
+            DiagnosticSerialServer(socket_path, machine, event_log=events).serve(ready)
+        finally:
+            if not machine.backend.closed:
+                machine.backend._fail()
+                machine.backend.shutdown()
+                if not report.exists():
+                    write_once(report, machine.backend.report())
 
 
 class FixedDraftBackend(S2DraftBackend):

@@ -191,6 +191,8 @@ def execution_checks(runtime, definitions, backend, lifecycle, eos=()):
         for e in runtime["events"]
         if e["event"] in ("resources-released", "cancelled-resources-released")
     }
+    if runtime.get("schema_version") == "specrhythm.fixed-runtime.v2":
+        settlement_checks(runtime, ids, backend, releases)
     for r in rows:
         rid = r["request_id"]
         require(
@@ -230,6 +232,53 @@ def execution_checks(runtime, definitions, backend, lifecycle, eos=()):
             require("completion_ns" not in r, "diagnostic cancellation fabricated completion")
     require(runtime["target_requests_final"] == 0, "Target request cleanup incomplete")
     return checks
+
+
+def settlement_checks(runtime, definitions, backend, releases):
+    from specrhythm.phase4.serial import token_prefix_hash
+
+    drain = runtime["diagnostic_drain"]
+    receipts = drain["receipts"]
+    require(
+        drain["status"] == "COMPLETE"
+        and drain["settled_requests"] == len(definitions)
+        and len(receipts) == len(definitions)
+        and {r["request_id"] for r in receipts} == set(definitions)
+        and backend.get("s2_live_requests_before_shutdown") == 0,
+        "diagnostic settlement/physical pre-shutdown release incomplete",
+        artifact="drain-state.json / draft-backend-report.json",
+    )
+    require(
+        runtime["measurement_end_ns"] <= drain["start_ns"] < drain["end_ns"] <= runtime["end_ns"]
+        and drain["end_ns"] <= drain["deadline_ns"],
+        "diagnostic measurement/drain/deadline boundaries differ",
+        artifact="drain-state.json",
+    )
+    final = {r["request_id"]: r for r in runtime["requests"]}
+    for receipt in receipts:
+        rid = receipt["request_id"]
+        r = final[rid]
+        prefix = (*definitions[rid].prompt_token_ids, *r["generated_token_ids"])
+        require(
+            receipt["released"] is True
+            and receipt["new_proposals_generated"] == 0
+            and receipt["authoritative_prefix_hash"] == token_prefix_hash(prefix)
+            and receipt["authoritative_prefix_count"] == len(prefix)
+            and receipt["natural_terminal"] == (r["state"] == "FINISHED")
+            and receipt["disposition"]
+            == ("NATURAL_TERMINAL" if r["state"] == "FINISHED" else "DIAGNOSTIC_CANCELLED")
+            and receipt["resources_released_ns"] <= runtime["end_ns"],
+            "diagnostic settlement authority/disposition differs",
+            request_id=rid,
+            artifact="drain-state.json",
+        )
+        if r.get("admission_ns") is not None:
+            require(
+                receipt["resources_released_ns"] <= releases.get(rid, -1),
+                "logical release precedes physical Draft release",
+                request_id=rid,
+                artifact="drain-state.json / arrival-output-events.json",
+            )
 
 
 def summarize(manifest_path, directory, point, *, probe=False):
@@ -279,6 +328,11 @@ def summarize(manifest_path, directory, point, *, probe=False):
                 "stop_reason": runtime["stop_reason"],
             }
         report = measurements(manifest, runtime, backend, point)
+        if runtime["stop_reason"] == "operator_stop":
+            report.update(
+                measurement_status="INSUFFICIENT",
+                reason="operator stopped before the requested budget completed",
+            )
         if point["kind"] == "initial-state" and report["stage_shape"]["status"] != "PASS":
             report["measurement_status"] = "INSUFFICIENT"
         return {**base, **report, "valid": True, "errors": []}
@@ -770,6 +824,9 @@ def stage_shape(manifest, point, target, draft):
 
 
 def emit_result(directory, report, point):
+    from specrhythm.serving.fixed_artifacts import retained_report
+
+    report = retained_report(directory, report)
     report = {
         **report,
         "point": point,
@@ -814,6 +871,12 @@ def emit_result(directory, report, point):
                 "actual_rotation_ms": light.get("actual_rotation_ms"),
                 "effective_exit_code": light.get("effective_exit_code"),
                 "primary_error": light.get("primary_error"),
+                "measurement_availability": light.get("measurement_availability"),
+                "partial_window_tokens": light.get("measurement_snapshot", {}).get(
+                    "committed_window_tokens"
+                )
+                if not light.get("valid")
+                else None,
                 "artifact": str(directory),
                 "full_offline_audit_status": "PENDING",
             },
@@ -825,11 +888,13 @@ def emit_result(directory, report, point):
 
 
 def comparisons(root):
-    reports = [read_json(p) for p in sorted(root.glob("runs/*/result.json"))]
+    from specrhythm.serving.fixed_artifacts import point_reports
+
+    reports = point_reports(root)
     continuous = defaultdict(list)
     stages = defaultdict(list)
     for r in reports:
-        if not r.get("valid") or r.get("probe") or r["point"].get("discard_warmup"):
+        if not r.get("valid") or r.get("probe") or r.get("point", {}).get("discard_warmup"):
             continue
         if r.get("measurement_status") != "PASS":
             continue  # A clean stop without samples is not a numeric timing population.
@@ -902,6 +967,20 @@ def comparisons(root):
         "schema_version": "specrhythm.fixed-comparison.v1",
         "scenario": SCENARIO,
         **POLICY,
+        "partial_measurements": [
+            {
+                "artifact": r["artifact"],
+                "mode": r["mode"],
+                "measurement": r["measurement_snapshot"],
+                "execution_status": r["execution_status"],
+                "cleanup_status": r["cleanup_status"],
+                "primary_error": r.get("primary_error"),
+                "formal_comparison_eligible": False,
+            }
+            for r in reports
+            if r.get("measurement_snapshot")
+            and (not r.get("valid") or r.get("measurement_status") != "PASS")
+        ],
         "points": [
             {
                 k: r.get(k)

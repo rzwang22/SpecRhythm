@@ -36,6 +36,46 @@ claims.
 | [#3 gpu-integration-v0.1](https://github.com/rzwang22/SpecRhythm/pull/3) | draft; Phase 3B.1 and corrected-20 Phase 3C.2 complete; Phase 3C.3 corrected-100 awaiting server run | hardened multi-rank primitives, corrected R3-real traces, common-prefix replay, request-bootstrap statistics, 2x shell decomposition and diagnostic learned ranker | user-run 3×A800 correctness artifacts plus Mac CPU tests; no packed-tree/serving engine, Dual-Batch, SLO, calibrated latency or speedup claim |
 | [#4 vllm-serving-v0.1](https://github.com/rzwang22/SpecRhythm/pull/4) | Draft/Open/unmerged; S0 CLOSED/PASS; S1-P G0–G3 PASS at `5a00049`; S2 G1 at `24b31a9` reported zero process exits/clean cleanup but rejected terminal-tail overlap; S2-only contract refinement awaiting retest | independent prefilled-KV resident pool, dynamic Poisson arrival/admission, Target/Serial/PingPong and engineering SLO/goodput | CPU/source contracts are not GPU qualification; finite-trace ideal PD-delivery boundary only |
 
+## Fixed64/32 diagnostic stop settlement repair
+
+The operator's real run at `89a962127f2e9a10a2564736e2124dae0abe51d8` failed in
+Serial shutdown with 64 unresolved next-round proposals. Target abort had not settled
+Draft state, and final runtime/backend artifacts were absent. The retained failure
+bundle was inspected read-only; it cannot recover a complete Serial timing report.
+Old results remain unchanged.
+
+This repair adds a fixed-only owner settlement protocol: synchronize the final actual
+Target commit without proposing, explicitly discard unused proposals, wait for issued
+work/terminal drains, validate private KV and release it before logical cancellation.
+Unused resident KV is released without inventing logical initialization. Idempotency
+receipts prevent duplicate release. Normal Serial shutdown still rejects unresolved
+proposals; S1/S2 algorithms, models/workload/order/K4, live UUID, 64/32 limits and token
+length/EOS/round equality `NOT_REQUIRED` remain unchanged.
+
+A single absolute drain deadline is enforced by both remaining RPC budgets and the
+existing owned process supervisor, including blocked coordinator/worker teardown.
+Atomic compact snapshots retain completed measurement through drain failure; primary
+errors survive secondary cleanup/report failures. Light summary/bundle accept missing
+final reports, retain partial evidence separately and exclude it from comparisons.
+Full CPU audit remains an independent optional command.
+
+Reproduction: before implementation, the CPU fixed `drive` -> real Serial server ->
+real `DraftStateMachine.shutdown` path rejected the same 64 pending proposals. After
+implementation the same case physically releases the 100-request resident pool,
+generates no additional proposal and passes the inherited shutdown guard. Additional
+CPU cases cover unsynchronized final commits, initial proposals at time expiry,
+operator stop, grouped ready/inflight/tail work, physical-only residents, release/RPC
+failure, snapshot retention and real subprocess deadline termination. Validation: 268 related S1/S2/fixed CPU regressions pass, including 88 fixed tests.
+Full local pytest with pinned vLLM source audit: 1693 passed, 3 skipped. Ruff,
+compileall, Python 3.9 grammar (226 files), runbook Bash syntax (9 blocks) and
+`git diff --check` pass. Exact-commit Linux CI is reported with the delivered SHA. See the [design](fixed-concurrency-diagnostic-design.md),
+[schema](fixed-concurrency-diagnostic-schema.md) and [foreground runbook](fixed-concurrency-diagnostic-runbook.md).
+
+**GPU revalidation PENDING.** No AutoDL connection or GPU execution by the agent.
+PR #4 remains Draft/Open/unmerged. Next operator gate: new root, prepare/capacity,
+Serial short first, then Target/Serial-split/PingPong individually, light summary and
+small bundle. No S2 GPU PASS or four-mode performance improvement is claimed.
+
 ## Independent fixed64/32 timing diagnostic
 
 Based on `50025b734ed02086533f2302ed2b2951c262ec45`, PR #4 adds a separate foreground

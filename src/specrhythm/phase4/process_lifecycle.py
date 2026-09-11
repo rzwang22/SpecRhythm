@@ -81,6 +81,7 @@ def _run_owned_target(
     poll_seconds: float = 0.05,
     timeout_seconds: Optional[float] = None,
     ownership_journal: Optional[Path] = None,
+    phase_deadline_path: Optional[Path] = None,
 ) -> tuple[int, dict[str, Any]]:
     """Run one Target in an owned session and fail on leaked descendants."""
 
@@ -154,6 +155,20 @@ def _run_owned_target(
                 if draft_owner is not None:
                     draft_owner.snapshot()
                 failure_detection = failure_monitor.detect(rows, process.pid)
+                if phase_deadline_path is not None and phase_deadline_path.exists():
+                    # Fixed diagnostics publish one absolute deadline before drain.
+                    # The supervisor can terminate blocked RPC/CUDA/coordinator work.
+                    with phase_deadline_path.open() as handle:
+                        phase = json.load(handle)
+                    deadline = phase.get("deadline_ns")
+                    if type(deadline) is not int or deadline <= 0:
+                        failure_detection = {"reason": "invalid owned phase deadline",
+                                             "artifact": str(phase_deadline_path)}
+                    elif time.monotonic_ns() >= deadline:
+                        failure_detection = {"reason": "owned Target execution timeout",
+                                             "phase": phase.get("phase"),
+                                             "deadline_ns": deadline,
+                                             "artifact": str(phase_deadline_path)}
                 if (timeout_seconds is not None
                         and (time.monotonic_ns() - started_ns) / 1e9 >= timeout_seconds):
                     failure_detection = {"reason": "owned Target execution timeout",

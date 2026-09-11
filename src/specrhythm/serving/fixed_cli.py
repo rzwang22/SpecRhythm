@@ -75,26 +75,32 @@ def capacity_passed(root):
 
 
 def status(root):
+    from specrhythm.serving.fixed_artifacts import point_reports
+
     return {
         "stage": read_json(root / "stage.json") if (root / "stage.json").exists() else None,
         "results": [
             {
-                "directory": str(p.parent),
+                "directory": r["artifact"],
                 **{
-                    k: read_json(p).get(k)
+                    k: r.get(k)
                     for k in (
                         "mode",
                         "execution_status",
                         "measurement_status",
                         "effective_exit_code",
                         "primary_error",
+                        "measurement_availability",
+                        "cleanup_status",
                     )
                 },
-                "full_offline_audit": read_json(p.parent / "offline-audit.json")["status"]
-                if (p.parent / "offline-audit.json").exists()
+                "full_offline_audit": read_json(Path(r["artifact"]) / "offline-audit.json")[
+                    "status"
+                ]
+                if (Path(r["artifact"]) / "offline-audit.json").exists()
                 else "PENDING",
             }
-            for p in sorted(root.glob("runs/*/light-summary.json"))
+            for r in point_reports(root)
         ],
     }
 
@@ -143,6 +149,12 @@ def bundle(root, output):
         "draft-child-failure.json",
         "launcher-failure.json",
         "target-cleanup-secondary.json",
+        "measurement-snapshot.json",
+        "drain-state.json",
+        "draft-drain-state.json",
+        "diagnostic-primary-error.json",
+        "diagnostic-secondary-errors.json",
+        "process-lifecycle.json",
     )
     files += [p for name in allowed for p in root.glob("runs/*/" + name)]
     files += list(root.glob("comparison-*.json"))
@@ -209,8 +221,7 @@ def main(argv=None):
                 install_host_observation()
                 if args.command == "draft-child":
                     from specrhythm.phase4.config import load_phase4_config
-                    from specrhythm.serving.fixed_draft import FixedDraftBackend
-                    from specrhythm.serving.s2_draft import serve
+                    from specrhythm.serving.fixed_draft import FixedDraftBackend, serve
 
                     serve(
                         load_phase4_config(str(root / "config.json")),
@@ -256,7 +267,10 @@ def main(argv=None):
         elif args.command == "status":
             value = status(root)
         elif args.command == "errors":
+            from specrhythm.serving.fixed_artifacts import retained_display
+
             selected = args.directory or Path(read_json(root / "stage.json")["directory"])
+            print(json.dumps(retained_display(selected), ensure_ascii=False), flush=True)
             print_failure(DataError("retained point errors"), directory=selected, label="fixed")
             return 0
         elif args.command == "stop":

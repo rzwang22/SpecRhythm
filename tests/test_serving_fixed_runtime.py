@@ -9,12 +9,12 @@ from test_phase4_dual_batched_draft import initial
 from test_serving_fixed import clock_fixture
 from test_serving_s2_runtime import PoolWorker
 
-from specrhythm.phase4.dual_batched_draft import BatchedDualDraftController
 from specrhythm.phase4.transport import CheckpointJsonl
 from specrhythm.serving import fixed_runtime, s2_draft
 from specrhythm.serving.common import DataError, read_json
 from specrhythm.serving.fixed_observe import DeviceTimeline
 from specrhythm.serving.fixed_plan import build_manifest, point, settings
+from specrhythm.serving.fixed_settle import DiagnosticDualController, DiagnosticDualMachine
 from specrhythm.serving.s2_pool import publish
 
 
@@ -60,11 +60,11 @@ def test_real_owner_dispatch_initial_work_wait_and_window_drain(tmp_path, monkey
             return super().materialize(rows, purpose)
 
     def factory():
-        return s2_draft.S2DualMachine(
+        return DiagnosticDualMachine(
             s2_draft.S2DraftBackend(SimpleNamespace(max_model_len=4096), worker=Worker())
         )
 
-    controller = BatchedDualDraftController(factory, CheckpointJsonl(tmp_path / "work.jsonl"))
+    controller = DiagnosticDualController(factory, CheckpointJsonl(tmp_path / "work.jsonl"))
     for r in definitions:
         controller.execute("initialize", initial(r.request_id, r.prompt_token_ids + (10,)))
     warm = {
@@ -89,6 +89,8 @@ def test_real_owner_dispatch_initial_work_wait_and_window_drain(tmp_path, monkey
                     if mode == "serial-split":
                         gate.set()  # Completion precedes Target only if real wait is honored.
                 return value
+            if operation == "execute":
+                return controller.execute(payload["work_operation"], payload["row"])
             assert operation == "shutdown"
             events.append(("shutdown", None))
             return controller.shutdown()
@@ -112,14 +114,21 @@ def test_real_owner_dispatch_initial_work_wait_and_window_drain(tmp_path, monkey
             assert len(ready) == 32
             scheduled = [r["request_id"] for r in ready]
             assert scheduled == ids[:32]
-            scheduler.s2_steps.append({"request_ids": scheduled, "B": 32, "cohort": "A"})
+            scheduler.s2_steps.append(
+                {
+                    "request_ids": scheduled,
+                    "B": 32,
+                    "cohort": "A",
+                    "rows": [{"request_id": rid, "candidate_positions": 4} for rid in scheduled],
+                }
+            )
             return [
                 SimpleNamespace(
                     request_id=r["request_id"],
                     finished=False,
                     outputs=[
                         SimpleNamespace(
-                            token_ids=[10, r["proposal"]["proposal_token_ids"][0]],
+                            token_ids=[10, 777],
                             finish_reason=None,
                         )
                     ],
@@ -176,7 +185,7 @@ def test_real_owner_dispatch_initial_work_wait_and_window_drain(tmp_path, monkey
 def test_draft_wait_propagates_real_failure_and_timeout():
     with pytest.raises(DataError, match="Draft failed"):
         fixed_runtime.wait_draft(SimpleNamespace(call=lambda *a: {"failures": {"r": "bad KV"}}), 1)
-    with pytest.raises(DataError, match="drain timeout"):
+    with pytest.raises(DataError, match="drain deadline"):
         fixed_runtime.wait_draft(
             SimpleNamespace(call=lambda *a: {"failures": {}, "inflight_request_ids": ["r"]}), 0
         )
@@ -197,9 +206,7 @@ def test_primary_exception_survives_engine_cleanup_failure(tmp_path, monkeypatch
     monkeypatch.setattr(fixed_runtime, "make_engine", lambda *a, **kw: llm)
     with pytest.raises(ValueError, match="primary worker"):
         fixed_runtime.run(tmp_path, tmp_path / "manifest", tmp_path, point("target"))
-    assert (
-        read_json(tmp_path / "target-cleanup-secondary.json")["primary_error"] == "primary worker"
-    )
+    assert read_json(tmp_path / "diagnostic-primary-error.json")["error"] == "primary worker"
 
 
 def test_cuda_events_are_read_at_final_fence_without_per_forward_sync():

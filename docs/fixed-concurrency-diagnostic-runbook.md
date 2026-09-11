@@ -8,74 +8,102 @@ PENDING until real results return.
 
 ## Fresh checkout and result root
 
+Use the exact full SHA delivered with this fix. The repository form below resolves the
+serving branch once and freezes its full SHA; the delivery message supplies a literal
+SHA for reproducing this reviewed revision. Preserve the old `fixed64-89a962127f2e-...`
+root and its failed Serial attempt.
+
 ```bash
+set -euo pipefail
 cd /root/autodl-tmp/src/SpecRhythm
-export SR_FIXED_COMMIT='<FINAL_FULL_40_CHARACTER_SHA>'
-git fetch origin
+git fetch origin codex/vllm-serving-v0.1
+export SR_FIXED_COMMIT="$(git rev-parse origin/codex/vllm-serving-v0.1)"
 git checkout --detach "$SR_FIXED_COMMIT"
 export SR_FIXED_PYTHON=/root/autodl-tmp/envs/specrhythm-phase4-vllm-0.25.1/bin/python3.11
 export SR_FIXED_S1=/root/autodl-tmp/SpecRhythm-data/results/phase-s1/s1p-5a00049-20260909T144802Z-1469
-export SR_FIXED_ROOT="/root/autodl-tmp/SpecRhythm-data/results/fixed-concurrency/fixed64-${SR_FIXED_COMMIT:0:12}-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+export SR_FIXED_ROOT="/root/autodl-tmp/SpecRhythm-data/results/fixed-concurrency/fixed64-stop-${SR_FIXED_COMMIT:0:12}-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+export PYTHONUNBUFFERED=1
 printf 'Keep this result root for status/stop/summary: %s\n' "$SR_FIXED_ROOT"
 bash scripts/run_fixed_diagnostic.sh prepare --s1 "$SR_FIXED_S1" \
   --warmup-steps 2 --samples 12 --repeats 1 --window-seconds 30 \
   --setup-timeout 900 --drain-timeout 60
-```
-
-`prepare` checks the current pinned model/patch/environment binding and freezes the
-existing mixed100 rows/order. It loads no model weights. `capacity` below loads the
-three real workers, records physical capacities and checks resident100/active64 only.
-The configured 64/32 values are never reduced on failure. Do not proceed on a nonzero rc.
-
-```bash
 bash scripts/run_fixed_diagnostic.sh capacity
 ```
 
-## Initial-state stage samples
+`prepare` performs environment/physical-device inventory, freezes the qualified mixed100
+rows/order and loads no model weights; it does not run inference. `capacity` starts the
+real three-worker GPU engines, checks resident100/active64 capacity, then shuts down
+with zero verification. No capacity reduction or parameter search is allowed. These
+commands perform neither full CPU audit nor S2 G0–G3/calibration.
 
-Each point uses fresh process/engine/prefill. The seven points are AR32 A, AR32 B,
-AR64, Serial SD32 A, SD32 B, SD64, and A SD32 with B Draft32. Initial Serial proposals
-measure isolated D32/D64. Effective K must actually be 4 for a K4 shape sample.
-Startup profiling/prefill warms the model; `--stage-warmups` controls additional
-explicitly discarded fresh-process trials, not same-engine continuation replay.
-One sample per point is deliberately short; use `--stage-samples 3` for more precision
-only after the first point set executes cleanly.
+## Serial first, then each remaining mode once
 
 ```bash
-bash scripts/run_fixed_diagnostic.sh stages --stage-samples 1 --stage-warmups 0
-bash scripts/run_fixed_diagnostic.sh summary
+bash scripts/run_fixed_diagnostic.sh short --mode serial
 ```
 
-A shape marked INSUFFICIENT does not falsify execution: inspect its actual IDs,
-candidate lengths and contexts. No missing timing is synthesized. Split-cost formulas
-require the actual 64 set/context to equal the union of both 32 halves.
-
-## Four real continuous paths
-
-The default is foreground, one fresh point for each mode. Raw Target/Draft stdout and
-stderr are retained and displayed with mode/source tags. `samples=12` means at most
-12 rotation units: 12 nonempty Target steps for target/serial and 24 for grouped modes.
-`warmup-steps=2` similarly means 2/4 Target steps. The 30-second measured window may
-stop sooner. A point can exceed its budget by the currently issued real step; it then
-stops new work and drains/cancels under the separate bounded cleanup contract.
+Wait for this command to return rc=0 with execution PASS and measurement PASS before
+continuing. Do not use bare `short` here: it would repeat the already successful Serial
+point. Each mode below is a separate foreground command with a fresh engine in the
+same new root. Inspect each result before launching the next; a manual stop means stop
+here, with no automatically launched later mode.
 
 ```bash
-bash scripts/run_fixed_diagnostic.sh short
-bash scripts/run_fixed_diagnostic.sh summary
+bash scripts/run_fixed_diagnostic.sh short --mode target
 ```
-
-To inspect one mode without rerunning others, explicitly select it. This creates a new
-attempt directory; no old attempt is overwritten or silently reused.
 
 ```bash
 bash scripts/run_fixed_diagnostic.sh short --mode serial-split
 ```
 
-Each point prints execution/measurement status, actual batches, samples, stage timings,
-committed progress, throughput, real exit code, primary failure and artifact path.
-`light-summary.json` and `.csv` are immediately available. Full offline audit stays
-PENDING, not PASS. Natural completions, cancellations and failures are distinct;
-window throughput is not full-request goodput/SLO attainment.
+```bash
+bash scripts/run_fixed_diagnostic.sh short --mode pingpong
+```
+
+All four `short` commands use GPU; no full CPU audit runs. Raw Target/Draft stdout and
+stderr remain visible with mode/source tags and retained in their original logs.
+`samples=12` means up to 12 nonempty Target steps for target/serial and 24 steps for
+grouped modes, with warmup 2/4 respectively. Time can stop the window sooner. The last
+issued step's actual time is retained; drain does not extend measurement or generate
+new proposals. Fixed bounds remain global64 and cohort32.
+
+Each command prints execution/measurement status, real exit, primary error and path.
+A normal sample/time budget with valid measured evidence yields execution PASS and
+measurement PASS after successful cancellation/physical release/shutdown. Unfinished
+requests remain `DIAGNOSTIC_CANCELLED`, not naturally completed. A clean operator stop
+returns rc=0 but measurement INSUFFICIENT and is excluded from comparisons. A zero-sample
+or missing shape point is also INSUFFICIENT. Failed drain/RPC/release/cleanup returns
+nonzero; deadline expiry uses effective rc=124. Owned cleanup completion alone does not
+mean execution or cleanup validity passed. Read `measurement-snapshot.json` for partial
+measurements; it is never final PASS. Missing final runtime/backend reports are secondary
+to the original failure. Full-request SLO/goodput is not measured by this diagnostic.
+
+## Light summary and small failure-capable bundle
+
+```bash
+bash scripts/run_fixed_diagnostic.sh summary
+bash scripts/run_fixed_diagnostic.sh bundle --output "${SR_FIXED_ROOT}-small.tar.gz"
+```
+
+These commands do not use GPU or run full CPU audit. They also work after a failed
+point with missing final reports. The small bundle includes compact measurement/drain,
+exit/ownership and first/secondary failure artifacts; failed or incomplete data appears
+separately and contributes no numeric comparison. Preserve the full root and return
+the small bundle first.
+
+## Optional initial-state stages (separate GPU experiment)
+
+Only after the short retest, if stage measurements are needed:
+
+```bash
+bash scripts/run_fixed_diagnostic.sh stages --stage-samples 1 --stage-warmups 0
+```
+
+This starts seven fresh GPU points: AR32 A/B, AR64, Serial SD32 A/B, SD64, and A SD32
+with B Draft32. It does not run CPU audit. Effective K must actually be 4; shortened
+candidates or missing B32/B64 shape evidence remain INSUFFICIENT. Split-cost formulas
+still require matching actual 64 context and the union of the two 32 halves. No extra
+warmup trials, continuation replay or parameter search are enabled.
 
 ## Status, failure and bounded stop (second terminal)
 
@@ -95,15 +123,7 @@ suite. If the point does not stop within 60 seconds, only its recorded owned pro
 tree is cleaned. Forced cleanup is an interrupted execution, not a performance PASS.
 No foreign process or server-wide `pkill` is used.
 
-## Small bundle and optional CPU audit
-
-```bash
-bash scripts/run_fixed_diagnostic.sh summary
-bash scripts/run_fixed_diagnostic.sh bundle --output "${SR_FIXED_ROOT}-small.tar.gz"
-```
-
-The small bundle contains config, compact JSON/CSV and necessary failures, not large
-raw token/Target/request-state logs. Retain the full root locally for later audit.
+## Optional full CPU audit
 
 The following is a separate potentially expensive CPU scan. It is never invoked by
 `short`, `stages`, `summary` or `bundle`. It can run on a CPU machine with the repository

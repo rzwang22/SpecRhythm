@@ -65,17 +65,59 @@ Fill/full-load/tail wall durations sweep actual admission, completion and releas
 including control/owner waits between steps. Full-active and full-held fractions are
 separate; a finished request can occupy a held slot without providing active decode work.
 
-The window begins after the configured warmup, at a coordinator boundary. It ends at
-the safe boundary after the last issued step (time limits can overshoot by one real
-step). A time check after an owner wait prevents starting another Target step after
-the budget expires. Stop prevents further admission/Target submission, drains work
-already issued by the final step, fences Target, aborts unfinished Target requests,
-shuts down Draft on its owner, and records release only after those actions. Pending
-proposals can be discarded by diagnostic cancellation; they are never counted as
-accepted or completed output. Total drain has an explicit budget applied to Draft
-socket waits and final Target RPCs. The existing owned process launcher remains the
-outer timeout/failure cleanup authority. A separate `stop` command requests a safe
-stop, then performs bounded owned cleanup if needed.
+The window begins after configured warmup and ends after the last issued step. An
+issued step can overshoot its time budget; its actual time and committed tokens remain
+charged. No new admission, Target step or Draft proposal starts during stop. The
+fixed-only `DiagnosticSerialMachine` / `DiagnosticDualMachine` add explicit settlement;
+normal S1/S2 machines and algorithms retain their existing behavior.
+
+At the failure revision `89a962127f2e9a10a2564736e2124dae0abe51d8`, `drive` aborted Target
+and immediately called Draft `shutdown`. Serial's completed step had already created
+64 next-round pending proposals. The inherited `DraftStateMachine.shutdown` correctly
+refused them; `cancel_request` would not have cleared those proposals either. Dual's
+owner could be idle while its ready/claimed proposals still needed settlement. Final
+`runtime.json` was written only on successful return, losing the measurement at this
+failure boundary. The retained small bundle confirms this call path and lacks the
+full runtime/backend report; no old data is repaired or reclassified as PASS.
+
+Stop now waits for issued owner work, fences/reads Target evidence and physically
+aborts unfinished Target requests. On the existing Draft owner it settles each actual
+resident ID against the coordinator's final committed prefix/hash, verified round count
+and prefix version. If the final Target commit is not yet in Draft, the existing greedy
+acceptance and `DraftCommitPlan` KV materialization run without a propose continuation.
+A next proposal whose parent already equals that prefix is explicitly discarded with
+ID/round/count evidence. An uninitialized logical request is eligible only as an
+untouched, unadmitted physical resident; the protocol does not create logical state.
+Target-only releases its unused bootstrap Draft KV without replaying AR tokens into it.
+Natural releases/tails retain their real completion/release evidence, including Serial's
+ordinary proposal-free terminal tail contract. Inconsistent or partially applied state
+fails closed, retaining the measurement for investigation.
+
+The release path checks real logical/physical prefix, round and proposal agreement,
+whole-pool private-block ownership, and unchanged unrelated KV. A completion fence and
+actual allocator release precede logical cancellation/release. Idempotency receipts bind
+the full stop authority; repeats never release twice, while changed authority fails.
+Normal Serial shutdown still rejects unresolved proposals; diagnostic Dual also rejects
+unresolved proposals. All physical requests must be gone before the final shutdown.
+No cancellation sets natural EOS, output-length completion, or acceptance counters.
+
+One absolute `drain-state.json.deadline_ns` starts before drain. All socket/owner/Target
+waits consume its remaining budget. The existing owned process supervisor watches that
+same deadline through final coordinator/engine shutdown and can TERM/KILL blocked
+worker/RPC work. Bounded process termination grace is separately recorded after the
+deadline; expiry is failure (effective rc=124), never successful drain. Operator stop
+prevents subsequent suite points, with the existing owned-only cleanup fallback.
+
+`measurement-snapshot.json` is atomically checkpointed without fsync after completed
+steps and before risky drain, and best-effort on exception. It contains only compact
+identity/count/timing/population summaries, no resident prefix/KV dump. Window commits
+stay frozen during drain. Measurement, drain and whole execution durations remain
+separate; all actual wait/sync/release work is retained. The first error is saved before
+secondary report/engine-cleanup handling. Missing final reports cannot erase the
+snapshot. `summary` and small `bundle` include partial evidence without invoking full
+CPU `audit`; failed or incomplete/operator-stopped points are excluded from numeric
+comparisons. A snapshot never asserts final PASS. See the versioned
+[artifact schema](fixed-concurrency-diagnostic-schema.md).
 
 Natural `FINISHED`, `DIAGNOSTIC_CANCELLED`, and failed execution remain distinct.
 Window throughput counts only actual coordinator commits timestamped inside the
