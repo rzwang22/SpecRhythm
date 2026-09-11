@@ -4,6 +4,94 @@ GPU performance **PENDING**. This change is one opt-in metadata optimization on 
 of `c1dd96d8c86e321d66d52aea31eb7396bf06786b`. PR #4 stays Draft/Open; no GPU, AutoDL,
 full CPU audit, algorithm change, vLLM patch change or additional experiment grid.
 
+## Binding-alias integration repair (2026-09-12)
+
+The first bound-prefix Serial GPU attempt at
+`5b7081e0eb692822db18afedf3ce9bd36fcd9bee` is **FAILED / INVALID**, not a
+performance result. The supplied failure archive confirms effective rc=125,
+cleanup PASS, owned cleanup complete and no remaining owned PID. Its primary
+worker error is `verify-start hook observed an unmapped vLLM request`. Later
+TERM/KILL and missing final reports are consequences, not the first cause.
+The old root and artifacts remain unchanged.
+
+`RemoteDraftProposer.__init__` stores
+`internal_to_stable = identity.internal_to_stable`. Fixed worker startup then
+calls `fixed_identity.install(drafter, "identity")`. The old optimized constructor
+copied both binding dictionaries before replacing `drafter.identity`. Subsequent
+`identity.bind` updated the copies: S2's `identity.stable_id` succeeded, but the
+parent Serial verify-start looked in the original empty dictionary and failed.
+Verify-end used that same stale alias and could miss its timing update.
+
+The repair changes only the optimized constructor's two binding assignments:
+retain `original.internal_to_stable` and `original.stable_to_internal` **by
+reference**. The new object changes the matching strategy, not the owner's binding
+state. Existing constructor aliases, future binds, reverse lookup, lifecycle
+records and reports consequently see one pair of owner-lifetime containers. There
+is no per-round copying, alias repair in a hook, fallback to linear or new cache.
+The immutable prompt-table copy and prefix-free proof are unchanged.
+
+| Consumer | Actual installation / read path | Impact |
+|---|---|---|
+| Serial worker | fixed `target_startup` → install S2Serial identity; S2 hook resolves identity, parent start/end read `internal_to_stable` | Direct failure fixed; timing hooks and accounting run unchanged |
+| PingPong / Serial-split workers | same fixed startup installs S2Ping identity; Dual verification resolves identity; `_transition` reads `stable_to_internal`; `_write_report` reads `internal_to_stable` | Latent missing lifecycle IDs and binding-report entries fixed; Serial-split uses runtime mode `pingpong` |
+| Target-only worker | same startup installs S2Target identity; setup binds and sampled commits resolve `identity` directly | No stale diagnostic alias; same binding history preserved |
+| All four schedulers | `FixedBatch.__init__` installs `_resident_identity` or `_dual_identity`; subsequent accesses use that object | No separate alias; selection, root/candidate accounting and KV checks unchanged |
+
+Each original scheduler/proposer/TP worker still creates its own containers. Only
+the old and replacement identity facades **within that owner** share them. Startup
+installation occurs before verification; repeat install returns the same optimized
+object, preserving bindings, lock and counters. Later mutation uses its existing
+locked `bind`; legacy aliases are readers. Released-request identity history is
+retained exactly as before. Current full prompt, changed-identity, reverse-alias,
+proposal/prefix/version and live UUID checks remain mandatory.
+
+### Regression boundary and reproduction
+
+Before the runtime edit, the new core test was run against the actual failing HEAD:
+
+```bash
+python -m pytest -o addopts='' -q tests/test_serving_fixed_startup.py \
+  -k test_serial_install_bind_verify_and_commit
+```
+
+Result: **2 passed (linear), 2 failed (bound-prefix)**. Both optimized cases
+(empty installation and installation after one existing binding) failed at the
+same `vllm_remote.py` verify-start error as the server. With the two-reference
+repair, all four pass. The extended startup/identity suite passes 36 tests.
+Full local pytest: 1772 passed, 3 skipped; Ruff, compileall, Python 3.9 grammar,
+Bash/runbook syntax and diff checks pass. Linux CI also runs this startup file in
+the existing Phase4 Python 3.11 job and both full Python 3.9/3.12 suites; no new
+workflow or GPU test is needed. Final CI status is included with the delivered SHA.
+
+The core uses real frozen inputs/provenance, S2 configuration, actual proposer
+constructors inside the CPU LLM substitute, actual fixed startup/install, later
+bindings, S2 initial-proposal admission, inherited start/end hooks and
+`_rank_zero_propose → _finalize_round`. It verifies two requests over three rounds:
+batch IDs/timestamps, two accepted candidates plus one Target correction per round,
+two rejected candidates, generated-prefix advancement and persisted hook/round
+reports. GPU outputs, synchronization and Draft RPC responses are substitutes;
+identity installation, binding, hooks and acceptance/accounting are not mocked.
+The CPU resident fixture has a 32-token budget so all three rounds remain active;
+it does not alter the server workload.
+
+Negative cases retain unbound/change/alias/stale-proposal/duplicate-hook errors.
+Additional real startup tests check Target sampled-commit identity, both TP owners,
+Dual lifecycle IDs and report bindings, live UUID queries and zero-verification
+capacity probes. Existing real fixed scheduler tests cover all modes, 64/32,
+refill/cancel/history and physical KV corruption. Independent linear/optimized
+comparison fixtures now construct separate owners; they must not share the same
+original map when comparing operation counts.
+
+The previous tests compared matching results/costs, exercised scheduler consumers
+without legacy aliases, and ran PingPong hooks without asserting the binding and
+lifecycle report contents. They never ran Serial verification after replacing its
+identity object. That missing adapter-to-consumer boundary allowed the regression.
+
+No scheduling, model, K, logging, device-query frequency, drain, error precedence
+or measurement code changes in this repair. Defaults remain linear/original-live,
+and cross-run equality remains NOT_REQUIRED. CPU contracts are not GPU acceptance:
+new-root Serial then PingPong server verification is still **PENDING**.
+
 ## Retained evidence and time positions
 
 Reviewed `analysis/attribution.json`, the projected runtime/backend/event files and

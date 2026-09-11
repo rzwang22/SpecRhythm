@@ -34,8 +34,11 @@ class BoundPromptIdentityMap(FrozenPromptIdentityMap):
         ordered = sorted(self.stable_prompts.values())
         # Lexicographic adjacency suffices: descendants of a prefix are contiguous.
         self.prefix_free = all(b[:len(a)] != a for a, b in zip(ordered, ordered[1:]))
-        self.internal_to_stable = dict(original.internal_to_stable)
-        self.stable_to_internal = dict(original.stable_to_internal)
+        # Replace only this owner's matching strategy. Proposer verification and
+        # lifecycle/report consumers retain aliases to these owner-lifetime maps.
+        # Keep their identity and history; independent owners still own separate maps.
+        self.internal_to_stable = original.internal_to_stable
+        self.stable_to_internal = original.stable_to_internal
         self._lock = threading.RLock()
         self._counts = dict.fromkeys(COUNTERS, 0)
 

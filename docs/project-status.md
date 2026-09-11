@@ -1,6 +1,6 @@
 # SpecRhythm project status
 
-Last updated: 2026-09-11
+Last updated: 2026-09-12
 
 Maintenance rule: every code-changing PR updates this file with its scope, status, evidence,
 known limitations, and next gate before that PR is considered complete.
@@ -36,7 +36,41 @@ claims.
 | [#3 gpu-integration-v0.1](https://github.com/rzwang22/SpecRhythm/pull/3) | draft; Phase 3B.1 and corrected-20 Phase 3C.2 complete; Phase 3C.3 corrected-100 awaiting server run | hardened multi-rank primitives, corrected R3-real traces, common-prefix replay, request-bootstrap statistics, 2x shell decomposition and diagnostic learned ranker | user-run 3×A800 correctness artifacts plus Mac CPU tests; no packed-tree/serving engine, Dual-Batch, SLO, calibrated latency or speedup claim |
 | [#4 vllm-serving-v0.1](https://github.com/rzwang22/SpecRhythm/pull/4) | Draft/Open/unmerged; S0 CLOSED/PASS; S1-P G0–G3 PASS at `5a00049`; S2 G1 at `24b31a9` reported zero process exits/clean cleanup but rejected terminal-tail overlap; S2-only contract refinement awaiting retest | independent prefilled-KV resident pool, dynamic Poisson arrival/admission, Target/Serial/PingPong and engineering SLO/goodput | CPU/source contracts are not GPU qualification; finite-trace ideal PD-delivery boundary only |
 
-## Fixed64/32 bound-prefix matching experiment (GPU performance PENDING)
+## Fixed64/32 bound-prefix alias repair (GPU revalidation PENDING)
+
+The supplied failure archive confirms Serial at
+`5b7081e0eb692822db18afedf3ce9bd36fcd9bee` failed with an unmapped verify-start
+request (effective rc=125, measurement INVALID, owned cleanup PASS). That result
+remains FAILED/INVALID. The optimized identity constructor copied binding maps,
+leaving the real Serial constructor's diagnostic alias stale after later binds.
+Dual lifecycle/reports also retained stale forward/reverse aliases.
+
+The only runtime repair preserves both original owner-local binding container
+references while replacing the matching strategy. Existing bindings/history,
+future binds, hook readers, reverse aliases and reports now share the same state;
+independent schedulers/proposers/TP workers remain isolated. Idempotent install
+keeps the same optimized object, counters and lock. No checks or algorithms removed.
+
+New core regression, run before the runtime edit on the failing commit: linear
+2 PASS, bound-prefix 2 FAIL with the exact server verify-start error. After repair,
+both empty/prebound cases pass through real S2Serial construction, fixed install,
+later binds, start/end hooks and three rounds of actual acceptance/commit accounting.
+The extended startup/identity suite passes 36 tests, including Target and both
+Dual-based modes, report/lifecycle aliases, owner isolation and negative cases.
+Earlier tests missed the replaced-object-to-legacy-alias consumer boundary.
+
+Local full pytest: 1772 passed / 3 skipped (178.98 s), including Phase4/S1/S2;
+Ruff, compileall, Python 3.9 grammar for all 236 source/test files, related Bash
+scripts, extracted runbook Bash syntax and diff checks pass. Actual Linux Python
+3.9/3.12, Phase4 Python 3.11 and pinned-source CI status plus the final SHA are
+recorded in the delivery. No AutoDL,
+GPU or full CPU audit was run. PR #4 stays Draft/Open/unmerged; PR #2/#3 untouched.
+Next gate: [new-root foreground runbook](fixed-identity-runtime-runbook.md),
+buffered-live + bound-prefix, prepare/capacity → Serial → check PASS/effect →
+PingPong → summary/bundle; stop on failure. Old roots stay unchanged. GPU performance
+PENDING; no performance benefit is claimed for this repair.
+
+## Fixed64/32 bound-prefix matching experiment (historical implementation)
 
 Serving HEAD was clean at c1dd96d8c86e321d66d52aea31eb7396bf06786b. The new supplied
 buffered-live archive's independent JSON and nine export hashes were reviewed;

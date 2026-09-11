@@ -1,9 +1,17 @@
-# Fixed64/32 bound-prefix: two foreground points
+# Fixed64/32 bound-prefix alias repair: two foreground points
 
 GPU performance PENDING. No AutoDL/GPU/full CPU audit was run by the agent.
-The delivery includes a copy with the final full SHA filled in. Keep all previous
+Use the full final SHA in the delivery's copyable commands as `SR_FIXED_COMMIT`.
+Keep all previous
 roots unchanged. Default sequence is prepare/capacity → Serial → check → PingPong
 → check → light summary/bundle. It never schedules another mode or a comparison grid.
+
+The `5b7081e0eb692822db18afedf3ce9bd36fcd9bee` Serial attempt remains
+FAILED/INVALID (rc=125, cleanup PASS). This revision repairs owner-local forward
+and reverse binding-container references; CPU Serial verification now passes.
+It does not requalify the failed artifacts or establish GPU performance. In
+particular, do not reuse
+`/root/autodl-tmp/SpecRhythm-data/results/fixed-concurrency/fixed64-identity-5b7081e0eb69-20260911T154239Z-1474`.
 
 ## Checkout and environment (no inference)
 
@@ -20,20 +28,6 @@ export SR_FIXED_PYTHON=/root/autodl-tmp/envs/specrhythm-phase4-vllm-0.25.1/bin/p
 export PYTHONUNBUFFERED=1
 export PYTHONPATH="$PWD/src"
 export SR_FIXED_S1=/root/autodl-tmp/SpecRhythm-data/results/phase-s1/s1p-5a00049-20260909T144802Z-1469
-export SR_FIXED_OLD=/root/autodl-tmp/SpecRhythm-data/results/fixed-concurrency/fixed64-buffered-c1dd96d8c86e-20260911T115700Z-1479
-```
-
-## Optional retained-evidence reanalysis (CPU only)
-
-This reuses the existing external 120-second deadline and <=10 MiB report budget;
-it prints file/event progress, preserves partial reports/rc, and imports no CUDA or
-inference engine. The old root is read-only. No export or full audit is implicit.
-
-```bash
-export SR_FIXED_ANALYSIS="${SR_FIXED_OLD}-identity-review-${SR_FIXED_COMMIT:0:12}-$(date -u +%Y%m%dT%H%M%SZ)-$$"
-bash scripts/analyze_fixed_diagnostic.sh --input "$SR_FIXED_OLD" \
-  --output "$SR_FIXED_ANALYSIS" --modes serial pingpong --timeout 120
-cat "$SR_FIXED_ANALYSIS/report.md"
 ```
 
 ## New root and preparation
@@ -45,7 +39,7 @@ Models/tokenizer/GPU0 Draft/GPU1–2 Target TP2/dtype/eager settings are inherit
 the qualified S1 input; no vLLM patch installation or environment reconstruction here.
 
 ```bash
-export SR_FIXED_ROOT="/root/autodl-tmp/SpecRhythm-data/results/fixed-concurrency/fixed64-identity-${SR_FIXED_COMMIT:0:12}-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+export SR_FIXED_ROOT="/root/autodl-tmp/SpecRhythm-data/results/fixed-concurrency/fixed64-identity-fix-${SR_FIXED_COMMIT:0:12}-$(date -u +%Y%m%dT%H%M%SZ)-$$"
 printf '%s\n' "$SR_FIXED_ROOT"
 set -E
 trap 'rc=$?; trap - ERR; set +e; bash scripts/run_fixed_diagnostic.sh errors; bash scripts/run_fixed_diagnostic.sh summary; bash scripts/run_fixed_diagnostic.sh bundle --output "${SR_FIXED_ROOT}-failure-$(date -u +%Y%m%dT%H%M%SZ)-$$-small.tar.gz"; exit "$rc"' ERR
@@ -96,11 +90,16 @@ m = r['identity_matching']
 assert m['mode'] == 'bound-prefix'
 assert set(m['by_owner']) == {'scheduler','target-rank-0','target-rank-1'}
 assert all(x['prefix_free'] for x in m['by_owner'].values())
+assert all(x['binding_errors'] == 0 for x in m['by_owner'].values())
 assert m['measured_scheduler_steps'] == r['valid_samples']
 q = m['measured_scheduler']
 assert q['validated_binding_reuses'] > 0 and q['binding_errors'] == 0
 assert q['candidate_comparisons'] < q['linear_candidate_comparisons']
 if mode == 'pingpong':
+    p = json.loads((paths[0].parent/'plugin-report.json').read_text())
+    assert p['request_identity']['bound_request_count'] >= 64
+    assert all(x['internal_request_id'] and x['request_id']
+               for x in p['request_identity']['bindings'])
     ranks = r['uuid_query_by_rank']
     assert len(ranks) == 2
     for x in ranks:
@@ -150,6 +149,7 @@ bash scripts/run_fixed_diagnostic.sh bundle --output "${SR_FIXED_ROOT}-small.tar
 trap - ERR
 ```
 
+There is no valid performance comparison against the failed 5b708 point.
 Compare against c1dd with **buffered-live/linear** explicitly labeled; the new point
 is **buffered-live/bound-prefix** plus the new code SHA. Any observed improvement is
 a runtime optimization result, not an algorithm improvement. Include final flush,

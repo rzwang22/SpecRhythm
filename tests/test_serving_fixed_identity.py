@@ -30,7 +30,8 @@ def test_actual_full_scans_reduce_and_live_rows_are_always_read(monkeypatch):
 
     monkeypatch.setattr(FrozenPromptIdentityMap, "match", scanned)
     linear = FrozenPromptIdentityMap(prompts)
-    fast = BoundPromptIdentityMap(linear)
+    # A/B are independent owners; installation within one owner now preserves aliases.
+    fast = BoundPromptIdentityMap(FrozenPromptIdentityMap(prompts))
     # Full initial binding, then actual changing output prefixes / versions.
     for round_id in range(4):
         for rid, prompt in prompts.items():
@@ -47,7 +48,7 @@ def test_actual_full_scans_reduce_and_live_rows_are_always_read(monkeypatch):
 @pytest.mark.parametrize("prompts", [{"a": [1], "b": [1, 2]}, {"a": [1, 2], "b": [3]}])
 def test_changed_refilled_cancelled_and_invalid_rows_keep_exact_failures(prompts):
     owners = [FrozenPromptIdentityMap(prompts)]
-    owners.append(BoundPromptIdentityMap(owners[0]))
+    owners.append(BoundPromptIdentityMap(FrozenPromptIdentityMap(prompts)))
     # Includes short, missing, ambiguous, changed identity, reused released internal
     # ID and duplicate stable alias. Historical binding lifetime is intentionally retained.
     operations = [
