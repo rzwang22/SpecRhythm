@@ -71,3 +71,33 @@ Default summary and small bundle read compact artifacts only. They work without 
 runtime/backend reports and include snapshots, drain summaries, first/secondary errors,
 exit and ownership evidence. Full request/token logs remain in the original root;
 `audit` is a separate optional CPU command, never an implicit short/summary/bundle gate.
+# Offline attribution artifacts (separate from runtime qualification)
+
+`specrhythm.fixed-attribution.v1` is emitted only into a new sibling analysis directory.
+`status=COMPLETE` means analysis completed, never GPU qualification. Each attempt has a
+retained summary, explicit missing-file/association gaps, and optional raw analysis.
+Raw `OBSERVED` means supported associations/bounds, not a complete causal critical path.
+Old results are not upgraded. `formal_comparison_eligible=false` is unconditional here.
+
+- `attribution.json`: per-attempt source paths/hashes, analyzer source hashes, aggregate
+  clues, actual step/rotation associations, bounded CUDA event overlap, host inclusive
+  costs/unions and purpose-separated Draft forwards. Details can be capped; counts and
+  aggregate statistics use all eligible events. No raw input traces are copied here.
+- `summary.csv`, `report.md`: compact retained metrics with **independent** overlap status.
+  A historical reported ZERO stays separate from UNKNOWN when raw coverage is absent.
+- `progress.json`: current/processed files, phase, input bytes and processed record count.
+- `analysis-exit.json`: actual child exit, elapsed time, shared deadline, no-GPU/no-audit
+  evidence. Codes 0/2/124/130 mean completed analysis/input failure/timeout/operator stop.
+- `export-manifest.json`, `evidence/runs/.../*.gz`: optional allowlisted projections with
+  original uncompressed file hashes and output hashes. `source_record_sha256` is the
+  original JSONL record checksum, not a checksum claiming the redacted row is original.
+  `source_line` is a source locator, not a fabricated runtime event ID. Original clock
+  bounds, uncertainty, identity, cohort/round/prefix metadata and small commit tokens
+  survive. Full prefixes, generated sequences, KV maps and general logs do not.
+
+CUDA status is UNKNOWN for missing/inconsistent coverage or clock identity, UNCERTAIN
+for positive upper bound only, ZERO for zero upper bound **with complete supported
+coverage**, and POSITIVE for positive lower bound. `exact_kernel_overlap=false` always.
+Exclusive host self-time and critical-path time saved remain null where not observable.
+Rows outside the formal window are not silently charged to measured token accounting.
+The runtime measurement/drain schemas below are unchanged.

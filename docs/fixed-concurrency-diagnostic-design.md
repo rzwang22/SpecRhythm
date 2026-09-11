@@ -204,3 +204,37 @@ logs and the inherited stage dependency/terminal-drain contract separately on CP
 All original artifacts remain immutable. Audit produces a separate artifact rather
 than rewriting the light result. The small bundle includes config/light/error artifacts
 only, excluding raw token/request diagnostics.
+# Retained timing attribution (2026-09-11)
+
+The four continuous points at `b42401585a6b32e36fd0b874eb106a8f75ee9ea4` were
+reported execution/measurement/cleanup PASS by the operator. The supplied small bundle
+contains aggregates but no runtime/backend raw timelines. The evidence and source audit
+are recorded in [the b424 attribution](fixed64-b424-timing-attribution.md).
+
+This revision adds only `fixed_attribution`, its read-only projection layer and a
+separate supervised CPU command. Runtime, instrumentation, log persistence, live UUID,
+models/K4/workload, scheduler and batch limits remain unchanged. No logging or scheduling
+optimization is justified as a measured critical-path improvement from this small bundle.
+
+The tool joins scheduled stable/internal IDs to both TP forward rows, committed
+request/prefix rounds to actual coordinator commits, and Draft request/round/context
+plans to actual proposal forwards. Actual A32/B32 cohorts are paired by round and
+disjoint request membership; incomplete or interleaved boundaries remain unknown.
+It checks recorded sample counts and independent Draft purpose counters before using
+CUDA bounds to classify zero overlap. TP durations are never added. Model-event overlap
+is bounded by the original clock uncertainty, never labeled exact kernel overlap.
+
+Host category counts include nested calls. Per-source unions and cross-source unions
+are separate from inclusive sums. Missing thread/parent-call IDs prevent exclusive
+self-time attribution. RPC duration includes synchronous service work where the path
+blocks; it is not pure network cost. The unwrapped TP collectives and GPU postprocessing
+also prevent treating these timers as exhaustive primitive-level coverage. The tool
+retains this limitation and does not convert observed overhead into predicted speedup.
+
+The source retains no request-correlated enqueue/owner-receive or exact ready-publication
+event. Existing proposal start/end, work-record endpoints, scheduler/model-launch bounds
+and commit timestamps retain their own semantics. An absent event is not an invented
+timestamp or zero duration. Default reports/export have a 10 MiB combined output budget;
+sorting/indexing/interval scans replace Cartesian joins, and a parent process enforces
+one 120-second CPU deadline with partial output on failure. This never invokes full audit
+or inference. See [the CPU-first runbook](fixed-attribution-runbook.md).

@@ -36,6 +36,27 @@ claims.
 | [#3 gpu-integration-v0.1](https://github.com/rzwang22/SpecRhythm/pull/3) | draft; Phase 3B.1 and corrected-20 Phase 3C.2 complete; Phase 3C.3 corrected-100 awaiting server run | hardened multi-rank primitives, corrected R3-real traces, common-prefix replay, request-bootstrap statistics, 2x shell decomposition and diagnostic learned ranker | user-run 3×A800 correctness artifacts plus Mac CPU tests; no packed-tree/serving engine, Dual-Batch, SLO, calibrated latency or speedup claim |
 | [#4 vllm-serving-v0.1](https://github.com/rzwang22/SpecRhythm/pull/4) | Draft/Open/unmerged; S0 CLOSED/PASS; S1-P G0–G3 PASS at `5a00049`; S2 G1 at `24b31a9` reported zero process exits/clean cleanup but rejected terminal-tail overlap; S2-only contract refinement awaiting retest | independent prefilled-KV resident pool, dynamic Poisson arrival/admission, Target/Serial/PingPong and engineering SLO/goodput | CPU/source contracts are not GPU qualification; finite-trace ideal PD-delivery boundary only |
 
+## Fixed64/32 b424 timing attribution
+
+The operator's four continuous b424 points report execution/measurement/cleanup PASS:
+Target 172.290, Serial 167.218, Serial-split 91.722 and PingPong 119.020 tok/s.
+Serial/PingPong mean full64 rotations are 1144.140/1596.297 ms. The quoted forward
+means explain 131.754 ms of the 452.156 ms arithmetic gap; 320.402 ms remains unattributed,
+not CPU-only overhead. Split's 5606.630 ms explicit pre-step owner wait accounts for most
+of its 5701.237 ms aggregate window difference from PingPong, without proving GPU overlap.
+
+The small bundle lacks runtime/backend/raw events. Reported ZERO overlap is independently
+UNKNOWN until event/clock coverage is checked. No runtime optimization was applied.
+The new CPU-only, externally limited 120-second analyzer/export preserves observations,
+unavailable causal timing, partial reports and old results. It uses actual IDs/rounds/
+prefix commits, TP-safe interval unions and per-purpose Draft counters. Original-live
+logging/UUID, required synchronization, S1/S2 defaults, 64/32/K4 and equality NOT_REQUIRED
+remain unchanged. See [evidence](fixed64-b424-timing-attribution.md) and
+[CPU-first runbook](fixed-attribution-runbook.md). Next action: analyze/export already
+retained Serial/PingPong evidence; do not rent GPU merely for this tool-only revision.
+GPU performance validation of any future optimization remains **PENDING**. No AutoDL
+connection or GPU execution was performed by the agent.
+
 ## Fixed64/32 diagnostic stop settlement repair
 
 The operator's real run at `89a962127f2e9a10a2564736e2124dae0abe51d8` failed in

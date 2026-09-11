@@ -113,3 +113,20 @@ K4, 64/32 caps, models, precision, workload/cohorts, proposal/commit accounting,
 KV, prefix/version checks, original-live observation, bounded drain and S1/S2 defaults.
 Cross-run equality remains NOT_REQUIRED. No new GPU test is needed to collect these
 already-retained files; GPU performance validation remains PENDING.
+
+## Implemented offline checks
+
+The separate `scripts/analyze_fixed_diagnostic.sh` entry completed the supplied small
+bundle in 0.135 seconds, producing 36,228 bytes across JSON/CSV/Markdown/progress/exit
+files. All four retained summaries remain visible; each independent attribution is
+INSUFFICIENT because runtime/backend/event evidence is missing. The report is a new
+artifact, not a modification or requalification of any original GPU result.
+
+CPU regression covers real `Timers.span` nesting, actual checksummed `CheckpointJsonl`
+owner records through export/reanalysis, producer-shaped 64/32 request/prefix/round/
+commit/forward joins, shuffled records, incomplete/interleaved rotations, purpose-count
+coverage, rank union, uncertain versus missing/zero/positive overlap, 100,000 intervals,
+read-only projection, primary input failure retention and hard parent-supervised timeout.
+Legacy enqueue/receive/publication timestamps and exclusive host self time remain
+explicitly unavailable. No runtime logging, scheduling, dependency or synchronization
+change was made, so no runtime speedup is claimed.

@@ -1,5 +1,10 @@
 # Fixed64/32 foreground diagnostic runbook
 
+For the b424 timing-attribution follow-up, start with the separate
+[CPU-only analysis/export runbook](fixed-attribution-runbook.md). That revision changes
+no runtime behavior and requires no new GPU run. Its optional retest is Serial then
+PingPong only; do not automatically repeat all four modes or initial-state stages below.
+
 GPU execution is performed by the operator. This entry does not run S2 G0–G3,
 capacity search, calibration, patch application, or dependency installation. Existing
 S1/S2 result roots are retained. Use the final full SHA delivered with the change.
