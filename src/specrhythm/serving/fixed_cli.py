@@ -16,11 +16,11 @@ from specrhythm.serving.s1_console import print_failure
 from specrhythm.serving.s1_workload import write_once
 
 
-def run_point(root, selected, *, probe=False):
+def run_point(root, selected, *, probe=False, manifest_path=None):
     from specrhythm.serving.s2_cli import execute
     from specrhythm.serving.s2_pool import publish
 
-    manifest_path = root / "inputs/execution-manifest.json"
+    manifest_path = manifest_path or root / "inputs/execution-manifest.json"
     label = ("capacity" if probe else selected["kind"]) + "-" + selected["mode"]
     if selected["batch"]:
         label += f"-B{selected['batch']}-{selected['half']}"
@@ -35,7 +35,7 @@ def run_point(root, selected, *, probe=False):
     try:
         value = execute(
             root,
-            "fixed64-diagnostic",
+            "resident360-decode-scan" if selected.get("scan") else "fixed64-diagnostic",
             selected["runtime_mode"],
             manifest_path,
             directory,
@@ -60,7 +60,7 @@ def run_point(root, selected, *, probe=False):
             "directory": str(directory),
             "point": selected,
             "measurement": value["measurement_status"],
-            "full_offline_audit": "PENDING",
+            "full_offline_audit": "NOT_RUN" if selected.get("scan") else "PENDING",
         },
     )
     return directory, value

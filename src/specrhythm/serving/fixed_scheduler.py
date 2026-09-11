@@ -69,6 +69,14 @@ class FixedBatch:
                 **{k: identity_after[k] - identity_before[k] for k in COUNTERS
                    if k in identity_after},
             }
+            expected = self.s2_control.get("decode_scan_full_batch")
+            if expected is not None and ids and len(ids) != expected:
+                # Scan-only stop after real stock selection but BEFORE model dispatch.
+                # No rollback or fake commit: the bounded drain aborts/releases Target
+                # scheduling state and explicitly settles every unused Draft proposal.
+                from specrhythm.serving.decode_scan_window import ScanShapeStop
+
+                raise ScanShapeStop(expected, self.s2_steps[-1])
         return output
 
 

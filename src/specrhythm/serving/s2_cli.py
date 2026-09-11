@@ -134,6 +134,13 @@ def execute(root, gate, mode, manifest_path, directory, *, probe=False, policy=N
         options = manifest["fixed_diagnostic"]["options"]
         env["SR_FIXED_OBSERVATION"] = options.get("observation", "original-live")
         env["SR_FIXED_IDENTITY_MATCHING"] = options.get("identity_matching", "linear")
+        if diagnostic.get("scan"):
+            env["SR_FIXED_SCAN_SETUP_DEADLINE_NS"] = str(
+                time.monotonic_ns() + int(options["setup_timeout"] * 1e9))
+            publish(directory / "drain-state.json", {
+                "phase": "scan_setup_and_warmup", "status": "RUNNING",
+                "deadline_ns": int(env["SR_FIXED_SCAN_SETUP_DEADLINE_NS"]),
+            })
     socket = Path("/tmp") / ("sr-s2-" + uuid.uuid4().hex[:16] + ".sock")
     env["SR_S2_DRAFT_SOCKET"] = str(socket)
     saved_env = dict(os.environ)
@@ -173,6 +180,8 @@ def execute(root, gate, mode, manifest_path, directory, *, probe=False, policy=N
                 },
             )
             deadline = time.monotonic() + (900 if diagnostic is None else options["setup_timeout"])
+            if diagnostic is not None and diagnostic.get("scan"):
+                deadline = int(env["SR_FIXED_SCAN_SETUP_DEADLINE_NS"]) / 1e9
             while not (socket.is_socket() and (directory / "draft-service-ready.json").is_file()):
                 if draft.poll() is not None or time.monotonic() >= deadline:
                     rc = draft.returncode if draft.returncode not in (None, 0) else 124
@@ -229,7 +238,10 @@ def execute(root, gate, mode, manifest_path, directory, *, probe=False, policy=N
             if rc:
                 report = failed_report(directory, mode, manifest, rc)
             elif diagnostic is not None:
-                from specrhythm.serving.fixed_results import summarize
+                if diagnostic.get("scan"):
+                    from specrhythm.serving.decode_scan_results import summarize
+                else:
+                    from specrhythm.serving.fixed_results import summarize
 
                 report = summarize(manifest_path, directory, diagnostic, probe=probe)
             elif probe:
@@ -285,7 +297,10 @@ def execute(root, gate, mode, manifest_path, directory, *, probe=False, policy=N
             os.environ.update(saved_env)
         # The display thread must drain final raw logs before hashing them.
     if diagnostic is not None:
-        from specrhythm.serving.fixed_results import emit_result
+        if diagnostic.get("scan"):
+            from specrhythm.serving.decode_scan_results import emit_result
+        else:
+            from specrhythm.serving.fixed_results import emit_result
 
         report = emit_result(directory, report, diagnostic)
     elif cleanup_failed:

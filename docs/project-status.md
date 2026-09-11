@@ -36,6 +36,38 @@ claims.
 | [#3 gpu-integration-v0.1](https://github.com/rzwang22/SpecRhythm/pull/3) | draft; Phase 3B.1 and corrected-20 Phase 3C.2 complete; Phase 3C.3 corrected-100 awaiting server run | hardened multi-rank primitives, corrected R3-real traces, common-prefix replay, request-bootstrap statistics, 2x shell decomposition and diagnostic learned ranker | user-run 3×A800 correctness artifacts plus Mac CPU tests; no packed-tree/serving engine, Dual-Batch, SLO, calibrated latency or speedup claim |
 | [#4 vllm-serving-v0.1](https://github.com/rzwang22/SpecRhythm/pull/4) | Draft/Open/unmerged; S0 CLOSED/PASS; S1-P G0–G3 PASS at `5a00049`; S2 G1 at `24b31a9` reported zero process exits/clean cleanup but rejected terminal-tail overlap; S2-only contract refinement awaiting retest | independent prefilled-KV resident pool, dynamic Poisson arrival/admission, Target/Serial/PingPong and engineering SLO/goodput | CPU/source contracts are not GPU qualification; finite-trace ideal PD-delivery boundary only |
 
+## Resident360 fixed-batch/time decode scan (GPU PENDING)
+
+Independent `specrhythm-decode-scan` / `run_decode_scan.sh` implements the requested
+Target/Serial/PingPong × B16/32/64/128 scan on top of the `e78e4c7` alias repair.
+One deterministic original360 pool (3:3:2:2), fresh engines, real all-request
+prefill before measurement, two full warmup rotations and a30s time-primary
+window replace the old sample12 stopping rule only in this new entry.
+
+Per-point physical capacity covers resident360 and its actual B/mode/config,
+including B128 query positions and private KV/workspace. Full-forward guards stop
+before a partial model dispatch; pool shortage is INSUFFICIENT, with no tail
+filtering, altered EOS or automatic configuration/retry. Real commit/prefix,
+refill, live UUID and buffered-live/bound-prefix checks remain. Final settlement
+uses the existing bounded protocol, first-error/exit retention and owned cleanup.
+Light JSON/CSV and a bounded small bundle exclude failed/stopped/insufficient
+points; no full CPU audit runs in the default chain.
+
+CPU regressions cover all12 scheduler shapes, all360 prefill for each mode,
+real serial/async Draft state-machine shutdown and window/accounting/CLI boundaries.
+The identical source/test bytes in a temporary local checkout pass full pytest:
+1823 passed / 3 skipped (233.69s), including Phase4/S1/S2 and pinned source checks.
+The Desktop checkout encountered an unchanged 5s shell-cleanup test timeout and
+observed blocked file reads; the temporary checkout passed that same test without
+changing its timeout. Ruff, compileall, all244 Python files with Python3.9 grammar,
+Bash/runbook syntax and diff checks pass. Exact SHA and Linux CI outcomes are in
+the delivery. GPU capacity,
+full-window availability and performance are **PENDING**; no server was contacted.
+Old fixed64/S1/S2 defaults and prior artifacts remain unchanged. PR #4 stays
+Draft/Open/unmerged; PR #2/#3 are untouched. Next gate: user foreground B16 three
+modes, then only after PASS the remaining nine points, using the
+[scan runbook](decode-scan-runbook.md) and [definition/schema](decode-scan-design.md).
+
 ## Fixed64/32 bound-prefix alias repair (GPU revalidation PENDING)
 
 The supplied failure archive confirms Serial at

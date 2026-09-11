@@ -32,3 +32,14 @@ def test_worker_model_and_current_request_rows_are_actual_mrv1_contract(source):
     assert "self.model" in body
     update = method(source / "v1/worker/gpu_model_runner.py", "GPUModelRunner", "_update_states")
     assert "self.input_batch.remove_request(req_id)" in update
+
+
+def test_scan_stop_occurs_before_model_dispatch_and_abort_uses_non_deferred_free(source):
+    step = method(source / "v1/engine/core.py", "EngineCore", "step")
+    assert step.index("self.scheduler.schedule(") < step.index(
+        "self.model_executor.execute_model")
+    init = method(source / "v1/core/sched/scheduler.py", "Scheduler", "__init__")
+    assert "self.defer_block_free = False" in init
+    free = method(source / "v1/core/sched/scheduler.py", "Scheduler", "_free_request_blocks")
+    assert "if not self.defer_block_free or" in free
+    assert "self.kv_cache_manager.free(request)" in free

@@ -2,6 +2,7 @@
 
 import sys
 import threading
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -18,12 +19,21 @@ from specrhythm.serving.fixed_settle import DiagnosticDualController, Diagnostic
 from specrhythm.serving.s2_pool import publish
 
 
-@pytest.mark.parametrize("mode", ["serial-split", "pingpong"])
-def test_real_owner_dispatch_initial_work_wait_and_window_drain(tmp_path, monkeypatch, mode):
-    clock, ids = clock_fixture()
+@pytest.mark.parametrize("mode,scan", [("serial-split", False), ("pingpong", False),
+                                      ("pingpong", True)])
+def test_real_owner_dispatch_initial_work_wait_and_window_drain(tmp_path, monkeypatch, mode, scan):
+    clock, ids = clock_fixture(360 if scan else 100)
+    half = 8 if scan else 32
+    pool_size = len(ids)
     definitions = list(clock.definitions.values())
     options = settings(warmup_steps=0, samples=1, window_seconds=5, drain_timeout=5)
-    manifest = build_manifest({"eos_token_ids": [999]}, ids, "sha", options)
+    manifest = build_manifest({"eos_token_ids": [999]}, ids[:100], "sha", options)
+    if scan:
+        from specrhythm.serving.decode_scan_plan import manifest as scan_manifest
+        from specrhythm.serving.decode_scan_plan import options as scan_options
+
+        options = scan_options(warmup_steps=0, window_seconds=0.01, drain_timeout=5)
+        manifest = scan_manifest({"eos_token_ids": [999]}, ids, "sha", options, 16)
     monkeypatch.setenv("SR_S2_CONTROL", str(tmp_path / "s2-control.json"))
     monkeypatch.setenv("SR_S2_RUN_DIRECTORY", str(tmp_path))
     monkeypatch.setenv("SR_S2_MODE", "pingpong")
@@ -52,7 +62,7 @@ def test_real_owner_dispatch_initial_work_wait_and_window_drain(tmp_path, monkey
         def materialize(self, rows, purpose):
             if purpose == "proposal":
                 events.append(("Draft", rows[0].request_id))
-                if rows[0].request_id == "sr-draft:" + ids[32]:
+                if rows[0].request_id == "sr-draft:" + ids[half]:
                     entered_b.set()
                     # A real blocked CPU model simulates GPU ownership. The test
                     # releases this operation; runtime must not fabricate completion.
@@ -106,22 +116,24 @@ def test_real_owner_dispatch_initial_work_wait_and_window_drain(tmp_path, monkey
             if mode == "serial-split":
                 assert not controller.status()["inflight_request_ids"]
             else:
-                assert set(controller.status()["inflight_request_ids"]) == set(ids[32:64])
+                assert set(controller.status()["inflight_request_ids"]) == set(ids[half:2*half])
             events.append(("Target", None))
             gate.set()
             # Real owner has already produced A; take its actual candidates.
-            ready = controller.poll_ready(32)["ready"]
-            assert len(ready) == 32
+            ready = controller.poll_ready(half)["ready"]
+            assert len(ready) == half
             scheduled = [r["request_id"] for r in ready]
-            assert scheduled == ids[:32]
+            assert scheduled == ids[:half]
             scheduler.s2_steps.append(
                 {
                     "request_ids": scheduled,
-                    "B": 32,
+                    "B": half,
                     "cohort": "A",
                     "rows": [{"request_id": rid, "candidate_positions": 4} for rid in scheduled],
                 }
             )
+            if scan:
+                time.sleep(0.02)  # Real issued step crosses time budget; no extra B step.
             return [
                 SimpleNamespace(
                     request_id=r["request_id"],
@@ -153,32 +165,42 @@ def test_real_owner_dispatch_initial_work_wait_and_window_drain(tmp_path, monkey
         lambda *a, **kw: (engine, scheduler, Client(), warm, bootstrap, None),
     )
     llm = SimpleNamespace(collective_rpc=lambda callback, **kw: [])
+    selected = {**point(mode), "kind": "initial-state", "batch": 32}
+    if scan:
+        from specrhythm.serving.decode_scan_plan import selected_point
+
+        selected = selected_point(mode, 16)
     try:
         result = fixed_runtime.drive(
             llm,
             manifest,
             definitions,
             tmp_path,
-            {**point(mode), "kind": "initial-state", "batch": 32},
+            selected,
             options,
         )
     finally:
         gate.set()
         controller.shutdown()
-    assert result["sample_count"] == 1 and result["stop_reason"] == "sample_budget"
-    assert result["capacity"]["resident_request_count"] == 100
-    assert result["capacity"]["active_request_limit"] == 64
-    assert result["capacity"]["max_requests_per_target_forward"] == 32
+    assert result["sample_count"] == 1
+    assert result["stop_reason"] == ("time_budget" if scan else "sample_budget")
+    assert result["capacity"]["resident_request_count"] == pool_size
+    assert result["capacity"]["active_request_limit"] == 2*half
+    assert result["capacity"]["max_requests_per_target_forward"] == half
     assert result["end_ns"] > result["measurement_end_ns"]
     assert all(r["state"] == "DIAGNOSTIC_CANCELLED" for r in result["requests"])
     assert all(r["resources_released"] for r in result["requests"])
     assert not any("completion_ns" in r for r in result["requests"])
-    assert sum(len(r["generated_token_ids"]) - 1 for r in result["requests"]) == 32
+    assert sum(len(r["generated_token_ids"]) - 1 for r in result["requests"]) == half
     assert [k for k, _ in events].index("Target") < [k for k, _ in events].index("abort")
     assert [k for k, _ in events].index("abort") < [k for k, _ in events].index("shutdown")
     history = controller.machine.backend.history
     assert [r["logical_cohort"] for r in history] == ["A", "B"]
-    assert all(len(r["request_ids"]) == 32 for r in history)
+    assert all(len(r["request_ids"]) == half for r in history)
+    if scan:
+        assert result["decode_scan"]["complete_rotations"] == []
+        assert len(result["decode_scan"]["partial_rotations"]) == 1
+        assert result["diagnostic_drain"]["settled_requests"] == 360
     assert not controller.machine.backend.worker.memory
 
 

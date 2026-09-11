@@ -88,10 +88,14 @@ def test_actual_backend_retains_staged_KV_and_new_instance_rebuilds(tmp_path, mo
 
 
 @pytest.mark.parametrize("mode", MODES)
-def test_real_drive_prefills_all_before_clock_and_admits_dynamically(tmp_path, monkeypatch, mode):
+@pytest.mark.parametrize("pool_size", [2, 360])
+def test_real_drive_prefills_all_before_clock_and_admits_dynamically(
+    tmp_path, monkeypatch, mode, pool_size
+):
     from specrhythm.serving import s2_runtime
 
-    path, manifest, raw = profile(tmp_path / "inputs", rows=[request(i, 3) for i in range(2)])
+    path, manifest, raw = profile(
+        tmp_path / "inputs", rows=[request(i, 3) for i in range(pool_size)])
     rows = [ResidentServingRequest(r) for r in raw]
     directory = tmp_path / "attempt"
     directory.mkdir()
@@ -103,7 +107,7 @@ def test_real_drive_prefills_all_before_clock_and_admits_dynamically(tmp_path, m
         {"barrier_ns": None, "requests": {r.request_id: {"state": "STAGED"} for r in rows}},
     )
     trace = poisson_trace([r.request_id for r in rows], 100, 1, 1)
-    boot = [100 + i for i in range(2)]
+    boot = [100 + i for i in range(pool_size)]
     warm = ready_manifest(raw, {"logical": {"workload_sha256": manifest["workload_sha256"]}}, boot)
     calls = []
     finished = set()
@@ -186,7 +190,7 @@ def test_real_drive_prefills_all_before_clock_and_admits_dynamically(tmp_path, m
         def step(self):
             packet = read_json(control_path)
             if self.setup:
-                assert packet["barrier_ns"] is None and len(added) == 2
+                assert packet["barrier_ns"] is None and len(added) == pool_size
                 self.setup = False
                 write_once(directory / "setup-ready.json", {"global_decode_ready": True})
                 write_once(directory / "decode-ready-manifest.json", warm.to_dict())
@@ -235,6 +239,14 @@ def test_real_drive_prefills_all_before_clock_and_admits_dynamically(tmp_path, m
             {"rank": i, "timestamp_ns": time.monotonic_ns()} for i in (0, 1)
         ],
     )
+    if pool_size == 360:
+        prepared = s2_runtime.prepare_resident(llm, rows, directory, mode, [999])
+        assert len(added) == len(set(added)) == len(prepared[3]) == len(prepared[4]) == 360
+        assert not finished and not calls, "no timed Draft work during setup"
+        pool = read_json(directory / "resident-pool.json")
+        assert pool["selected_requests"] == pool["resident_requests"] == 360
+        assert set(pool["target"]["initial"]) == set(pool["draft"]["rows"]) == set(added)
+        return
     result = s2_runtime.drive(llm, rows, trace, directory, mode, [999], active_limit=1)
     assert len(finished) == 2
     assert result["end_ns"] > result["start_ns"]

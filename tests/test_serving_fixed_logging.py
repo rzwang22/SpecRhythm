@@ -159,7 +159,8 @@ def test_real_owner_ready_inflight_stop_with_buffered_logs(tmp_path, monkeypatch
         )
 
     monkeypatch.setattr(CheckpointJsonl, "__init__", initialize)
-    test_real_owner_dispatch_initial_work_wait_and_window_drain(tmp_path, monkeypatch, mode)
+    test_real_owner_dispatch_initial_work_wait_and_window_drain(
+        tmp_path, monkeypatch, mode, scan=False)
     assert logs.produced > 100 and logs.produced == logs.written and logs.closed
 
 

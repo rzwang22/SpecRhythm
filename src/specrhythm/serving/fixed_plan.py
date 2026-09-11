@@ -73,18 +73,19 @@ def settings(
     )
 
 
-def capacity_metadata(mode, resident_count=None):
+def capacity_metadata(mode, resident_count=None, *, active_limit=64, resident_requirement=100,
+                      target_sequence_limit=128):
     require(mode in MODES, "unknown fixed diagnostic mode", actual=mode)
     grouped = mode in ("serial-split", "pingpong")
     return {
-        "resident_request_requirement": 100,
+        "resident_request_requirement": resident_requirement,
         "resident_request_count": resident_count,
         "resident_count_semantics": "actual after prefill; null before state preparation",
-        "active_request_limit": 64,
+        "active_request_limit": active_limit,
         "cohort_count": 2 if grouped else 0,
-        "per_cohort_capacity": 32 if grouped else None,
-        "max_requests_per_target_forward": 32 if grouped else 64,
-        "target_sequence_limit": 128,
+        "per_cohort_capacity": active_limit // 2 if grouped else None,
+        "max_requests_per_target_forward": active_limit // 2 if grouped else active_limit,
+        "target_sequence_limit": target_sequence_limit,
         "target_query_token_limit": 4096,
         "draft_sequence_limit": 128,
         "draft_query_token_limit": 4096,

@@ -146,22 +146,33 @@ def commit_outputs(clock, outputs, packet, client, runtime_mode):
             require(not output.finished, "diagnostic terminal output lacks commit")
 
 
-def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5):
+def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5, probe=False):
     mode, runtime_mode = point["mode"], point["runtime_mode"]
+    scan = point.get("scan", False)
+    setup_timeout = options["setup_timeout"]
+    if scan and os.environ.get("SR_FIXED_SCAN_SETUP_DEADLINE_NS"):
+        setup_timeout = remaining(int(os.environ["SR_FIXED_SCAN_SETUP_DEADLINE_NS"]))
     prepared = prepare_resident(
         llm,
         definitions,
         directory,
         runtime_mode,
         manifest["execution"]["eos_token_ids"],
-        options["setup_timeout"],
+        setup_timeout,
         logprobs,
     )
+    prefill_complete_ns = time.monotonic_ns() if scan else None
     engine, scheduler, client, warm, bootstrap, _ = prepared
     diag = manifest["fixed_diagnostic"]
     initial = point["kind"] == "initial-state"
-    active = point["batch"] if initial and runtime_mode != "pingpong" else 64
+    if scan:
+        require(not getattr(scheduler, "defer_block_free", False),
+                "scan pre-forward stop requires synchronous allocator without deferred frees")
+    active = manifest["active_limit"] if scan else (
+        point["batch"] if initial and runtime_mode != "pingpong" else 64)
     grouped = runtime_mode == "pingpong"
+    cohort_capacity = active // 2 if scan else 32
+    maximum_batch = cohort_capacity if grouped else active
     trace = copy.deepcopy(manifest["trace"])
     if initial and point["half"] == "B":
         # Explicit isolated B-half point, retaining the source's frozen order inside each half.
@@ -178,7 +189,7 @@ def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5):
         bootstrap,
         active_limit=active,
         mode=runtime_mode,
-        per_cohort_capacity=32 if grouped else None,
+        per_cohort_capacity=cohort_capacity if grouped else None,
         fixed_assignment=assignment,
     )
     packet = {
@@ -187,13 +198,20 @@ def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5):
         "eos_token_ids": manifest["execution"]["eos_token_ids"],
     }
     clock.start(time.monotonic_ns(), threaded=False)
+    if scan:
+        clock.observe(clock.barrier_ns)
     window_options = dict(options)
-    if grouped and not initial:
+    if grouped and not initial and not scan:
         # A requested sample unit is one 64-request rotation (two Target steps).
         # Actual partial/cohort-incomplete rotations remain separately labelled.
         window_options["samples"] *= 2
         window_options["warmup_steps"] *= 2
-    window = Window(window_options, initial_state=initial)
+    if scan:
+        from specrhythm.serving.decode_scan_window import ScanShapeStop, ScanWindow
+
+        window = ScanWindow(window_options, active, grouped)
+    else:
+        window = Window(window_options, initial_state=initial)
     last = None
     polls, steps, phases = [], [], []
     first_admission = True
@@ -206,7 +224,8 @@ def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5):
         current = {
             **clock.control(),
             **packet,
-            "max_requests_per_target_forward": 32 if grouped else active,
+            "max_requests_per_target_forward": maximum_batch,
+            **({"decode_scan_full_batch": maximum_batch} if scan else {}),
             "diagnostic_phase": (
                 "drain" if window.end_ns else "measurement" if window.start_ns else "warmup"
             ),
@@ -217,13 +236,21 @@ def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5):
             last = copy.deepcopy(current)
 
     try:
-        while not clock.complete:
+        while not clock.complete and not probe:
             now = time.monotonic_ns()
-            require(time.monotonic() < observation_deadline, "diagnostic warmup/window timeout")
+            if scan:
+                require(len(polls) < 10000, "scan polling evidence capacity exceeded")
+            if scan and window.start_ns is None:
+                remaining(int(os.environ.get("SR_FIXED_SCAN_SETUP_DEADLINE_NS",
+                                             int(observation_deadline * 1e9))))
+            else:
+                require(
+                    time.monotonic() < observation_deadline, "diagnostic warmup/window timeout")
             if (directory / "stop-request.json").exists():
                 window.reason = "operator_stop"
                 break
-            window.ready(now)
+            if not scan:
+                window.ready(now)
             if window.time_expired(now):
                 break
             clock.observe(now)
@@ -236,6 +263,9 @@ def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5):
             inflight = set(status.get("inflight_request_ids", ()))
             polls.append({"timestamp_ns": now, "inflight_request_ids": sorted(inflight)})
             release_finished(clock, inflight)
+            if scan and population(clock)["active_requests"] + len(clock.queue) < active:
+                window.reason = "pool_exhausted_before_window"
+                break
             with TIMERS.span("refill"):
                 admitted = clock.admit(
                     time.monotonic_ns(), busy_cohorts={clock.rows[r]["cohort"] for r in inflight}
@@ -272,14 +302,48 @@ def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5):
             if window.time_expired(time.monotonic_ns()):
                 break
             pop = population(clock, inflight)
+            if scan and window.start_ns is None:
+                if window.ready(time.monotonic_ns(), population=pop):
+                    window.window_state.update(
+                        request_ids=[
+                            rid for rid, r in clock.rows.items() if r["state"] == "ACTIVE"],
+                        cohorts={c: [rid for rid, r in clock.rows.items()
+                                     if r["state"] == "ACTIVE" and r["cohort"] == c]
+                                 for c in ("A", "B")},
+                        inflight_request_ids=sorted(inflight),
+                        next_cohort=getattr(scheduler, "selected_cohort", None),
+                    )
+                    # Keep the normal asynchronous pipeline; no new fence or proposal.
+                    deadline = window.start_ns + int(
+                        (options["window_seconds"] + options["drain_timeout"]) * 1e9)
+                    publish(directory / "drain-state.json", {
+                        "phase": "scan_window_and_atomic_step", "status": "RUNNING",
+                        "start_ns": window.start_ns, "deadline_ns": deadline,
+                    })
+                    publish_control(inflight)
+                    checkpoint(directory, manifest, point, window, clock, steps, phases)
+                elif window.warmup_rotations >= options["warmup_steps"]:
+                    # Restore the full starting population without extra warmup forwards.
+                    time.sleep(0.0005)
+                    continue
             phase = (
-                "full-load" if pop["active_requests"] == 64 else ("fill" if not steps else "tail")
+                "full-load" if pop["active_requests"] == active
+                else ("fill" if not steps else "tail")
             )
             phases.append({"timestamp_ns": time.monotonic_ns(), "phase": phase, **pop})
             before = len(scheduler.s2_steps)
             start = time.monotonic_ns()
-            with TIMERS.span("target_step"):
-                outputs = engine.step()
+            if scan and window.time_expired(start):
+                break
+            try:
+                with TIMERS.span("target_step"):
+                    outputs = engine.step()
+            except Exception as error:
+                if not scan or not isinstance(error, ScanShapeStop):
+                    raise
+                window.rejected_step = error.evidence
+                window.reason = "partial_batch_prevented"
+                break
             scheduled = scheduler.s2_steps[before:]
             require(len(scheduled) == 1, "diagnostic requires one scheduler step per engine step")
             row = scheduled[0]
@@ -302,7 +366,8 @@ def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5):
                         "output_commit_complete": committed,
                     }
                 )
-            stopping = window.step_completed(len(row["request_ids"]), end)
+            stopping = window.step_completed(
+                steps[-1] if scan else len(row["request_ids"]), end)
             checkpoint(directory, manifest, point, window, clock, steps, phases)
             if stopping:
                 break
@@ -310,11 +375,14 @@ def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5):
                 with TIMERS.span("wait_ready", reason="no admissible proposal/Target work"):
                     time.sleep(0.0005)
         window.end_ns = time.monotonic_ns()
-        window.reason = window.reason or "all_naturally_completed"
+        window.reason = window.reason or ("capacity_probe" if probe else
+                                         "pool_exhausted_before_window" if scan else
+                                         "all_naturally_completed")
         # Stop submissions at this safe Target boundary. Work enqueued by the last
         # issued step is real work and remains charged through the drain below.
         clock._event("diagnostic-stop-submission", window.end_ns, reason=window.reason)
-        complete = window.reason != "operator_stop" and window.samples > 0
+        complete = (window.reason == "time_budget" if scan else window.reason != "operator_stop"
+                    ) and window.samples > 0
         checkpoint(
             directory, manifest, point, window, clock, steps, phases, measurement_complete=complete
         )
@@ -351,10 +419,13 @@ def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5):
             "schema_version": "specrhythm.fixed-runtime.v2",
             "point": point,
             "capacity": {
-                **capacity_metadata(mode, sum(not b["terminal"] for b in bootstrap.values())),
+                **(diag["capacity"][mode] if scan else capacity_metadata(mode)),
+                "resident_request_count": sum(not b["terminal"] for b in bootstrap.values()),
                 "active_request_limit": active,
-                "max_requests_per_target_forward": 32 if grouped else active,
+                "max_requests_per_target_forward": maximum_batch,
             },
+            **({"decode_scan": {**window.evidence(), "prefill_complete_ns": prefill_complete_ns},
+                "probe": probe} if scan else {}),
             "measurement_start_ns": window.start_ns,
             "measurement_end_ns": window.end_ns,
             "warmup_start_ns": window.warmup_start_ns,
@@ -421,13 +492,19 @@ def run(root, manifest_path, directory, point, *, probe=False):
     mode = point["runtime_mode"]
     config, manifest, definitions = configure(root, manifest_path, directory, mode)
     require("fixed_diagnostic" in manifest, "missing explicit fixed diagnostic manifest")
-    os.environ["SR_PHASE4_DUAL_MICROBATCH_SIZE"] = "32"
+    scan = point.get("scan", False)
+    capacity_spec = (manifest["fixed_diagnostic"]["capacity"][point["mode"]]
+                     if scan else capacity_metadata(point["mode"]))
+    active = capacity_spec["active_request_limit"]
+    os.environ["SR_PHASE4_DUAL_MICROBATCH_SIZE"] = str(
+        capacity_spec["max_requests_per_target_forward"] if scan else 32)
     options = manifest["fixed_diagnostic"]["options"]
     llm = None
     failure = None
     started = time.monotonic_ns()
     try:
-        llm = make_engine(config, mode, classes=CLASSES, sequence_limit=128, query_limit=4096)
+        llm = make_engine(config, mode, classes=CLASSES,
+                          sequence_limit=capacity_spec["target_sequence_limit"], query_limit=4096)
         ranks = llm.collective_rpc(target_startup)
         require(not validate_worker_ranks(ranks, config.target), "fixed Target TP/device invalid")
         require(
@@ -437,7 +514,7 @@ def run(root, manifest_path, directory, point, *, probe=False):
         cfg = llm.llm_engine.vllm_config
         require(
             not cfg.scheduler_config.async_scheduling
-            and cfg.scheduler_config.max_num_seqs == 128
+            and cfg.scheduler_config.max_num_seqs == capacity_spec["target_sequence_limit"]
             and cfg.scheduler_config.max_num_batched_tokens == 4096
             and cfg.model_config.max_model_len == 4096
             and not cfg.cache_config.enable_prefix_caching,
@@ -445,7 +522,7 @@ def run(root, manifest_path, directory, point, *, probe=False):
         )
         draft = read_json(directory / "draft-startup.json")
         capacity = [r["s2_capacity"] for r in ranks] + [draft["s2_capacity"]]
-        checks = [capacity_for(definitions, r, active_limit=64) for r in capacity]
+        checks = [capacity_for(definitions, r, active_limit=active) for r in capacity]
         for check in checks:
             check["block_deficit"] = max(0, check["required_blocks"] - check["num_gpu_blocks"])
             check["workspace_deficit_bytes"] = max(
@@ -459,19 +536,35 @@ def run(root, manifest_path, directory, point, *, probe=False):
             "ranks": capacity,
             "target_worker_ranks": ranks,
             "checks": checks,
-            "metadata": capacity_metadata(point["mode"]),
+            "metadata": capacity_spec,
+            **({"execution_sha256": manifest["sha256"], "point": point,
+                "workload_sha256": manifest["workload_sha256"]} if scan else {}),
             "target_effective_by_rank": [r["s1_effective_capacity"] for r in ranks],
             "draft_effective": draft.get("fixed_engine_limits"),
         }
         write_once(directory / "actual-capacity.json", actual)
         require(
             all(r["valid"] for r in checks),
+            "scan resident360 capacity insufficient" if scan else
             "fixed resident100/active64 capacity insufficient",
             artifact=str(directory / "actual-capacity.json"),
             actual=checks,
-            expected="100 resident, 64 active; no silent capacity reduction",
+            expected=capacity_spec,
         )
-        if probe:
+        if scan:
+            require(capacity_spec["resident_request_requirement"] == len(definitions) == 360
+                    and point["batch"] == active, "scan pool/active capacity binding differs")
+            effective = draft.get("fixed_engine_limits", {})
+            maximum = capacity_spec["max_requests_per_target_forward"]
+            require(effective.get("max_num_seqs", 0) >= maximum
+                    and effective.get("max_num_batched_tokens", 0) >= max(5 * maximum,
+                        max(r.prompt_length + 1 for r in definitions))
+                    and 5 * maximum <= cfg.scheduler_config.max_num_batched_tokens,
+                    "scan actual sequence/query-position capacity insufficient", actual=effective)
+            # Every scan point (including capacity-only probes) prepares all360 KV.
+            result = drive(llm, manifest, definitions, directory, point, options,
+                           logprobs=config.logprobs, probe=probe)
+        elif probe:
             probe_started = time.monotonic_ns()
             probe_deadline = probe_started + int(options["drain_timeout"] * 1e9)
             publish(
@@ -530,7 +623,7 @@ def run(root, manifest_path, directory, point, *, probe=False):
             result = drive(
                 llm, manifest, definitions, directory, point, options, logprobs=config.logprobs
             )
-        if not probe:
+        if not probe or scan:
             result["startup_and_state_preparation_ms"] = (result["start_ns"] - started) / 1e6
         else:
             result["identity_matching"] = scheduler_report(

@@ -171,24 +171,28 @@ def fixed_schedulers(s2_schedulers, monkeypatch, tmp_path):
     }.items():
         monkeypatch.setenv(key, val)
 
-    def build(mode, matching):
+    def build(mode, matching, *, batch=64, n=100):
+        definitions[:] = [SimpleNamespace(request_id=str(i), prompt_token_ids=(1, i + 1))
+                          for i in range(n)]
+        monkeypatch.setenv("SR_PHASE4_REQUEST_COUNT", str(n))
+        monkeypatch.setenv("SR_PHASE4_DUAL_MICROBATCH_SIZE", str(batch // 2))
         grouped = mode in ("pingpong", "serial-split")
         monkeypatch.setenv("SR_FIXED_IDENTITY_MATCHING", matching)
         monkeypatch.setenv("SR_PHASE4_RESIDENT_CONSUMER", "target-only" if mode == "target"
                            else "serial")
         packet = {
-            "barrier_ns": 100, "active_limit": 64,
-            "max_requests_per_target_forward": 32 if grouped else 64,
-            "requests": {str(i): {"state": "ACTIVE" if i < 64 else "STAGED",
-                                   "cohort": ("A" if i < 32 else "B") if grouped else None}
-                         for i in range(100)},
+            "barrier_ns": 100, "active_limit": batch,
+            "max_requests_per_target_forward": batch // 2 if grouped else batch,
+            "requests": {str(i): {"state": "ACTIVE" if i < batch else "STAGED",
+                                   "cohort": ("A" if i < batch // 2 else "B") if grouped else None}
+                         for i in range(n)},
         }
         publish(path, packet)
         cls = module.FixedPingScheduler if grouped else (
             module.FixedSerialScheduler if mode == "serial" else module.FixedTargetScheduler
         )
         scheduler = cls()
-        scheduler.requests = {str(i): Request(str(i), (1, i + 1)) for i in range(100)}
+        scheduler.requests = {str(i): Request(str(i), (1, i + 1)) for i in range(n)}
         scheduler.running = list(scheduler.requests.values())
         for row in scheduler.requests.values():
             row.all_token_ids.append(20)
@@ -198,7 +202,7 @@ def fixed_schedulers(s2_schedulers, monkeypatch, tmp_path):
         scheduler.kv_cache_manager = SimpleNamespace(get_block_ids=lambda i: [[int(i) + 1]])
         if grouped:
             scheduler._bind_vllm_requests()
-            for i in range(64):
+            for i in range(batch):
                 row = scheduler.requests[str(i)]
                 scheduler._accept_ready_result(proposal_result(
                     str(i), prefix=tuple(row.all_token_ids), tokens=(11, 12, 13, 14)
