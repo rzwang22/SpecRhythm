@@ -39,6 +39,19 @@ claims.
 
 ## Serial-eager B16 negative-performance diagnosis
 
+The next repair iteration has verified the returned 149732487-byte raw Draft
+report (SHA256 `b769720b2c0e5520a76f07ba01dbc4c8aefe2d6a2a52a56fed3b2dead78f006a`).
+All 63 measured starts follow parent full-accept feedback; 13 cycles each perform
+17 pre-forward audits/6120 prefix visits, and all 156 parent-repair forwards are
+B1. A-only now batches physical enrollment with one whole-pool audit while
+retaining per-request checks and fresh before/after token-step audits. Parent
+settlement remains unchanged in A-only. [Repair evidence and scope](rolling-eager-repairs.md)
+record the independent commits; new GPU correctness/performance remain pending.
+A-only local gates: **2068 passed, 3 existing skips** in the Python 3.11 full
+suite (247.388s); **235 passed, zero skips** on Python 3.9 related tests and source
+contracts. Ruff, compileall, 277-file Python 3.9 grammar, 11 Bash scripts and
+Rolling Eager runbook blocks pass. No inference/measurement default was changed.
+
 The user-run result at `4a6725b054990e47b7e9c4cf63f38b995d029856` is retained as
 valid: both B16 points pass execution, measurement and cleanup on the same frozen
 resident360 workload. Step wall time rises 770.232 → 2444.746 ms while committed

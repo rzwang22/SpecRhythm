@@ -164,6 +164,7 @@ class EagerSerialMachine(DiagnosticSerialMachine):
                 and tuple(row["proposal_tokens"]) == legacy.proposal_token_ids,
                 "eager verify-start identity/proposal/full dependency mismatch",
             )
+        works = []
         for row in rows:
             rid, key = row["request_id"], (row["request_id"], row["round_id"])
             if key in self.verify_bindings:
@@ -179,10 +180,13 @@ class EagerSerialMachine(DiagnosticSerialMachine):
             )
             work = self.core.begin_continuation(rid)
             if work is not None:
-                self.backend.begin_gpu_continuation(work)
-                self.works[rid] = work
-                self.work_times[work.work_id] = [None, None]
-                self._event("eager_admission", request_ids=(rid,), admissions=1)
+                works.append(work)
+        # No owner command or GPU write interleaves with this validation batch.
+        self.backend.begin_gpu_continuations(works)
+        for work in works:
+            self.works[work.request_id] = work
+            self.work_times[work.work_id] = [None, None]
+            self._event("eager_admission", request_ids=(work.request_id,), admissions=1)
         return {"accepted": True}
 
     def step(self):

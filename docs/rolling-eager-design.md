@@ -1,5 +1,11 @@
 # Fixed-length Rolling Eager Continuation: shared protocol and Serial GPU adapter
 
+The [B16 repair record](rolling-eager-repairs.md) incorporates the returned raw
+Draft timeline and describes the separately testable A-only admission change.
+Batch enrollment now validates all work before one stable-state pool audit and
+publication. No audit result survives an owner command or KV mutation; token steps
+retain their before/after audits and queued feedback still takes priority.
+
 Stage 1 delivered the reusable CPU protocol at
 `e4076628b10ccb5fef712dabae645f712c32cb51`. Stage 2 connects that same protocol to
 the real Draft worker and an explicitly selected `serial-eager` fixed diagnostic

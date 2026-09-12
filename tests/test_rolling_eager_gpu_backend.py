@@ -134,6 +134,41 @@ def test_enrollment_has_no_gpu_work_and_batched_steps_materialize_bridge_correct
     assert backend.metrics.counters["eager_started"] == 2
 
 
+@pytest.mark.parametrize("invalid", ["version", "owner", "frontier", "duplicate"])
+def test_batch_enrollment_validates_all_before_publishing(phase4_config, invalid, monkeypatch):
+    backend, worker, core, prefixes = setup(phase4_config, count=2)
+    works = []
+    for rid in prefixes:
+        proposal = normal(backend, core, rid)
+        core.start_verification(rid, proposal.proposal_id)
+        works.append(core.begin_continuation(rid))
+    valid = list(works)
+    audits = []
+    monkeypatch.setattr(backend, "_gpu_audit", lambda *a, **kw: audits.append((a, kw)))
+    if invalid == "version":
+        works[-1] = replace(works[-1], prefix_version=1)
+    elif invalid == "owner":
+        works[-1] = replace(works[-1], owner_id="wrong")
+    elif invalid == "frontier":
+        backend.states[works[-1].request_id].materialized -= 1
+    else:
+        works[-1] = works[0]
+    before = len(worker.calls)
+    with pytest.raises(ValueError):
+        backend.begin_gpu_continuations(works)
+    assert not backend._gpu_continuations and not audits
+    assert backend.metrics.counters["eager_enrolled"] == 0
+    assert len(worker.calls) == before
+    if invalid == "frontier":
+        backend.states[valid[-1].request_id].materialized += 1
+    result = backend.begin_gpu_continuations(valid)
+    assert len(result) == 2 and len(audits) == 1
+    assert backend.begin_gpu_continuations(valid) == result
+    assert len(audits) == 1 and backend.metrics.counters["eager_enrolled"] == 2
+    backend.shutdown()
+    assert not worker.memory
+
+
 @pytest.mark.parametrize("target_first", [True, False])
 def test_real_backend_rolls_success_rejects_recovers_and_rolls_again(phase4_config, target_first):
     backend, worker, owner, _ = setup(phase4_config)

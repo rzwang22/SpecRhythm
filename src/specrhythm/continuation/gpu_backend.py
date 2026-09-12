@@ -90,14 +90,42 @@ same owner to process invalidation/termination ahead of the next token step.
         return job
 
     def begin_gpu_continuation(self, work: DraftWork):
+        return self.begin_gpu_continuations((work,))[work.work_id]
+
+    def begin_gpu_continuations(self, works):
+        """Validate the whole owner-local batch before publishing any enrollment.
+
+        Enrollment changes bookkeeping only, not KV/frontiers or the allocator.
+        One fresh pool/control audit covers this stable batch. Nothing is cached
+        across owner commands: stepping audits again, before and after KV writes.
+        """
+        works = tuple(works)
         self._gpu_check()
-        if work.work_id in self._gpu_continuations:
-            self._gpu_job(work)
-            return self.gpu_continuation_snapshot(work)
+        unique_ids([w.request_id for w in works])
+        unique_ids([w.work_id for w in works])
+        owners = {w.owner_id for w in works}
+        if self._gpu_owner_id is not None:
+            owners.add(self._gpu_owner_id)
+        if len(owners) > 1:
+            raise ValueError("GPU continuation belongs to another protocol owner")
+        pending = []
+        for work in works:
+            if work.work_id in self._gpu_continuations:
+                self._gpu_job(work)
+                continue
+            self._validate_gpu_admission(work)
+            pending.append(work)
+        if pending:
+            self._gpu_audit([w.request_id for w in pending], admitting=True)
+            for work in pending:
+                self._gpu_continuations[work.work_id] = _GPUContinuation(work)
+            self._gpu_owner_id = pending[0].owner_id
+            self.metrics.counters["eager_enrolled"] += len(pending)
+        return {w.work_id: self.gpu_continuation_snapshot(w) for w in works}
+
+    def _validate_gpu_admission(self, work):
         if work.work_id in self._gpu_retired:
             raise ValueError("retired GPU continuation cannot restart")
-        if self._gpu_owner_id is not None and work.owner_id != self._gpu_owner_id:
-            raise ValueError("GPU continuation belongs to another protocol owner")
         state = self.states[work.request_id]
         if (
             work.kind != "continuation" or not work.parent_proposal_id
@@ -116,11 +144,6 @@ same owner to process invalidation/termination ahead of the next token step.
             raise ValueError("GPU continuation exceeds model context capacity")
         if any(j.work.request_id == work.request_id for j in self._gpu_continuations.values()):
             raise ValueError("request already owns a future GPU continuation")
-        self._gpu_audit((work.request_id,), admitting=True)
-        self._gpu_owner_id = work.owner_id
-        self._gpu_continuations[work.work_id] = _GPUContinuation(work)
-        self.metrics.counters["eager_enrolled"] += 1
-        return self.gpu_continuation_snapshot(work)
 
     def step_gpu_continuation(self, work):
         return self.step_gpu_continuations((work,))[work.work_id]

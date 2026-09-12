@@ -1,4 +1,4 @@
-"""Characterize the existing late-launch path without optimizing its behavior.
+"""Regress batch admission and both arrival orders on the actual owner path.
 
 These are deterministic interleavings, not latency or GPU-overlap measurements.
 The real owner, continuation machine, S2 pool audit and physical worker adapter
@@ -47,7 +47,13 @@ class ObservedS2Backend(GPUContinuationBackendMixin, s2_draft.S2DraftBackend):
         self.hold_next_audit = False
         self.audit_entered = threading.Event()
         self.allow_audit = threading.Event()
+        self.step_completed = threading.Event()
         super().__init__(*args, **kwargs)
+
+    def step_gpu_continuations(self, works):
+        result = super().step_gpu_continuations(works)
+        self.step_completed.set()
+        return result
 
     def _audit(self):
         self.audit_calls += 1
@@ -114,24 +120,39 @@ def resident_owner(tmp_path, monkeypatch):
         assert not owner._thread.is_alive()
 
 
-def test_b16_admission_visits_the_360_request_pool_seventeen_times_before_first_forward(
-    resident_owner,
+@pytest.mark.parametrize("batch", [1, 4, 16])
+def test_admission_audits_once_then_step_rechecks_before_first_forward(
+    resident_owner, batch,
 ):
     case = resident_owner
     before_audits = case.backend.audit_calls
     before_visits = case.backend.prefix_visits
     case.worker.hold_first_eager = True
     receipt = case.owner.call("eager_enqueue", {
-        "requests": [verify_row(proposal) for proposal in case.proposals]
+        "requests": [verify_row(proposal) for proposal in case.proposals[:batch]]
     })
     assert receipt["enqueued"]
     assert case.worker.first_eager_entered.wait(2)
-    assert case.backend.audit_calls - before_audits == 16 + 1
-    assert case.backend.prefix_visits - before_visits == (16 + 1) * 360
-    assert case.owner.machine.counters["admissions"] == 16
+    assert case.backend.audit_calls - before_audits == 1 + 1
+    assert case.backend.prefix_visits - before_visits == (1 + 1) * 360
+    assert case.owner.machine.counters["admissions"] == batch
     assert case.owner.machine.counters["started"] == 0
     assert not [rows for purpose, rows in case.worker.calls if purpose == "eager"]
     case.worker.allow_first_eager.set()
+
+
+def test_owner_executes_eager_step_while_target_feedback_is_absent(resident_owner):
+    case = resident_owner
+    case.owner.call("eager_enqueue", {
+        "requests": [verify_row(proposal) for proposal in case.proposals]
+    })
+    assert case.backend.step_completed.wait(2)
+    # A response barrier observes the completed step; no parent receipt was sent.
+    case.owner.call("status", {})
+    assert case.owner.machine.counters["started"] == 16
+    assert case.owner.machine.counters["parent_full_accepts"] == 0
+    assert case.owner.machine.counters["parent_rejections"] == 0
+    assert any(purpose == "eager" for purpose, _ in case.worker.calls)
 
 
 @pytest.mark.parametrize("accepted_requests", [0, 5, 16])
