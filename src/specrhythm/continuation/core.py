@@ -17,6 +17,7 @@ from typing import Optional, Tuple
 from specrhythm.continuation.policy import (
     EagerDecision,
     EagerEligibilityProvider,
+    EagerRequestView,
     EagerStepContext,
 )
 from specrhythm.continuation.trace import TRACE
@@ -253,9 +254,10 @@ class RollingContinuation:
                         proposal_id=state.current_proposal_id,
                         history_proposals=len(state.proposals),
                         history_continuations=len(state.continuations),
-                        copied_history_objects=len(state.proposals)+len(state.continuations),
-                        prefix_tokens=len(state.committed_prefix), snapshot_kind="deepcopy"):
-            snapshot = copy.deepcopy(state)
+                        copied_history_objects=0,
+                        prefix_tokens=len(state.committed_prefix),
+                        snapshot_kind="immutable_request_identity"):
+            snapshot = EagerRequestView(state.request_id)
         with TRACE.span("eligibility_provider", request_id=request_id,
                         round_id=state.committed_prefix_version):
             decision = self.provider.evaluate(

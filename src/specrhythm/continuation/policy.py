@@ -12,7 +12,18 @@ from typing import FrozenSet, Protocol
 
 
 class EagerRequestState(Protocol):
-    """The only request field consumed by the static provider."""
+    """The request identity contract exposed to eligibility providers."""
+
+    request_id: str
+
+
+@dataclass(frozen=True)
+class EagerRequestView:
+    """Isolated provider input; no live state, prefix or historical objects.
+
+    Create a fresh view at each decision boundary. Provider decisions are not
+    cached: enabled/version changes still take effect at every original call.
+    """
 
     request_id: str
 

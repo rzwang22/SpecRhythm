@@ -14,7 +14,9 @@ Serial-eager B16。每个提交先 capacity 和三请求物理 GPU correctness�
 buffered-live/bound-prefix、setup 900s/drain 60s，并启用同一 bounded light causal。
 prefill 在窗口前、drain 在窗口后；窗口内等待及 checkpoint 不扣除。没有详细 profiler。
 
-将交付的两个 SHA 赋给变量后，前台入口如下（交付正文提供已填好版本）：
+观测 SHA 为 `33b6588004376e930ebabe1c9c768eca0b025371`。将交付的两个 SHA
+分别 **export** 为 `SR_LATENCY_OBSERVE_SHA` 和 `SR_LATENCY_FIX_SHA` 后，前台入口
+如下（交付正文提供在子 Bash 内填好两个 SHA 的版本，不需要预设环境变量）：
 
 ```bash
 if bash <<'BASH'
@@ -45,7 +47,7 @@ SVG 原生时间线及必要原始 runtime/backend/service 文件。每个原始
 
 脚本打印每个完整 root，形式为：
 `/root/autodl-tmp/SpecRhythm-data/results/rolling-eager/serial-latency-B16-SHA12-UTC-TAG`。
-需要单独查看或停止时，把**该次打印的完整 root** 赋给 `SR_FIXED_ROOT`，在同一 checkout
+需要单独查看或停止时，用 `export SR_FIXED_ROOT='该次打印的完整 root'`，在同一 checkout
 执行下列只作用于该 root 的命令。`status/errors/stop/bundle` 不会启动新性能点。
 
 ```bash

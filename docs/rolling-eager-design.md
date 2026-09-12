@@ -3,9 +3,16 @@
 The [A+B startup-latency diagnosis](rolling-eager-critical-path.md) supersedes the
 next gate below: A-only is historical; the returned A+B B16 result is valid PASS
 with 61.064 versus 38.163 tok/s and native overlap ZERO. The current observation
-revision preserves A+B algorithms and adds bounded causal CPU lanes plus retained
-native TP intervals. A separate immutable provider-view change targets repeated
+commit `33b6588004376e930ebabe1c9c768eca0b025371` preserves A+B algorithms and adds
+bounded causal CPU lanes plus retained native TP intervals. Its separate immutable
+provider-view change targets repeated
 history deepcopy only; no batch-gate, audit, feedback priority or fence is removed.
+Each evaluation now receives a fresh frozen `EagerRequestView(request_id)`, matching
+the provider's declared identity-only contract. No live state or history is exposed;
+provider calls, decision-version validation and enabled switches are unchanged.
+The public state snapshot API still returns defensive copies. The history regression
+guards against hot-path RequestState deepcopy while retaining all 129 decisions and
+160 committed tokens over 32 consecutive rolling rounds.
 See the [three-point repository runbook](rolling-eager-latency-runbook.md).
 
 The [B16 repair record](rolling-eager-repairs.md) incorporates the returned raw
@@ -17,8 +24,8 @@ A+B validates the entire settlement set before one ragged repair forward/fence,
 then publishes each request using its own materialized-token count. Promotion rows
 are excluded. Audits cover batch boundaries and each terminal release state change;
 all-ordinary batches delegate to the existing batched commit path. The default
-Serial/PingPong backends remain unchanged. [Separate B16 retests](rolling-eager-retest-runbook.md)
-are required before claiming GPU concurrency or throughput improvement.
+Serial/PingPong backends remain unchanged. The [earlier B16 retests](rolling-eager-retest-runbook.md)
+are a historical repair record; the next gate is the three-point latency runbook above.
 
 Stage 1 delivered the reusable CPU protocol at
 `e4076628b10ccb5fef712dabae645f712c32cb51`. Stage 2 connects that same protocol to

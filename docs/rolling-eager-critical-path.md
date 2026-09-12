@@ -80,7 +80,7 @@ P90 390.669–393.208 ms。旧日志只将 Queue.put 包含在 service received.
 对应首 forward 前 prefix+audit union 约为 52.139、46.788、48.383 ms，次数都是
 2 audits/720 prefix visits。启动延迟增长不能单靠这两次稳定审计解释。
 
-源码确认 `core.evaluate_eager_eligibility` 在调用 provider 前 deepcopy 整个
+基准源码确认 `core.evaluate_eager_eligibility` 在调用 provider 前 deepcopy 整个
 RequestState；`start_verification` 与 `begin_continuation` 各调用一次。parent receipt
 和 promotion 还分别调用；历史 proposals/continuations 没有在每轮删除，且各自保留
 长 prefix tuple，因此复制访问随轮数和 prefix 增长。当前 `EagerRequestState` provider
@@ -98,6 +98,8 @@ RequestState；`start_verification` 与 `begin_continuation` 各调用一次。p
 首次 forward 之前的历史复制成本。
 
 ## 观测提交：不改变 A+B 执行逻辑
+
+观测提交为 `33b6588004376e930ebabe1c9c768eca0b025371`，直接继承 A+B。
 
 `SR_EAGER_CAUSAL_TRACE=light` 启用默认关闭的有界内存记录，每进程最多 20000 行；
 没有逐 token 写盘、设备同步、跨模型 barrier 或为观测添加的锁。每条记录含 host
@@ -120,12 +122,37 @@ monotonic ns、PID/thread lane，request/round/proposal/continuation/batch 信�
 recovery/mixed 成本、所有 bounded causal spans。缺少 trace 不会被写成“零 CPU 成本”。
 混合批 GPU 时间不能任意分摊到 normal/recovery 请求。
 
-## 下一项最小修复及边界
+## 独立的最小修复及边界
 
 性能提交只把 provider 的整状态 deepcopy 替换为独立、冻结的 request identity view，
 满足现有公开 provider 契约；不暴露 RequestState 或可变历史，不缓存决策，不降低版本
 检查。仍在原来的调用点调用 provider，动态 enabled 开关及 decision_version 语义不变。
 公开 `state()` 防御性 snapshot、全部 KV/prefix/proposal/依赖审计保持。
+
+具体实现为 `policy.EagerRequestView(request_id)` 冻结 dataclass；`core` 每次重新
+构造，仅引用不可变字符串，不包含 prefix、proposals、continuations 或 accounting。
+provider 即使故意用 `object.__setattr__` 绕过冻结保护，也只能修改自己的新视图。
+provider 返回错误类型、版本倒退或同版本改变决策仍失败；更高版本的关闭/重开照常生效。
+
+执行顺序不变：enqueue/ACK → owner dequeue → 逐请求 start/begin 依赖与资格检查 →
+批量 enrollment 审计 → 第一次 eager GPU forward；期间已到达反馈仍优先处理。
+修复只将上述两处资格检查内部的整状态 deepcopy 换成固定字段视图，父反馈及 promotion
+的另两处也使用同一个视图路径。没有让 Target 等待首次起草，也没有改变 owner 队列、
+GPU launch、批量 materialize/fence 或批级 `WAITING_DRAFT` 的边界。
+
+32 轮真实 core 回归用 deepcopy guard 验证：历史继续增长、129 次 provider 调用保持，
+仅登记的公开返回值复制一次 RequestState；此后热路径不复制 RequestState。每个 snapshot
+的 copied_history_objects 都为 0，提交量仍为 160 tokens。独立 provider 隔离、版本及
+开关回归覆盖这次接口收窄；既有真实 owner/adapter 回归继续覆盖两种反馈顺序、拒绝恢复、
+bridge mismatch、迟到、取消、混合批 KV 修复、记账和清理。
+
+同一 32 轮 helper 的三次 CPU 样本中位数，观测版本 off/light 为
+202.799/199.657 ms，视图版本 off/light 为 9.241/11.571 ms，原始样本见
+[修复 CPU 记录](evidence/eager-eligibility-view-cpu.json)。这是少量、非交错配对的
+本机合成样本；观测版本的轻微倒挂说明噪声，不能宣称 light 免费。视图版本的 light
+样本约多 2.330 ms/32 轮，只覆盖这个 core helper，不涵盖生产 RPC、报告序列化或
+落盘成本。回归验收使用结构性复制 guard 和事件协调，不用这些耗时作脆弱阈值。
+服务器复制占比和 GPU 重叠改善仍为 PENDING。
 
 本轮不再合并更多审计、不新增增量 KV 校验、不移除 fence、不改批级恢复策略。它们是否
 仍为主要瓶颈，需要新同口径服务器时间线。正式吞吐点统一 buffered-live/bound-prefix
@@ -138,6 +165,12 @@ Ruff、两版本 compileall、287 个源/测试文件的 3.9 语法、12 个仓�
 8 个 Rolling Eager runbook Bash 块和 diff 检查通过。最后的批标识及父轮绑定补全
 还通过定点 owner/report 回归。首次全库因新建 venv 未放入 PATH 导致两项既有 shell
 测试找不到 `python`；补齐 PATH 后原断言通过，没有调整测试预算或放宽断言。
+
+视图修复版本本地验证：Python 3.11 全库 **2102 passed、3 个既有 skip**
+（256.13 秒）；Python 3.9 的同组相关回归与五个源码契约文件合并 **311 passed**
+（13.763 秒、零 skip）。Ruff 全库、两版本 compileall、287 文件的 3.9 语法、
+12 个 Bash 脚本、8 个 runbook Bash 块和 diff 检查通过。服务器 GPU 三点尚未执行。
+本地测试与 GitHub CI 分开报告；提交后的实际 CI 链接及状态见 PR 交付记录。
 CPU on/off 三次中位数 202.799/199.657 ms 落在此次样本噪声内，不能据此宣称观测
 零开销；服务器观测成本仍待仅观测点量化。
 

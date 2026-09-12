@@ -35,7 +35,7 @@ claims.
 | [#2 simulator-semantics-v0.2](https://github.com/rzwang22/SpecRhythm/pull/2) | frozen draft; Phase 2 complete, not merged | proposal lifecycle, deterministic tree oracle, tree-aware allocators, base-preserving residual controls, Phase-2 nested search pools and common-snapshot oracle replay, path-aware eager and accounting | pure-Python proxy and oracle upper bounds only; no deployable oracle, measured search cost, GPU integration, or performance claim |
 | [#3 gpu-integration-v0.1](https://github.com/rzwang22/SpecRhythm/pull/3) | draft; Phase 3B.1 and corrected-20 Phase 3C.2 complete; Phase 3C.3 corrected-100 awaiting server run | hardened multi-rank primitives, corrected R3-real traces, common-prefix replay, request-bootstrap statistics, 2x shell decomposition and diagnostic learned ranker | user-run 3×A800 correctness artifacts plus Mac CPU tests; no packed-tree/serving engine, Dual-Batch, SLO, calibrated latency or speedup claim |
 | [#4 vllm-serving-v0.1](https://github.com/rzwang22/SpecRhythm/pull/4) | Draft/Open/unmerged; S0 CLOSED/PASS; S1-P G0–G3 PASS at `5a00049`; S2 G1 at `24b31a9` reported zero process exits/clean cleanup but rejected terminal-tail overlap; S2-only contract refinement awaiting retest | independent prefilled-KV resident pool, dynamic Poisson arrival/admission, Target/Serial/PingPong and engineering SLO/goodput | CPU/source contracts are not GPU qualification; finite-trace ideal PD-delivery boundary only |
-| [#5 rolling-eager-v0.1](https://github.com/rzwang22/SpecRhythm/pull/5) | Draft/Open/unmerged; A-only CI 8/8 SUCCESS; A+B local gates PASS, GPU retest pending | shared continuation protocol, Serial-eager physical backend; separate batch-admission and batch-parent-repair commits, bounded attribution report | original B16 execution/measurement/cleanup PASS and valid negative result remain: native overlap ZERO, throughput 62.0773 → 18.6409 tok/s; new CPU results do not establish GPU benefit |
+| [#5 rolling-eager-v0.1](https://github.com/rzwang22/SpecRhythm/pull/5) | Draft/Open/unmerged; returned A+B B16 PASS; separate observation and immutable-view revisions, GPU retest pending | shared continuation protocol, Serial-eager batch admission/parent repair; bounded startup causality and identity-only eligibility view | original and A+B results remain valid negative results; A+B Serial/eager 61.064/38.163 tok/s, native overlap ZERO; new CPU results do not establish GPU benefit |
 
 ## Serial-eager startup latency after the returned A+B run
 
@@ -47,7 +47,8 @@ windows lies outside complete steps. These step durations are not Target GPU tim
 A+B batching is physically supported by 15 audits/step and one batched parent
 repair per step (~19.918 ms event sum); eager GPU work remains ~101.355 ms/step.
 
-The next revision adds bounded default-off causal host spans and a v2 exporter
+Observation commit `33b6588004376e930ebabe1c9c768eca0b025371` adds bounded default-off
+causal host spans and a v2 exporter
 that retains both Target ranks' native bounds, explicit request/parent/work joins,
 snapshot history counts, queue/feedback/batch-gate boundaries, and a disjoint
 coordinator wall-time partition. The returned v1 package omitted raw Target
@@ -56,8 +57,8 @@ but exact local Target timelines remain unavailable. No missing span is invented
 
 Source and a 32-round real-core CPU regression establish that provider evaluation
 deepcopies growing unrelated history four times per successful rolling round;
-its declared provider contract needs only request_id. A separate subsequent
-performance commit will use an isolated immutable identity view, preserving
+its declared provider contract needs only request_id. The separate performance
+revision uses an isolated immutable identity view, preserving
 decision versions and all A+B checks. No further audit, fence, feedback-priority
 or batch-recovery change is bundled with it. A-only is now historical, not a
 new retest target. [Latency diagnosis](rolling-eager-critical-path.md) and the
@@ -72,7 +73,20 @@ and diff checks pass. The two initial shell-test failures were missing `python`
 on PATH after creating a private test venv; the complete suite passes with the
 correct PATH and unchanged assertions. GPU execution remains operator-only.
 
-## Serial-eager B16 repairs awaiting operator GPU retest
+Immutable-view local gates: **2102 passed, 3 existing skips** on Python 3.11
+(256.13s), **311 passed** on Python 3.9 across the related regressions and all five
+source-contract files (13.763s, zero skips). Full Ruff, both compileall versions,
+287-file Python 3.9 grammar, 12 Bash scripts, eight runbook Bash blocks and diff
+checks pass. The 32-round guard preserves 129 evaluations and 160 committed tokens
+while forbidding RequestState history copies in the eligibility hot path; provider
+isolation, version regression and live switches are covered. Small CPU samples
+record light-mode overhead separately, without a server performance claim.
+Post-push GitHub CI is tracked independently in the PR delivery record.
+
+## Historical Serial-eager B16 batch repairs
+
+The A+B result has now returned; the startup-latency section above supersedes this
+earlier delivery's pending gate. A-only is retained as history, not a new test point.
 
 A-only `bbf12170118961a88244ae97af949eeee7d6028a` is committed and normally pushed.
 A+B additionally batches compatible parent KV repairs and settlement audits while
