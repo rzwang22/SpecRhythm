@@ -25,7 +25,8 @@ s2_schedulers = _s2
 fixed_schedulers = _fixed
 
 
-@pytest.mark.parametrize("case", ["refill", "wait_expiry", "operator_stop", "rpc_failure"])
+@pytest.mark.parametrize(
+    "case", ["refill", "warmup_refill", "wait_expiry", "operator_stop", "rpc_failure"])
 def test_actual_scan_refill_owner_and_full_batch_wait(
     fixed_schedulers, tmp_path, monkeypatch, case
 ):
@@ -37,7 +38,8 @@ def test_actual_scan_refill_owner_and_full_batch_wait(
     ids = list(scheduler.requests)
     definitions = [SimpleNamespace(request_id=rid, prompt_token_ids=(1, int(rid) + 1),
                                    prompt_length=2, maximum_new_tokens=256) for rid in ids]
-    opts = options(warmup_steps=2 if case == "refill" else 0, window_seconds=30,
+    refilling = case in ("refill", "warmup_refill")
+    opts = options(warmup_steps=2 if refilling else 0, window_seconds=30,
                    drain_timeout=60)
     m = manifest({"eos_token_ids": [999], "git_commit": "a" * 40}, ids, "sha", opts, 64)
     path = tmp_path / "s2-control.json"
@@ -48,6 +50,7 @@ def test_actual_scan_refill_owner_and_full_batch_wait(
     publish(path, {"barrier_ns": None,
                    "requests": {rid: {"state": "STAGED", "cohort": None} for rid in ids}})
     blocked, release = threading.Event(), threading.Event()
+    release_terminal = threading.Event()
     released, executed, admits, progress_while_refill = [], [], [], []
     real_sleep = time.sleep
     ticks = [time.monotonic_ns()]
@@ -72,13 +75,15 @@ def test_actual_scan_refill_owner_and_full_batch_wait(
 
         def materialize(self, rows, purpose):
             if purpose == "proposal" and rows[0].request_id == (
-                "sr-draft:64" if case == "refill" else "sr-draft:32"
+                "sr-draft:64" if refilling else "sr-draft:32"
             ):
                 blocked.set()
                 assert release.wait(10), "test failed to release CPU model"
             return super().materialize(rows, purpose)
 
         def release(self, rows):
+            if case == "warmup_refill" and "sr-draft:32" in rows:
+                assert release_terminal.wait(10), "third A step must precede terminal release"
             assert not set(rows) & set(released)
             released.extend(rows)
             return super().release(rows)
@@ -104,7 +109,7 @@ def test_actual_scan_refill_owner_and_full_batch_wait(
                 drain = tmp_path / "drain-state.json"
                 if drain.exists() and read_json(drain)["phase"] == "wait_owner":
                     release.set()
-                if blocked.is_set() and executed and case != "refill":
+                if blocked.is_set() and executed and not refilling:
                     if case == "operator_stop":
                         publish(tmp_path / "stop-request.json", {"reason": "operator_stop"})
                     if case == "rpc_failure":
@@ -148,7 +153,8 @@ def test_actual_scan_refill_owner_and_full_batch_wait(
             for rid in selected:
                 r = scheduler.requests[rid]
                 proposal = controller.claimed([rid])["claimed"][0]["proposal"]
-                terminal = case == "refill" and len(executed) == 5 and rid == "32"
+                terminal = (refilling and len(executed) ==
+                            (1 if case == "warmup_refill" else 5) and rid == "32")
                 # CPU Target correction; stop never fabricates natural EOS.
                 delta = [999 if terminal else 777]
                 commits.append({**commit_row(controller.machine, proposal, delta,
@@ -168,6 +174,8 @@ def test_actual_scan_refill_owner_and_full_batch_wait(
             controller.enqueue("commit_and_propose", commits)
             ticks[0] += 2_000_000_000
             executed.append(selected)
+            if case == "warmup_refill" and len(executed) == 3:
+                release_terminal.set()
             return outputs
 
         def abort_request(self, cancelled):
@@ -195,6 +203,7 @@ def test_actual_scan_refill_owner_and_full_batch_wait(
                                          m, definitions, tmp_path,
                                          selected_point("pingpong", 64), opts)
     finally:
+        release_terminal.set()
         release.set()
         # An injected RPC failure is intentionally failed, not a fabricated clean shutdown.
         if result is not None:
@@ -211,7 +220,7 @@ def test_actual_scan_refill_owner_and_full_batch_wait(
     assert all(r["resources_released"] for r in result["requests"])
     assert sum(len(r["generated_token_ids"]) - 1 for r in result["requests"]) == len(executed) * 32
     assert all(len(batch) == 32 for batch in executed)
-    if case == "refill":
+    if refilling:
         assert admits == ids[:65] and progress_while_refill
         assert sum(r["state"] == "FINISHED" for r in result["requests"]) == 1
         terminal = next(r for r in result["requests"] if r["request_id"] == "32")
@@ -226,3 +235,19 @@ def test_actual_scan_refill_owner_and_full_batch_wait(
             evidence = result["decode_scan"]["readiness"]
             assert evidence["closed_wait_ns"] >= 27 * 10**9
             assert evidence["wait_poll_count"] > 1
+
+    if case == "warmup_refill":
+        from specrhythm.serving.decode_scan_results import warmup_boundary
+
+        boundary = warmup_boundary(result, selected_point("pingpong", 64), opts)
+        sequence = "".join(s["cohort"] for s in boundary["steps"])
+        assert sequence.startswith("ABAA") and sequence.endswith("B")
+        assert boundary["completed_rotations"] == 2
+        assert boundary["historical_unpaired_steps"] and boundary["pending_step"] is None
+        assert boundary["committed_tokens_excluded"] == boundary["completed_steps"] * 32
+        assert all(s["end_ns"] <= result["measurement_start_ns"] for s in boundary["steps"])
+        snapshot = read_json(tmp_path / "measurement-snapshot.json")
+        assert snapshot["scan_warmup_boundary"] == boundary
+        assert snapshot["committed_window_tokens"] == snapshot["sample_count"] * 32
+        assert snapshot["sample_count"] + boundary["completed_steps"] == len(executed)
+        assert snapshot["window_ms"] >= 30000 and snapshot["drain_complete"]

@@ -314,8 +314,9 @@ def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5, 
                 break
             pop = population(clock, inflight)
             if scan and window.start_ns is None:
-                if window.ready(time.monotonic_ns(), population=pop):
-                    window.window_state.update(
+                boundary_population = dict(pop)
+                if window.warmup_rotations >= options["warmup_steps"]:
+                    boundary_population.update(
                         request_ids=[
                             rid for rid, r in clock.rows.items() if r["state"] == "ACTIVE"],
                         cohorts={c: [rid for rid, r in clock.rows.items()
@@ -324,6 +325,7 @@ def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5, 
                         inflight_request_ids=sorted(inflight),
                         next_cohort=getattr(scheduler, "selected_cohort", None),
                     )
+                if window.ready(time.monotonic_ns(), population=boundary_population):
                     # Keep the normal asynchronous pipeline; no new fence or proposal.
                     deadline = window.start_ns + int(
                         (options["window_seconds"] + options["drain_timeout"]) * 1e9)
@@ -333,7 +335,7 @@ def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5, 
                     })
                     publish_control(inflight)
                     checkpoint(directory, manifest, point, window, clock, steps, phases)
-                elif window.warmup_rotations >= options["warmup_steps"]:
+                elif window.warmup_rotations >= options["warmup_steps"] and window.pending is None:
                     # Restore the full starting population without extra warmup forwards.
                     time.sleep(0.0005)
                     continue
@@ -382,6 +384,9 @@ def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5, 
             require(len(scheduled) == 1, "diagnostic requires one scheduler step per engine step")
             row = scheduled[0]
             committed = False
+            if scan:
+                previous_lengths = {rid: len(clock.rows[rid]["generated_token_ids"])
+                                    for rid in row["request_ids"]}
             try:
                 with TIMERS.span("output_commit"):
                     commit_outputs(clock, outputs, packet, client, runtime_mode)
@@ -398,6 +403,9 @@ def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5, 
                         "population": pop,
                         "supply_phase": phase,
                         "output_commit_complete": committed,
+                        **({"committed_tokens": sum(
+                            len(clock.rows[rid]["generated_token_ids"]) - n
+                            for rid, n in previous_lengths.items())} if scan else {}),
                     }
                 )
             stopping = window.step_completed(

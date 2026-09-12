@@ -95,12 +95,19 @@ def test_actual_scheduler_all360_limits_and_partial_stop_before_forward(
         assert s.s2_steps[-1]["B"] == expected - 1
 
 
+def full_population(batch):
+    return dict(active_requests=batch, request_ids=[str(i) for i in range(batch)],
+                cohorts={"A": [str(i) for i in range(batch // 2)],
+                         "B": [str(i) for i in range(batch // 2, batch)]})
+
+
 def step(batch, i, *, grouped=False):
     half = batch // 2
     cohort = "AB"[i % 2] if grouped else None
     ids = range(half) if cohort == "A" else range(half, batch) if cohort == "B" else range(batch)
     return {
         "B": half if grouped else batch,
+        "committed_tokens": half if grouped else batch,
         "cohort": cohort,
         "request_ids": [str(r) for r in ids],
         "start_ns": i * 1_000_000_000 + 1,
@@ -113,11 +120,11 @@ def test_warmup_rotations_time_primary_and_partial_last_rotation(batch, grouped)
     opts = options(window_seconds=30)
     w = ScanWindow(opts, batch, grouped)
     for i in range(4 if grouped else 2):
-        assert not w.ready(i + 1, population={"active_requests": batch})
+        assert not w.ready(i + 1, population=full_population(batch))
         assert not w.step_completed(step(batch, i, grouped=grouped), (i + 1) * 1_000_000_000)
     assert w.warmup_rotations == 2 and w.samples == 0
     assert not w.ready(9_000_000_000, population={"active_requests": batch - 1})
-    assert w.ready(10_000_000_000, population={"active_requests": batch})
+    assert w.ready(10_000_000_000, population=full_population(batch))
     for i in range(29):
         assert not w.step_completed(step(batch, i, grouped=grouped), (11 + i) * 1_000_000_000)
     assert w.samples == 29  # Old 12-sample limit never applies.
@@ -129,7 +136,7 @@ def test_warmup_rotations_time_primary_and_partial_last_rotation(batch, grouped)
 
 def test_actual_time_overshoot_and_refill_gaps_are_not_removed():
     w = ScanWindow(options(warmup_steps=0, window_seconds=30), 16, False)
-    assert w.ready(1_000_000_000, population={"active_requests": 16})
+    assert w.ready(1_000_000_000, population=full_population(16))
     assert not w.time_expired(30_900_000_000)  # Last atomic step may issue.
     assert w.step_completed(step(16, 0), 31_400_000_000)
     assert w.samples == 1 and w.reason == "time_budget"
@@ -140,3 +147,34 @@ def test_actual_time_overshoot_and_refill_gaps_are_not_removed():
     damaged.append({"admission_ns": 1, "completion_ns": 2})
     with pytest.raises(DataError, match="ceiling"):
         full_load_fraction(damaged, 1, 31, 16)
+
+
+def test_ready_requires_current_closed_half_and_full_cohort_identity_at_start():
+    w = ScanWindow(options(), 16, True)
+    for i in range(4):
+        w.step_completed(step(16, i, grouped=True), (i + 1) * 10**9)
+    assert w.warmup_rotations == 2
+    pop = full_population(16)
+    bad = copy.deepcopy(pop)
+    bad["cohorts"]["B"].append(bad["cohorts"]["A"].pop())
+    assert not w.ready(5 * 10**9, population=bad)
+    bad = copy.deepcopy(pop)
+    bad["request_ids"][-1] = bad["request_ids"][0]
+    assert not w.ready(5 * 10**9, population=bad)
+    # A valid count alone cannot authorize a boundary with a current half.
+    w.step_completed(step(16, 4, grouped=True), 5 * 10**9)
+    assert not w.ready(6 * 10**9, population=pop)
+    assert w.warmup_boundary()["status"] == "NOT_OPEN"
+    assert w.warmup_boundary()["pending_step"] == 5
+    assert w.warmup_boundary()["historical_unpaired_steps"] == []
+
+
+def test_warmup_identity_reuse_and_partial_forward_remain_material_errors():
+    w = ScanWindow(options(), 16, True)
+    a, b = step(16, 0, grouped=True), step(16, 1, grouped=True)
+    w.step_completed(a, 10**9)
+    b["request_ids"] = a["request_ids"]
+    with pytest.raises(DataError, match="reused request identities"):
+        w.step_completed(b, 2 * 10**9)
+    with pytest.raises(DataError, match="partial batch"):
+        ScanWindow(options(), 16, True).step_completed({**a, "B": 7}, 10**9)

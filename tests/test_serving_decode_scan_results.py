@@ -10,7 +10,7 @@ from specrhythm.serving.decode_scan_results import timing
 from specrhythm.serving.decode_scan_window import ScanWindow
 
 
-def evidence(mode):
+def evidence(mode, warmup_sequence=None):
     p, opts = selected_point(mode, 16), options()
     grouped = mode == "pingpong"
     w = ScanWindow(opts, 16, grouped)
@@ -35,10 +35,14 @@ def evidence(mode):
     ]
     steps = []
     clock = 10_000
-    for index in range(35 if grouped else 17):
-        w.ready(clock, population={"active_requests": 16})
+    sequence = warmup_sequence or "ABAB"
+    for index in range(len(sequence) + 31 if grouped else 17):
+        w.ready(clock, population=dict(
+            active_requests=16, request_ids=[str(i) for i in range(16)],
+            cohorts={"A": [str(i) for i in range(8)], "B": [str(i) for i in range(8, 16)]}))
         measured = w.start_ns is not None
-        cohort = "AB"[index % 2] if grouped else None
+        cohort = (sequence[index] if index < len(sequence) else
+                  "AB"[(index - len(sequence)) % 2]) if grouped else None
         ids = [
             str(i)
             for i in (range(8) if cohort == "A" else range(8, 16) if cohort == "B" else range(16))
@@ -97,6 +101,7 @@ def evidence(mode):
             end_ns=clock + 1,
             window=measured,
             output_commit_complete=True,
+            committed_tokens=len(ids) * (1 if mode == "target" else 2),
             population=dict(held_slots=16, cohort_held={"A": 8, "B": 8}),
         )
         for d in devices:
@@ -180,3 +185,63 @@ def test_clean_pool_exhaustion_and_partial_prevention_keep_evidence_but_exclude(
     damaged["target_steps"][-1]["B"] = 15
     with pytest.raises(DataError, match="batch"):
         timing(damaged, b, p, opts)
+
+
+@pytest.mark.parametrize("sequence", ["ABAB", "ABAAB", "BABBA"])
+def test_real_window_to_qualifier_accepts_closed_warmup_after_historical_extra(sequence):
+    # Actual producer state, TP forwards/commits, and production timing validator.
+    # ABAAB reproduces f718: ready() opens at two rotations/pending=None,
+    # rotations() returns (2, 1), and timing() falsely rejects the closed boundary.
+    r, b, p, opts = evidence("pingpong", sequence)
+    assert r["warmup_steps"] == len(sequence)
+    assert r["decode_scan"]["warmup_rotations"] == 2
+    result = timing(r, b, p, opts)
+    assert result["measurement_status"] == "PASS"
+    assert result["target_steps"] == 31
+    assert result["committed_window_tokens"] == 31 * 8 * 2
+    assert result["partial_rotations"] == 1  # Legal end half, actual time/tokens.
+    boundary = result["scan_warmup_boundary"]
+    assert boundary["pending_step"] is None
+    assert boundary["historical_unpaired_steps"] == ([] if sequence == "ABAB" else [3])
+    assert "".join(s["cohort"] for s in boundary["steps"]) == sequence
+    assert boundary["committed_tokens_excluded"] == len(sequence) * 8 * 2
+    assert all(s["end_ns"] <= r["measurement_start_ns"] for s in boundary["steps"])
+    assert all("request_ids" not in s and "token_ids" not in s for s in boundary["steps"])
+
+
+@pytest.mark.parametrize("damage, message", [
+    ("missing", "mandatory warmup boundary"),
+    ("extra", "boundary evidence differs"),
+    ("time", "Target TP actual request-row"),
+    ("tokens", "warmup committed token/time"),
+    ("active", "full warmup/population"),
+    ("cohort_size", "full warmup/population"),
+    ("lifecycle", "active identities"),
+    ("half", "pending warmup half-rotation"),
+])
+def test_warmup_boundary_material_evidence_is_checked(damage, message):
+    r, b, p, opts = evidence("pingpong", "ABAAB")
+    boundary = r["decode_scan"]["warmup_boundary"]
+    if damage == "missing":
+        del r["decode_scan"]["warmup_boundary"]
+    elif damage == "extra":
+        boundary["historical_unpaired_steps"] = []
+    elif damage == "time":
+        r["target_steps"][2]["start_ns"] = r["target_steps"][1]["start_ns"]
+    elif damage == "tokens":
+        r["target_steps"][2]["committed_tokens"] += 1
+    elif damage == "active":
+        r["decode_scan"]["window_initial_population"]["active_requests"] -= 1
+    elif damage == "cohort_size":
+        pop = r["decode_scan"]["window_initial_population"]
+        pop["cohorts"]["B"].append(pop["cohorts"]["A"].pop())
+    elif damage == "lifecycle":
+        r["requests"][0]["completion_ns"] = r["measurement_start_ns"] - 1
+    else:
+        first = next(s for s in r["target_steps"] if s["window"])
+        first["window"] = False
+        r["warmup_steps"] += 1
+        r["measurement_start_ns"] = first["end_ns"] + 1
+        r["decode_scan"]["partial_rotations"] = []
+    with pytest.raises(DataError, match=message):
+        timing(r, b, p, opts)

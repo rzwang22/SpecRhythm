@@ -2,7 +2,8 @@
 
 This independent experiment extends the serving branch containing the `e78e4c7`
 bound-prefix alias repair. The `e39afc1` server scan has eight qualified points;
-the readiness repair described below is **GPU PENDING**. It does not reclassify
+f718 additionally passed PingPong B64 and Target/Serial B128. The warmup-boundary
+repair below is **GPU PENDING**. It does not reclassify
 older artifacts. PR #4 remains Draft/Open; PR #2/#3 are unchanged.
 
 ## Frozen experiment
@@ -60,8 +61,9 @@ through terminal drain until physical release evidence permits reuse.
 ## Window and full-batch contract
 
 Default warmup is two complete total-B rotations. Target/Serial use two full B
-steps; PingPong uses four full B/2 steps paired by opposite cohort and disjoint
-actual request IDs. State and tokens are retained. After warmup, any necessary
+steps; PingPong requires two opposite-cohort pairs of full B/2 steps with disjoint
+actual request IDs. This normally takes four steps; historical unpaired steps
+may occur during terminal/refill readiness and are retained as extra warmup. State and tokens are retained. After warmup, any necessary
 refill restores B active requests before the single measurement boundary. Waiting
 for terminal release at this boundary does not generate extra warmup steps.
 The normal pipeline state (active IDs/cohorts, next cohort, in-flight IDs) is
@@ -162,7 +164,7 @@ tests exercise success skipping, failure blocking and small inspection/export.
 Hardware computations/transports are substituted, not shutdown success or identity
 logic. Existing bounded-process, live UUID, logging and S1/S2 regressions remain.
 Pinned source contracts verify schedule-before-dispatch and non-deferred abort.
-The final CPU suite passes1836 tests, with3 platform/GPU opt-in skips; Ruff,
+The f718 CPU suite passed1836 tests, with3 platform/GPU opt-in skips; Ruff,
 compileall, Python3.9 grammar and Bash/diff checks pass. GPU capacity, sustained
 full batches and throughput still require the server run.
 
@@ -186,8 +188,8 @@ the real locked FIFO/claim method, `_accept_ready_result`, S2 decisions and Fixe
 guard with31 installed B proposals, one B request in flight and32 published A proposals. Unmodified e39
 collects1 and raises `ScanShapeStop(expected32, actual1)`. That exact distribution
 is a constructed reachable code regression, **not proven server state**: the
-small bundle omits scheduler/owner raw events. The optional narrow export in the
-runbook can establish the retained GPU distribution without another GPU run.
+small bundle omits scheduler/owner raw events. A narrow retained-event export could establish that old distribution without
+another GPU run; the current runbook targets the later warmup-boundary failure.
 
 Only `FixedPingScheduler` with `decode_scan_full_batch` opts into the new hooks:
 
@@ -251,3 +253,77 @@ new B64/B128 points must not silently be combined into one qualified scan.
 override and selects exactly one point (repeats1); only the B16 order prerequisite
 is waived. Its own capacity/prefill/identity/window/cleanup and previous-failure
 checks still execute. Default `run` / `--remaining` retains the B16 gate.
+
+
+## f718 warmup boundary false rejection and repair
+
+The provided failure bundle independently confirms PingPong B64 (133.30178191710988
+ tok/s), Target B128 (196.80361926493276) and Serial B128 (182.4389156587534) PASS.
+PingPong B128 has capacity/cleanup PASS and three zero process exit codes, but
+qualification FAILED/INVALID: `scan window did not start at a full warmup boundary`.
+Its unqualified snapshot has 27 full B64 steps,5100 window tokens in30029.949608 ms,
+32 total steps, time_budget stop and360 physical releases (~20.3s drain, no new
+proposal). These are retained execution facts, not a new qualified throughput.
+
+Before measurement_start=7590304133823108, five full-batch-ready host events occur:
+A7590298054593799, B7590299378241704, A7590300617059316,
+A7590302170109779, B7590303210931719. B's natural completion at7590300463929975
+is followed by physical release7590301603417345 and refill admission7590301603491946;
+readiness wait enters7590301768035065 and resumes with A7590302170109779.
+These scheduler timestamps precede forwards; they are not step end times.
+The small bundle lacks full warmup per-step token records; the new producer retains
+those directly. No further old-root export is needed to prove this counter defect.
+
+`fixed_runtime.drive → ScanWindow.step_completed/ready → decode_scan_results.timing`
+used two meanings of partial: runtime replaced the earlier repeated A and paired
+steps4+5, so two pairs were complete and pending=None; independent rotations()
+counted one historical unpaired step but the validator incorrectly used that
+aggregate as evidence of a pending half at the current boundary. The CPU
+producer-to-qualifier regression reproduces this exact error on unchanged f718:
+ABAB passes; ABAAB and its symmetric BABBA both fail at the same boundary check.
+Previously result fixtures alternated cohorts; the real release/refill integration
+placed the terminal after warmup. Neither crossed this extra-step warmup boundary.
+
+`pair_step` now defines the same chronological pairing for runtime and validation:
+an opposite cohort closes the pending half; a repeat supersedes the old half into
+historical-unpaired evidence. `ready` requires completed warmup, no current pending
+half, B distinct active IDs and, for PingPong, two disjoint full B/2 cohorts. It
+retains the normal in-flight/next-cohort state without waiting for both to be idle.
+The driver constructs this identity population before opening, and records actual
+committed-token deltas after commit_outputs. No proposal, readiness selection,
+barrier, batching, root accounting or timing boundary is changed.
+
+Qualification replays actual warmup steps through ScanWindow, checks full shapes,
+chronological times and token counts against real commits, and compares the entire
+compact boundary receipt. Start identities/cohorts must also match actual admission
+and natural-completion timestamps. Missing receipts, a current half, malformed full
+population, partial forwards, duplicate identities and accounting failures still
+block explicitly. Exactly two completed warmup rotations remain required for PASS;
+extra historical warmup steps do not count as additional rotations. A legal final
+measurement half remains measured using real elapsed time and commits.
+
+The new schema is `specrhythm.decode-scan-warmup-boundary.v1`, stored in
+runtime.decode_scan.warmup_boundary and snapshot/light-report.scan_warmup_boundary:
+status OPEN/NOT_OPEN, actual measurement_start_ns, required_complete_rotations,
+completed_rotations/steps, historical_unpaired_steps (one-based indices), pending_step
+at start, compact steps, committed_tokens_excluded and initial_population. Each
+warmup step records index/cohort/B/start_ns/end_ns/committed_tokens/request_ids_sha256;
+no token prefix, repeated resident list or KV structure is added. Historical extras
+are fully represented in these records. The existing10000 nonempty-step ceiling
+bounds memory/output; the10MiB small-bundle ceiling remains. No per-token log or
+extra synchronous flush is added. Snapshot evidence exists before risky drain and
+survives qualification failure; final flush/drain and first-error handling are intact.
+
+Tests now include actual coordinator→Fixed/S2/Dual scheduler→asynchronous owner→
+terminal KV release→refill→warmup boundary replay→all360 settlement. CPU-only model,
+transport and controlled thread/time interfaces replace hardware; production
+selection, claims, commits, cancellation and shutdown guards run unchanged. Result
+fixtures cover ABAAB/BABBA, token/time exclusion, full population, missing/tampered
+boundary and a final half; existing Target/Serial/fixed/S1/S2 checks remain.
+Only a new root's PingPong B128 and required capacity run are next. No old failure
+is rewritten; old PASS points retain their original commit/server provenance.
+
+Repair validation:72 focused scan regressions and1850 full CPU pytest tests pass
+(3 platform/GPU opt-in skips), including Phase4/S1/S2 and pinned source contracts.
+Ruff, compileall, Python3.9 grammar for247 files, Bash/runbook and diff checks PASS.
+Linux CI and the exact delivery commit are reported with the foreground commands.

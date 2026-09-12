@@ -102,10 +102,14 @@ def test_bad_point_stops_next_gpu_and_remains_excluded_and_bundleable(
     assert result["valid_comparison_points"] == 0
     assert len(result["points"]) == 12
     directory = root / "runs/target-16-decode"
+    from test_serving_decode_scan_results import evidence
+
+    boundary = evidence("pingpong", "ABAAB")[0]["decode_scan"]["warmup_boundary"]
     publish(
         directory / "measurement-snapshot.json",
         {
             "committed_window_tokens": 321,
+            "scan_warmup_boundary": boundary,
             "measurement_complete": False,
             "formal_comparison_eligible": False,
         },
@@ -119,6 +123,8 @@ def test_bad_point_stops_next_gpu_and_remains_excluded_and_bundleable(
         assert "runs/target-16-decode/measurement-snapshot.json" in names
         assert "runs/target-16-decode/diagnostic-primary-error.json" in names
         assert not any(n.endswith("target.log") for n in names)
+        snapshot = json.load(tar.extractfile("runs/target-16-decode/measurement-snapshot.json"))
+        assert snapshot["scan_warmup_boundary"] == boundary
     assert out.stat().st_size < 10 * 1024**2
 
 
@@ -171,7 +177,7 @@ def test_inspection_imports_neither_gpu_framework_nor_full_audit(root):
 def test_documented_failure_trap_preserves_first_rc_and_interactive_parent(tmp_path):
     text = (Path(__file__).resolve().parents[1] / "docs/decode-scan-runbook.md").read_text()
     code = re.findall(r"```bash\n(.*?)```", text, re.S)[0]
-    assert code.startswith("bash <<'BASH'\n") and code.rstrip().endswith("BASH")
+    assert code.startswith("if bash <<'BASH'\n") and code.rstrip().endswith("fi")
     trap = code[code.index("on_failure() {"):code.index("trap on_failure ERR")]
     child = (
         "set -Eeuo pipefail\nexport SR_FIXED_ROOT=/unused-cpu-fixture\n"
@@ -181,7 +187,10 @@ def test_documented_failure_trap_preserves_first_rc_and_interactive_parent(tmp_p
         # a bare `(exit 3)` subshell differently from a foreground command).
         + trap + "trap on_failure ERR\nsh -c 'exit 3'\necho GPU-NEXT-POINT\n"
     )
-    parent = "bash <<'CHILD'\n" + child + "CHILD\nrc=$?\nprintf 'parent-alive:%s\\n' \"$rc\"\n"
+    # Exercise the documented outer conditional under an already strict parent.
+    outer = code[code.index("then\n"):]
+    parent = ("set -e\nif bash <<'CHILD'\n" + child + "CHILD\n" + outer
+              + "printf 'parent-alive:%s\\n' \"$rc\"\n")
     out = subprocess.run(["bash"], input=parent, text=True, capture_output=True, timeout=5)
     assert out.returncode == 0 and "parent-alive:3" in out.stdout
     assert "GPU-NEXT-POINT" not in out.stdout

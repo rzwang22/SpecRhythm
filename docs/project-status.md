@@ -36,7 +36,35 @@ claims.
 | [#3 gpu-integration-v0.1](https://github.com/rzwang22/SpecRhythm/pull/3) | draft; Phase 3B.1 and corrected-20 Phase 3C.2 complete; Phase 3C.3 corrected-100 awaiting server run | hardened multi-rank primitives, corrected R3-real traces, common-prefix replay, request-bootstrap statistics, 2x shell decomposition and diagnostic learned ranker | user-run 3×A800 correctness artifacts plus Mac CPU tests; no packed-tree/serving engine, Dual-Batch, SLO, calibrated latency or speedup claim |
 | [#4 vllm-serving-v0.1](https://github.com/rzwang22/SpecRhythm/pull/4) | Draft/Open/unmerged; S0 CLOSED/PASS; S1-P G0–G3 PASS at `5a00049`; S2 G1 at `24b31a9` reported zero process exits/clean cleanup but rejected terminal-tail overlap; S2-only contract refinement awaiting retest | independent prefilled-KV resident pool, dynamic Poisson arrival/admission, Target/Serial/PingPong and engineering SLO/goodput | CPU/source contracts are not GPU qualification; finite-trace ideal PD-delivery boundary only |
 
-## Resident360 PingPong completion/refill repair (GPU retest PENDING)
+## Resident360 PingPong warmup boundary repair (GPU retest PENDING)
+
+Base f718ea4dd27848a34bc7fff92d7b906acfecec0d; its retained small bundle confirms
+PingPong B64, Target B128 and Serial B128 PASS. PingPong B128 remains FAILED/INVALID
+at warmup qualification, with zero process exits, clean360-request release,
+27 full B64 window steps,5100 committed tokens and30029.949608 ms. Its snapshot
+is excluded; the three valid points retain their original commit/server provenance.
+
+The real ABAAB warmup has two complete pairs, one historical extra A and no pending
+half at measurement start. Runtime accepted this boundary; qualification conflated
+historical partials with current pending state. Unmodified f718 CPU regressions
+reproduce the exact validator error for ABAAB/BABBA; ABAB passes. The repair shares
+the chronological pairing definition, records compact actual warmup step/time/token
+receipts and independently replays them with full population/lifecycle validation.
+Two complete rotations, full forwards and the continuous30s window remain required.
+The ready collection fix, scheduler, live UUID, KV/prefix/accounting, bounded drain,
+primary error and all original fixed/S1/S2 defaults are retained.
+
+The prior test gap was alternating-only result fixtures and terminal/refill after
+warmup in integration. New cases cross the real asynchronous release/refill boundary
+during warmup, retain historical steps in small bundles, and still reject actual
+half-starts, non-full populations and corrupted token/identity evidence.
+Local Python3.11 full pytest: **1850 passed,3 skipped** in223.21s; focused scan
+regressions:72 passed. Ruff, compileall, Python3.9 grammar (247 files), all Bash
+scripts/runbook blocks and git diff --check PASS. Linux CI is linked in the
+delivery. No AutoDL/GPU/full retained artifact audit was run. Next gate: only new-root PingPong B128 plus its capacity,
+using the foreground outer-if child-Bash runbook; no rerun of the three PASS points.
+
+## Resident360 PingPong completion/refill repair (historical f718 implementation)
 
 The retained e39afc1 scan confirms eight valid points: Target/Serial/PingPong at
 B16 and B32, plus Target/Serial B64. PingPong B64 execution and cleanup passed,

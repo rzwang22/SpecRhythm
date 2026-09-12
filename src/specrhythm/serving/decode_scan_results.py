@@ -9,6 +9,7 @@ from collections import Counter
 
 from specrhythm.serving.common import DataError, read_json, require
 from specrhythm.serving.decode_scan_plan import BOUNDARY, POOL_SIZE, SCHEMA
+from specrhythm.serving.decode_scan_window import ScanWindow, pair_step
 from specrhythm.serving.fixed_artifacts import retained_report
 from specrhythm.serving.fixed_identity import qualify as identity_checks
 from specrhythm.serving.fixed_logging import qualify as logging_checks
@@ -100,19 +101,50 @@ def rotations(steps, expected, mode):
         if s["B"] != expected:
             partial += 1
             continue
-        if mode != "pingpong":
-            complete += 1
-        elif pending is not None and pending["cohort"] != s["cohort"]:
-            require(
-                not (set(pending["request_ids"]) & set(s["request_ids"])),
-                "scan full rotation duplicates requests",
-            )
-            complete += 1
-            pending = None
-        else:
-            partial += int(pending is not None)
-            pending = s
+        rotation, historical, pending = pair_step(pending, s, mode == "pingpong")
+        complete += int(rotation is not None)
+        partial += int(historical is not None)
     return complete, partial + int(pending is not None)
+
+
+def warmup_boundary(runtime, point, opts):
+    """Replay actual full steps, not the historical-partial count, at the start boundary."""
+    scan, start = runtime["decode_scan"], runtime["measurement_start_ns"]
+    retained = scan.get("warmup_boundary")
+    require(isinstance(retained, dict), "scan mandatory warmup boundary evidence missing",
+            field="decode_scan.warmup_boundary", artifact="runtime.json")
+    replay = ScanWindow(opts, point["batch"], point["mode"] == "pingpong")
+    previous_end = runtime["start_ns"]
+    for row in runtime["target_steps"]:
+        if row["window"] or not row["B"]:
+            continue
+        require(previous_end <= row["start_ns"] < row["end_ns"],
+                "scan warmup step timestamps overlap or are invalid", actual=row["start_ns"])
+        replay.step_completed(row, row["end_ns"])
+        previous_end = row["end_ns"]
+    require(replay.warmup_rotations == scan["warmup_rotations"]
+            and replay.warmup_steps == runtime["warmup_steps"], "scan warmup evidence differs")
+    if start is not None:
+        require(replay.pending is None, "scan window start has a pending warmup half-rotation",
+                actual=replay.pending, artifact="runtime.json", field="target_steps")
+        population = scan["window_initial_population"]
+        require(isinstance(population, dict) and replay.ready(start, population=population),
+                "scan window start lacks required full warmup/population",
+                artifact="runtime.json", field="decode_scan.window_initial_population")
+        active = {r["request_id"]: r for r in runtime["requests"]
+                  if r.get("admission_ns") is not None and r["admission_ns"] <= start
+                  and (r.get("completion_ns") is None or start < r["completion_ns"])}
+        require(set(population["request_ids"]) == set(active),
+                "scan initial active identities differ from request lifecycle")
+        if point["mode"] == "pingpong":
+            require(all(set(population["cohorts"][c]) ==
+                        {rid for rid, r in active.items() if r["cohort"] == c}
+                        for c in ("A", "B")), "scan initial cohort identities differ")
+    expected = replay.warmup_boundary()
+    require(retained == expected, "scan warmup boundary evidence differs from actual steps",
+            artifact="runtime.json", field="decode_scan.warmup_boundary",
+            expected=expected, actual=retained)
+    return expected
 
 
 def timing(runtime, backend, point, opts):
@@ -159,6 +191,7 @@ def timing(runtime, backend, point, opts):
     final = {r["request_id"]: r for r in runtime["requests"]}
     total = roots = candidates = accepted = rejected = 0
     for s in all_steps:
+        step_tokens = 0
         require(
             0 <= s["B"] <= expected and len(set(s["request_ids"])) == s["B"],
             "scan actual batch ceiling/identity invalid",
@@ -222,6 +255,14 @@ def timing(runtime, backend, point, opts):
                 total += progress
                 roots += root
                 candidates += k
+            step_tokens += progress
+        if not s["window"] and s["B"]:
+            committed = sum(len(c["token_ids"]) for rid in s["request_ids"]
+                            for c in final[rid]["commits"]
+                            if s["start_ns"] <= c["timestamp_ns"] <= s["end_ns"])
+            require(s.get("committed_tokens") == step_tokens == committed,
+                    "scan warmup committed token/time accounting differs",
+                    expected=step_tokens, actual=s.get("committed_tokens"))
     tokens = sum(
         len(c["token_ids"])
         for r in final.values()
@@ -240,20 +281,7 @@ def timing(runtime, backend, point, opts):
         complete == len(scan["complete_rotations"]) and partial == len(scan["partial_rotations"]),
         "scan rotation evidence differs",
     )
-    warm_steps = [s for s in all_steps if not s["window"] and s["B"]]
-    warm_complete, warm_partial = rotations(warm_steps, expected, point["mode"])
-    require(
-        warm_complete == scan["warmup_rotations"] and len(warm_steps) == runtime["warmup_steps"],
-        "scan warmup evidence differs",
-    )
-    if start is not None:
-        population = scan["window_initial_population"]
-        require(
-            population["active_requests"] == point["batch"]
-            and len(set(population["request_ids"])) == point["batch"]
-            and not warm_partial,
-            "scan window did not start at a full warmup boundary",
-        )
+    boundary = warmup_boundary(runtime, point, opts)
     wall = (end - start) / 1e6 if start is not None else None
     reason = runtime["stop_reason"]
     full = bool(nonempty) and all(s["B"] == expected for s in nonempty)
@@ -292,6 +320,7 @@ def timing(runtime, backend, point, opts):
         "partial_rotations": partial,
         "warmup_rotations": scan["warmup_rotations"],
         "warmup_steps": runtime["warmup_steps"],
+        "scan_warmup_boundary": boundary,
         "root_positions": roots,
         "candidate_positions": candidates,
         "accepted_tokens": accepted,

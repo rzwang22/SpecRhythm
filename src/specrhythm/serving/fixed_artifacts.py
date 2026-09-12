@@ -96,6 +96,7 @@ def checkpoint(
         "formal_comparison_eligible": False,
         **({"scan_readiness": window.readiness.report()}
            if hasattr(window, "readiness") else {}),
+        **({"scan_warmup_boundary": window.warmup_boundary()} if point.get("scan") else {}),
     }
     publish(directory / "measurement-snapshot.json", value)
     return value

@@ -162,3 +162,19 @@ number only. `arithmetic_gap_critical_path_use=NOT_VALID` and
 time or remaining critical path, particularly with positive overlap.
 See [proof, boundaries and tests](fixed-identity-runtime-design.md) and
 [foreground runbook](fixed-identity-runtime-runbook.md). No old result is rewritten.
+
+
+## Resident360 scan warmup boundary extension (scan only)
+
+See `decode-scan-design.md` for the v1 boundary receipt. Atomic snapshot adds
+`scan_warmup_boundary`; final runtime adds `decode_scan.warmup_boundary`, and light
+qualification retains the same receipt. Full scan Target steps additionally carry
+`committed_tokens`, computed from actual post-commit cumulative-prefix deltas.
+The qualifier reconciles warmup deltas with step commits and physical Target rows.
+Historical unpaired warmup indices are distinct from pending-at-start. The receipt
+retains per-step cohort, actual times, B, token count and request-ID hash; all are
+excluded from window tokens and time. Counts/receipts have the existing10000-step
+and10MiB bundle bounds. OPEN is a runtime boundary fact, never a substitute for
+execution/measurement/cleanup PASS. Missing evidence is a material error for new
+runs. Failed/older snapshots are not migrated or qualified in place; fixed64/S1/S2
+schemas and default paths are unchanged.
