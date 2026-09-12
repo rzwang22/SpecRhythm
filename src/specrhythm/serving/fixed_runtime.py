@@ -207,9 +207,11 @@ def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5, 
         window_options["samples"] *= 2
         window_options["warmup_steps"] *= 2
     if scan:
+        from specrhythm.serving.decode_scan_readiness import ReadinessEvidence, ScanBatchWait
         from specrhythm.serving.decode_scan_window import ScanShapeStop, ScanWindow
 
         window = ScanWindow(window_options, active, grouped)
+        window.readiness = ReadinessEvidence()
     else:
         window = Window(window_options, initial_state=initial)
     last = None
@@ -225,7 +227,10 @@ def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5, 
             **clock.control(),
             **packet,
             "max_requests_per_target_forward": maximum_batch,
-            **({"decode_scan_full_batch": maximum_batch} if scan else {}),
+            **({"decode_scan_full_batch": maximum_batch,
+                "decode_scan_deadline_ns": (window.start_ns + int(
+                    options["window_seconds"] * 1e9)) if window.start_ns is not None else None
+                } if scan else {}),
             "diagnostic_phase": (
                 "drain" if window.end_ns else "measurement" if window.start_ns else "warmup"
             ),
@@ -238,8 +243,6 @@ def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5, 
     try:
         while not clock.complete and not probe:
             now = time.monotonic_ns()
-            if scan:
-                require(len(polls) < 10000, "scan polling evidence capacity exceeded")
             if scan and window.start_ns is None:
                 remaining(int(os.environ.get("SR_FIXED_SCAN_SETUP_DEADLINE_NS",
                                              int(observation_deadline * 1e9))))
@@ -261,7 +264,13 @@ def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5, 
                 actual=status.get("failures"),
             )
             inflight = set(status.get("inflight_request_ids", ()))
-            polls.append({"timestamp_ns": now, "inflight_request_ids": sorted(inflight)})
+            poll = {"timestamp_ns": now, "inflight_request_ids": sorted(inflight)}
+            if scan:
+                from specrhythm.serving.decode_scan_readiness import coalesce
+
+                coalesce(polls, poll)
+            else:
+                polls.append(poll)
             release_finished(clock, inflight)
             if scan and population(clock)["active_requests"] + len(clock.queue) < active:
                 window.reason = "pool_exhausted_before_window"
@@ -271,6 +280,8 @@ def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5, 
                     time.monotonic_ns(), busy_cohorts={clock.rows[r]["cohort"] for r in inflight}
                 )
             publish_control(inflight)
+            if scan:
+                window.readiness.lifecycle(clock)
             if admitted:
                 if initial and mode == "pingpong" and first_admission:
                     # Prepare A's real proposal, then submit B's real Draft immediately
@@ -330,7 +341,12 @@ def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5, 
                 "full-load" if pop["active_requests"] == active
                 else ("fill" if not steps else "tail")
             )
-            phases.append({"timestamp_ns": time.monotonic_ns(), "phase": phase, **pop})
+            phase_row = {"timestamp_ns": time.monotonic_ns(), "phase": phase, **pop}
+            # Wait polls must not generate unbounded copies of unchanged population.
+            if not scan or not phases or any(phases[-1].get(k) != v
+                                            for k, v in phase_row.items()
+                                            if k != "timestamp_ns"):
+                phases.append(phase_row)
             before = len(scheduler.s2_steps)
             start = time.monotonic_ns()
             if scan and window.time_expired(start):
@@ -339,11 +355,29 @@ def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5, 
                 with TIMERS.span("target_step"):
                     outputs = engine.step()
             except Exception as error:
+                if scan and isinstance(error, ScanBatchWait):
+                    require(len(scheduler.s2_steps) == before,
+                            "scan readiness wait occurred after stock scheduling")
+                    entering = window.readiness.waiting(error.evidence)
+                    if entering:
+                        checkpoint(directory, manifest, point, window, clock, steps, phases)
+                    if window.time_expired(time.monotonic_ns()):
+                        break
+                    # Backoff only; each retry returns through owner failure/status,
+                    # physical release and FIFO admission. The window never pauses.
+                    time.sleep(0.0005)
+                    continue
                 if not scan or not isinstance(error, ScanShapeStop):
                     raise
                 window.rejected_step = error.evidence
                 window.reason = "partial_batch_prevented"
                 break
+            if scan:
+                evidence = getattr(scheduler, "scan_readiness", None)
+                window.readiness.close(evidence["timestamp_ns"] if evidence else start,
+                                       "wait-resume")
+                if evidence is not None:
+                    coalesce(window.readiness.rows, {**evidence, "event": "full-batch-ready"})
             scheduled = scheduler.s2_steps[before:]
             require(len(scheduled) == 1, "diagnostic requires one scheduler step per engine step")
             row = scheduled[0]
@@ -378,6 +412,9 @@ def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5, 
         window.reason = window.reason or ("capacity_probe" if probe else
                                          "pool_exhausted_before_window" if scan else
                                          "all_naturally_completed")
+        if scan:
+            window.readiness.lifecycle(clock)
+            window.readiness.close(window.end_ns, "wait-stop:" + window.reason)
         # Stop submissions at this safe Target boundary. Work enqueued by the last
         # issued step is real work and remains charged through the drain below.
         clock._event("diagnostic-stop-submission", window.end_ns, reason=window.reason)
@@ -457,6 +494,9 @@ def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5, 
         record_error(directory, error, "measurement_or_drain")
         window.end_ns = window.end_ns or time.monotonic_ns()
         window.reason = window.reason or "execution_failure"
+        if scan:
+            window.readiness.lifecycle(clock)
+            window.readiness.close(window.end_ns, "wait-stop:execution_failure")
         try:
             checkpoint(
                 directory,

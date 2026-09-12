@@ -101,6 +101,7 @@ class ScanWindow:
 
     def evidence(self):
         return {
+            **({"readiness": self.readiness.report()} if hasattr(self, "readiness") else {}),
             "warmup_rotations": self.warmup_rotations,
             "complete_rotations": self.rotations,
             "partial_rotations": self.partial_rotations

@@ -94,6 +94,8 @@ def checkpoint(
             "owned process cleanup",
         ],
         "formal_comparison_eligible": False,
+        **({"scan_readiness": window.readiness.report()}
+           if hasattr(window, "readiness") else {}),
     }
     publish(directory / "measurement-snapshot.json", value)
     return value

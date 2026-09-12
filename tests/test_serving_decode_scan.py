@@ -42,6 +42,8 @@ def test_pool360_uses_unique_original_rows_and_same_frozen_order_across_points()
             {}, selection["request_ids"], digest([r.to_dict() for r in chosen]), options(), b
         )
         hashes.add(m["workload_sha256"])
+        assert m["fixed_diagnostic"]["pingpong_readiness_policy"] == (
+            "scan-global-fifo-full-cohort-v1")
         order.add(m["fixed_diagnostic"]["request_order_sha256"])
         assert m["actual_N"] == 360 and m["active_limit"] == b
         for mode, cap in m["fixed_diagnostic"]["capacity"].items():
@@ -79,12 +81,18 @@ def test_actual_scheduler_all360_limits_and_partial_stop_before_forward(
     packet["requests"]["0"]["state"] = "QUEUED"
     publish(path, packet)
     forwarded = []
-    with pytest.raises(ScanShapeStop) as caught:
+    from specrhythm.serving.decode_scan_readiness import ScanBatchWait
+
+    with pytest.raises(ScanBatchWait if mode == "pingpong" else ScanShapeStop) as caught:
         output = s.schedule()
         forwarded.append(output)  # Pinned EngineCore dispatch occurs only after schedule returns.
     assert not forwarded and not caught.value.evidence["model_forward_issued"]
-    assert caught.value.evidence["scheduled_batch"] == expected - 1
-    assert s.s2_steps[-1]["B"] == expected - 1
+    if mode == "pingpong":
+        assert caught.value.evidence["cohorts"]["A"]["active"] == expected - 1
+        assert s.current_step == 0 and not s.s2_steps
+    else:
+        assert caught.value.evidence["scheduled_batch"] == expected - 1
+        assert s.s2_steps[-1]["B"] == expected - 1
 
 
 def step(batch, i, *, grouped=False):

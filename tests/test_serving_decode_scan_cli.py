@@ -1,6 +1,7 @@
 """CPU scan orchestration: frozen twelve points, no reruns, failure retention/inspection."""
 
 import json
+import re
 import subprocess
 import sys
 import tarfile
@@ -128,6 +129,34 @@ def test_failed_capacity_is_not_ignored_before_decode(root, monkeypatch):
         cli.run(root, batch=16)
 
 
+def test_independent_single_point_waives_order_only_and_retains_failure_gates(root, monkeypatch):
+    invoked = []
+    monkeypatch.setattr(cli, "point_manifest", lambda root, b: root / f"execution-B{b}.json")
+
+    def run(root, p, *, probe, manifest_path):
+        assert p["test_order"] == "independent-single-point"
+        assert str(p["batch"]) in manifest_path.name
+        invoked.append((p["mode"], p["batch"], probe))
+        return report(root, p, probe=probe)
+
+    monkeypatch.setattr(cli, "run_point", run)
+    with pytest.raises(DataError, match="first finish"):
+        cli.run(root, batch=64, mode="pingpong")
+    with pytest.raises(DataError, match="explicit mode"):
+        cli.run(root, batch=64, single_point=True)
+    for probe in (True, False):
+        cli.run(root, batch=64, mode="pingpong", probe=probe, single_point=True)
+    for mode in MODES:
+        cli.run(root, batch=128, mode=mode, single_point=True)
+    assert invoked == [("pingpong", 64, True), ("pingpong", 64, False),
+                       *[(m, 128, False) for m in MODES]]
+    assert cli.summary(root)["valid_comparison_points"] == 4
+    report(root, selected_point("pingpong", 64), measurement="INSUFFICIENT")
+    with pytest.raises(DataError, match="do not auto-continue"):
+        cli.run(root, batch=128, mode="target", single_point=True)
+    assert len(invoked) == 5
+
+
 def test_inspection_imports_neither_gpu_framework_nor_full_audit(root):
     source = "import sys; from specrhythm.serving import decode_scan_cli as c; "
     source += f"from pathlib import Path; c.summary(Path({str(root)!r})); "
@@ -137,3 +166,24 @@ def test_inspection_imports_neither_gpu_framework_nor_full_audit(root):
     assert cli.main(["status", "--root", str(root)]) == 0
     assert cli.main(["errors", "--root", str(root)]) == 0
     assert read_json(root / "scan-config.json")["options"]["samples"] is None
+
+
+def test_documented_failure_trap_preserves_first_rc_and_interactive_parent(tmp_path):
+    text = (Path(__file__).resolve().parents[1] / "docs/decode-scan-runbook.md").read_text()
+    code = re.findall(r"```bash\n(.*?)```", text, re.S)[0]
+    assert code.startswith("bash <<'BASH'\n") and code.rstrip().endswith("BASH")
+    trap = code[code.index("on_failure() {"):code.index("trap on_failure ERR")]
+    child = (
+        "set -Eeuo pipefail\nexport SR_FIXED_ROOT=/unused-cpu-fixture\n"
+        # Replace inspection commands only; execute the actual documented trap body.
+        'bash() { printf "inspection:%s\\n" "$*"; return 44; }\n'
+        # Match the real CLI's external process exit (macOS Bash 3.2 treats
+        # a bare `(exit 3)` subshell differently from a foreground command).
+        + trap + "trap on_failure ERR\nsh -c 'exit 3'\necho GPU-NEXT-POINT\n"
+    )
+    parent = "bash <<'CHILD'\n" + child + "CHILD\nrc=$?\nprintf 'parent-alive:%s\\n' \"$rc\"\n"
+    out = subprocess.run(["bash"], input=parent, text=True, capture_output=True, timeout=5)
+    assert out.returncode == 0 and "parent-alive:3" in out.stdout
+    assert "GPU-NEXT-POINT" not in out.stdout
+    assert all("run_decode_scan.sh " + c in out.stdout
+               for c in ("status", "errors", "summary", "bundle"))

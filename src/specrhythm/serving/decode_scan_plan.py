@@ -119,6 +119,7 @@ def manifest(execution, ids, workload_sha, opts, batch):
                 "request_order_sha256": digest(ids),
                 "refill_rule": ("FIFO prepared requests; vacant nonbusy cohort, balance A then B"),
                 "bootstrap_terminal_rule": "skip natural setup terminals; record admissions",
+                "pingpong_readiness_policy": "scan-global-fifo-full-cohort-v1",
                 "restore": "fresh process/engine + all360 real prefill per point; no KV replay",
                 **POLICY,
             },

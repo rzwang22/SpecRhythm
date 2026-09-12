@@ -89,8 +89,10 @@ def successful(root, config):
     return good
 
 
-def run(root, *, batch=None, mode=None, remaining=False, probe=False):
+def run(root, *, batch=None, mode=None, remaining=False, probe=False, single_point=False):
     config = load(root)
+    require(not single_point or (mode is not None and batch in BATCHES and not remaining),
+            "single-point diagnostic requires explicit mode/batch and no --remaining")
     with root_lock(root):
         good = successful(root, config)
         probed = {
@@ -98,7 +100,7 @@ def run(root, *, batch=None, mode=None, remaining=False, probe=False):
             for r in point_reports(root)
             if is_probe(r) and r.get("valid") and r.get("cleanup_status") == "PASS"
         }
-        if not probe and (remaining or batch != BATCHES[0]):
+        if not probe and not single_point and (remaining or batch != BATCHES[0]):
             require(
                 all(
                     (m, BATCHES[0], r) in good
@@ -112,6 +114,8 @@ def run(root, *, batch=None, mode=None, remaining=False, probe=False):
             for p in config["points"]
             if (remaining or p["batch"] == batch) and (mode is None or p["mode"] == mode)
         ]
+        require(not single_point or len(points) == 1,
+                "single-point diagnostic requires exactly one point (repeats=1)")
         require(points, "no scan points selected")
         results = []
         for p in points:
@@ -127,7 +131,9 @@ def run(root, *, batch=None, mode=None, remaining=False, probe=False):
                 flush=True,
             )
             directory, value = run_point(
-                root, p, probe=probe, manifest_path=point_manifest(root, p["batch"])
+                root, {**p, **({"test_order": "independent-single-point"}
+                              if single_point else {})},
+                probe=probe, manifest_path=point_manifest(root, p["batch"])
             )
             require(
                 value.get("valid")
@@ -308,6 +314,8 @@ def main(argv=None):
     p.add_argument("--batch", type=int, choices=BATCHES, default=16)
     p.add_argument("--mode", choices=MODES)
     p.add_argument("--remaining", action="store_true")
+    p.add_argument("--single-point", action="store_true",
+                   help="explicit one-point diagnostic: waive only the B16 order prerequisite")
     p.add_argument("--observation", choices=("buffered-live",), default="buffered-live")
     p.add_argument("--identity-matching", choices=("bound-prefix",), default="bound-prefix")
     p.add_argument("--selection-seed", type=int, default=1666)
@@ -343,6 +351,7 @@ def main(argv=None):
                 mode=args.mode,
                 remaining=args.remaining,
                 probe=args.command == "capacity",
+                single_point=args.single_point,
             )
         elif args.command == "summary":
             value = summary(root)

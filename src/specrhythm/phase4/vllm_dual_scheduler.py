@@ -126,6 +126,7 @@ class DualBatchScheduler(Scheduler):
             for request in self.running
         )
         available = max(0, self._dual_microbatch_size - already_ready)
+        available = self._ready_poll_limit(available)
         if self._dual_resident and self._dual_setup_ready is None:
             available = 0
         if (
@@ -179,6 +180,7 @@ class DualBatchScheduler(Scheduler):
             str(request.request_id): self._decision_for(request)
             for request in self.requests.values()
         }
+        self._before_stock_schedule(available, len(response.get("ready", ())))
 
         # The independent pinned-vLLM scheduler patch invokes
         # _request_admissible_for_schedule immediately before stock allocation.
@@ -272,6 +274,13 @@ class DualBatchScheduler(Scheduler):
         self._dual_retired_ready_events.clear()
         self._dual_cycle_id += 1
         return output
+
+    def _ready_poll_limit(self, available: int) -> int:
+        """Default path retains the original single-microbatch collection quota."""
+        return available
+
+    def _before_stock_schedule(self, available: int, collected: int) -> None:
+        """Optional independent diagnostic gate, before any stock mutation."""
 
     def _request_admissible_for_schedule(self, request: Any) -> bool:
         """Pinned scheduler hook; default stock schedulers have no such hook."""

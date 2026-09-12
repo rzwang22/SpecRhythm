@@ -36,6 +36,41 @@ claims.
 | [#3 gpu-integration-v0.1](https://github.com/rzwang22/SpecRhythm/pull/3) | draft; Phase 3B.1 and corrected-20 Phase 3C.2 complete; Phase 3C.3 corrected-100 awaiting server run | hardened multi-rank primitives, corrected R3-real traces, common-prefix replay, request-bootstrap statistics, 2x shell decomposition and diagnostic learned ranker | user-run 3×A800 correctness artifacts plus Mac CPU tests; no packed-tree/serving engine, Dual-Batch, SLO, calibrated latency or speedup claim |
 | [#4 vllm-serving-v0.1](https://github.com/rzwang22/SpecRhythm/pull/4) | Draft/Open/unmerged; S0 CLOSED/PASS; S1-P G0–G3 PASS at `5a00049`; S2 G1 at `24b31a9` reported zero process exits/clean cleanup but rejected terminal-tail overlap; S2-only contract refinement awaiting retest | independent prefilled-KV resident pool, dynamic Poisson arrival/admission, Target/Serial/PingPong and engineering SLO/goodput | CPU/source contracts are not GPU qualification; finite-trace ideal PD-delivery boundary only |
 
+## Resident360 PingPong completion/refill repair (GPU retest PENDING)
+
+The retained e39afc1 scan confirms eight valid points: Target/Serial/PingPong at
+B16 and B32, plus Target/Serial B64. PingPong B64 execution and cleanup passed,
+but a pre-forward selection of1 instead of32 stopped after3780.603119 ms/462 tokens.
+It remains INSUFFICIENT and excluded. The pool was not exhausted: one natural
+completion, one B refill,295 queued, all360 settled and no owned process remained.
+
+A CPU regression on unmodified e39afc1 reproduces the global-ready-count versus
+single-cohort FIFO quota mismatch. The fixed scan-only hooks collect the finite
+published FIFO independently of verification quota and wait before stock allocation
+when the selected cohort is incomplete. Real release/refill continues between polls;
+all waiting remains inside the original30s window. The final partial guard, old
+S1/S2/fixed64 defaults, live UUID and actual token/KV/dependency checks remain.
+The exact server ready distribution still needs the optional narrow raw-event export;
+the constructed31+1 CPU distribution is not asserted as server fact.
+
+New regressions join actual scheduler, ready claims, asynchronous owner, private KV,
+natural terminal/refill, window expiry and360-request shutdown rather than testing
+the scheduler/owner only in isolation. Compact bounded wait evidence is retained
+in snapshots/light reports. The explicit single-point order override enables a new
+root's PingPong B64 without borrowing historical B16 PASS files. Foreground strict
+mode/ERR trap lives inside a child Bash, preserving the interactive terminal.
+
+Final local Python3.11 full pytest on byte-identical source/tests: **1836 passed,
+3 skipped** (234.34s), including Phase4/S1/S2 and pinned source contracts. Ruff,
+compileall, Python3.9 grammar for247 files, Bash/runbook checks and diff checks
+pass. Exact-commit Linux CI status is recorded in the delivery. No AutoDL,
+GPU or full CPU offline audit was run. PR #4 stays Draft/Open, unmerged; PR #2/#3
+are untouched. Next gate: new root, capacity + PingPong B64 single point, then only
+on PASS B128 Target → Serial → PingPong. No automatic old-point reruns. All scan
+PingPong B values use the repair; old B16/B32 need remeasurement only if a uniform
+new-commit performance table is required. Preserve all old roots and labels.
+See [design/schema](decode-scan-design.md) and [foreground runbook](decode-scan-runbook.md).
+
 ## Resident360 fixed-batch/time decode scan (GPU PENDING)
 
 Independent `specrhythm-decode-scan` / `run_decode_scan.sh` implements the requested

@@ -89,4 +89,70 @@ class FixedSerialScheduler(FixedBatch, S2SerialScheduler):
 
 
 class FixedPingScheduler(FixedBatch, S2PingScheduler):
-    pass
+    def _ready_poll_limit(self, available):
+        if self.s2_control.get("decode_scan_full_batch") is not None:
+            # poll_ready is a global FIFO, not cohort-filtered. Drain published
+            # results independently of the verification batch quota. At most one
+            # result per prepared request; retired results use the same validated
+            # discard path. No wait for work in flight and no new proposal.
+            return len(self._dual_expected_ids)
+        return super()._ready_poll_limit(available)
+
+    def _before_stock_schedule(self, available, collected):
+        expected = self.s2_control.get("decode_scan_full_batch")
+        if expected is None:
+            return super()._before_stock_schedule(available, collected)
+        from specrhythm.serving.decode_scan_readiness import ScanBatchWait
+
+        states = self.s2_control["requests"]
+        counts = {c: dict(active=0, held=0, drafting=0, ready=0, verifiable=0)
+                  for c in ("A", "B")}
+        for rid, row in states.items():
+            c = row["cohort"]
+            if c in counts:
+                counts[c]["active"] += row["state"] == "ACTIVE"
+                counts[c]["held"] += row["state"] in ("ACTIVE", "FINISHED") and not row.get(
+                    "resources_released", False)
+                counts[c]["drafting"] += rid in self._dual_drafting
+        for snapshot, decision in self._dual_decisions.values():
+            row = states[snapshot.stable_request_id]
+            if row["state"] == "ACTIVE":
+                c = row["cohort"]
+                require(c in counts, "scan active request lacks a valid cohort",
+                        request_id=snapshot.stable_request_id)
+                counts[c]["ready"] += snapshot.state.value in (
+                    "VERIFY_READY", "TARGET_TAIL_READY")
+                counts[c]["verifiable"] += decision.admissible
+        now = time.monotonic_ns()
+        selected = counts[self.selected_cohort]
+        deadline = self.s2_control.get("decode_scan_deadline_ns")
+        reason = None
+        if deadline is not None and now >= deadline:
+            reason = "time_budget"
+        elif selected["active"] < expected:
+            reason = "release_or_refill_pending"
+        elif selected["drafting"]:
+            reason = "draft_inflight"
+        elif selected["verifiable"] < expected:
+            # poll_ready atomically returns all published results AND in-flight
+            # IDs. With a full active cohort and no owner work, a missing/invalid
+            # proposal is a state-contract error, not an ordinary timed wait.
+            require(False, "scan full idle cohort lacks verifiable proposals",
+                    selected_cohort=self.selected_cohort, actual=counts,
+                    ready_poll_quota=available, ready_collected=collected,
+                    reason="cohort_ready_state_inconsistent")
+        require(all(r["active"] <= expected for r in counts.values()),
+                "scan cohort active capacity exceeded", actual=counts)
+        evidence = {"timestamp_ns": now, "selected_cohort": self.selected_cohort,
+                    "cohorts": counts, "expected_batch": expected,
+                    "verifiable_scope": "current S2 selected-cohort admissibility",
+                    "ready_poll_quota": available, "ready_collected": collected,
+                    "ready_poll_scope": "entire prepared request pool; FIFO",
+                    "reason": reason, "stock_allocation_issued": False,
+                    "model_forward_issued": False}
+        self.scan_readiness = evidence
+        if reason:
+            # S2's cohort decision cache is cycle-scoped. A wait is a new poll
+            # next time, despite not advancing the stock scheduler's current_step.
+            self._dual_cycle_id += 1
+            raise ScanBatchWait(evidence)

@@ -43,3 +43,31 @@ def test_scan_stop_occurs_before_model_dispatch_and_abort_uses_non_deferred_free
     free = method(source / "v1/core/sched/scheduler.py", "Scheduler", "_free_request_blocks")
     assert "if not self.defer_block_free or" in free
     assert "self.kv_cache_manager.free(request)" in free
+
+
+def test_inproc_wait_unwinds_before_post_step_and_output_mutation(source):
+    import ast
+    from types import SimpleNamespace
+
+    import pytest
+
+    from specrhythm.serving.decode_scan_readiness import ScanBatchWait
+
+    # Execute the pinned InprocClient get_output body, not a hand-written approximation.
+    text = method(source / "v1/engine/core_client.py", "InprocClient", "get_output")
+    tree = ast.parse("from __future__ import annotations\n" + text)
+    scope = {}
+    exec(compile(tree, "pinned-get_output", "exec"), scope)
+    after = []
+
+    def wait():
+        raise ScanBatchWait({"reason": "draft_inflight"})
+
+    owner = SimpleNamespace(engine_core=SimpleNamespace(
+        step_fn=wait, post_step=lambda **kw: after.append(kw)))
+    with pytest.raises(ScanBatchWait):
+        scope["get_output"](owner)
+    assert not after
+    llm = method(source / "v1/engine/llm_engine.py", "LLMEngine", "step")
+    assert llm.index("self.engine_core.get_output()") < llm.index(
+        "self.output_processor.process_outputs(")

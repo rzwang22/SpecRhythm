@@ -171,7 +171,7 @@ def fixed_schedulers(s2_schedulers, monkeypatch, tmp_path):
     }.items():
         monkeypatch.setenv(key, val)
 
-    def build(mode, matching, *, batch=64, n=100):
+    def build(mode, matching, *, batch=64, n=100, ready_ids=None, bootstrap_only=False):
         definitions[:] = [SimpleNamespace(request_id=str(i), prompt_token_ids=(1, i + 1))
                           for i in range(n)]
         monkeypatch.setenv("SR_PHASE4_REQUEST_COUNT", str(n))
@@ -195,14 +195,15 @@ def fixed_schedulers(s2_schedulers, monkeypatch, tmp_path):
         scheduler.requests = {str(i): Request(str(i), (1, i + 1)) for i in range(n)}
         scheduler.running = list(scheduler.requests.values())
         for row in scheduler.requests.values():
-            row.all_token_ids.append(20)
-            row.num_output_tokens = 2
-            row.num_computed_tokens = 3
+            if not bootstrap_only:
+                row.all_token_ids.append(20)
+            row.num_output_tokens = 1 if bootstrap_only else 2
+            row.num_computed_tokens = 2 if bootstrap_only else 3
             row.spec_token_ids = [] if mode == "target" or grouped else [11, 12, 13, 14]
         scheduler.kv_cache_manager = SimpleNamespace(get_block_ids=lambda i: [[int(i) + 1]])
         if grouped:
             scheduler._bind_vllm_requests()
-            for i in range(batch):
+            for i in (range(batch) if ready_ids is None else ready_ids):
                 row = scheduler.requests[str(i)]
                 scheduler._accept_ready_result(proposal_result(
                     str(i), prefix=tuple(row.all_token_ids), tokens=(11, 12, 13, 14)

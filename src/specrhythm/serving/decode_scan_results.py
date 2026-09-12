@@ -311,6 +311,7 @@ def timing(runtime, backend, point, opts):
         ],
         "window_initial_population": scan["window_initial_population"],
         "rejected_step": scan["rejected_step"],
+        "scan_readiness": scan.get("readiness"),
         "drain_ms": (runtime["end_ns"] - end) / 1e6,
         "full_execution_ms": runtime.get("engine_and_execution_host_ms"),
     }
