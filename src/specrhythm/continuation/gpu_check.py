@@ -68,14 +68,14 @@ def run_checks(backend, requests, *, eos_token_ids, vocab_size, snapshot=physica
         events.append(event)
         checkpoint(event)
 
-    def normal(rid):
-        work = core.schedule_normal_recovery(rid)
-        plan = DraftProposalPlan(rid, backend.states[rid].next_round,
-                                 work.dependency_prefix, work.candidate_length, eos_token_ids)
-        tokens = backend.propose_many((plan,))[rid]
-        return core.record_normal_completion(work, DraftCompletion(
-            work.work_id, tokens, backend.states[rid].materialized
-        ))
+    def normal_many(request_ids):
+        works = {rid: core.schedule_normal_recovery(rid) for rid in request_ids}
+        tokens = backend.propose_many(tuple(DraftProposalPlan(
+            rid, backend.states[rid].next_round, work.dependency_prefix,
+            work.candidate_length, eos_token_ids) for rid, work in works.items()))
+        return {rid: core.record_normal_completion(work, DraftCompletion(
+            work.work_id, tokens[rid], backend.states[rid].materialized))
+            for rid, work in works.items()}
 
     def compare(proposal, stage):
         ref = f"gpu-check-reference:{proposal.request_id}:{stage}"
@@ -105,23 +105,28 @@ def run_checks(backend, requests, *, eos_token_ids, vocab_size, snapshot=physica
                       eos_token_ids=eos_token_ids)
         backend.initialize(rid, prefix)
     record({"event": "initialized", "physical": snapshot(backend)})
-    for rid in ids:
-        proposal = normal(rid)
-        for stage, construction in enumerate(CASES):
+    proposals = normal_many(ids)
+    for stage in range(len(CASES)):
+        if not proposals:
+            break
+        works, currents = {}, {}
+        for rid, proposal in proposals.items():
             compare(proposal, stage)
-            current = core.state(rid)
+            currents[rid] = core.state(rid)
             core.start_verification(rid, proposal.proposal_id)
             work = core.begin_continuation(rid)
-            completion = None
             if work is not None:
-                backend.begin_gpu_continuation(work)
-                # One real fenced step makes the predicted bridge available.
-                completion = backend.step_gpu_continuation(work)
-                branch = backend.gpu_continuation_snapshot(work)
-                bridge = branch["generated_tokens"][0]
-            else:
-                # Legal EOS/tail has no continuation. Never invent extra candidates.
-                bridge = None
+                works[rid] = work
+        backend.begin_gpu_continuations(tuple(works.values()))
+        completions = backend.step_gpu_continuations(tuple(works.values())) if works else {}
+        pending = []
+        for rid, proposal in proposals.items():
+            # Offset the same seven-case cycle to exercise mixed parent outcomes
+            # in one physical batch, while retaining each request's case counts.
+            construction = CASES[(stage + 3*ids.index(rid)) % len(CASES)]
+            current, work = currents[rid], works.get(rid)
+            bridge = (backend.gpu_continuation_snapshot(work)["generated_tokens"][0]
+                      if work is not None else None)
             terminal = None
             if proposal.tokens and proposal.tokens[-1] in eos_token_ids:
                 delta, terminal = proposal.tokens, "eos"
@@ -168,40 +173,50 @@ def run_checks(backend, requests, *, eos_token_ids, vocab_size, snapshot=physica
                 token_prefix_hash(proposal.parent_prefix + delta), terminal is not None,
                 len(decision.target_correction_token_ids), len(decision.target_bonus_token_ids),
             )
-            if stage % 2:
+            pending.append((rid, construction, receipt, plan, work, terminal))
+        if stage % 2:
+            for _, _, receipt, _, _, _ in pending:
                 core.resolve_parent_verification(receipt)
-            if work is not None:
-                for _ in range(5):
-                    if completion is not None:
-                        break
-                    completion = backend.step_gpu_continuation(work)
-                require(completion is not None, "bounded K4 GPU continuation did not finish")
-                core.record_continuation_completion(work, completion)
-            if not stage % 2:
+        for _ in range(4):
+            if all(c is not None for c in completions.values()):
+                break
+            completions = backend.step_gpu_continuations(tuple(works.values()))
+        require(all(c is not None for c in completions.values()),
+                "bounded K4 GPU continuation did not finish")
+        for work in works.values():
+            core.record_continuation_completion(work, completions[work.work_id])
+        if not stage % 2:
+            for _, _, receipt, _, _, _ in pending:
                 core.resolve_parent_verification(receipt)
-            next_proposal = None
+        next_proposals, settlements = {}, []
+        for rid, _, _, plan, work, terminal in pending:
+            promoted = None
             if not terminal and work is not None and (
                 core.continuation(rid, work.work_id).status == "promotable"
             ):
-                next_proposal = core.promote_continuation(rid, work.work_id)
-            physical = backend.rebase_gpu_parent(
-                plan, work=work,
-                promoted_tokens=None if next_proposal is None else next_proposal.tokens,
-            )
+                promoted = core.promote_continuation(rid, work.work_id)
+                next_proposals[rid] = promoted
+            settlements.append((plan, work, promoted.tokens if promoted else None))
+        physical_results = backend.rebase_gpu_parents(settlements)
+        recovery = []
+        for rid, construction, _, _plan, work, terminal in pending:
             observed[construction] += int(terminal is None and work is not None)
             record({
                 "event": "controlled_parent_settlement", "request_id": rid, "stage": stage,
                 "construction": construction, "receipt_source": "INJECTED_DIAGNOSTIC",
                 "target_observation": False, "target_first": bool(stage % 2),
-                "terminal_reason": terminal, "promoted": next_proposal is not None,
-                "accounting": asdict(core.state(rid).accounting), "physical": physical,
-                "snapshot": snapshot(backend),
+                "terminal_reason": terminal, "promoted": rid in next_proposals,
+                "accounting": asdict(core.state(rid).accounting),
+                "physical": physical_results[rid], "snapshot": snapshot(backend),
+                "settlement_batch_request_ids": [p.request_id for p, _, _ in settlements],
             })
-            if terminal:
-                break
-            proposal = next_proposal if next_proposal is not None else normal(rid)
+            if not terminal and rid not in next_proposals:
+                recovery.append(rid)
+        next_proposals.update(normal_many(recovery))
+        proposals = next_proposals
+    for rid in ids:
         core.finish_or_cancel(rid)
-        backend.finish_many((rid,))
+    backend.finish_many(ids)
     core.shutdown()
     require(not backend.states, "GPU correctness left live request KV")
     return {

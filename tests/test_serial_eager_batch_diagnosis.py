@@ -1,4 +1,4 @@
-"""Characterize current B16 settlement batching, without changing runtime behavior.
+"""Regress B16 settlement batching and equality with the ordinary Serial backend.
 
 Real baseline/eager machines and backends use independently stored, fenced CPU KV.
 Call counts describe this controlled case; they are not timings or GPU measurements.
@@ -17,7 +17,7 @@ from specrhythm.phase4.vllm_draft_backend import VllmBatchedDraftBackend
 from specrhythm.serving.eager_machine import EagerSerialMachine
 
 
-def test_b16_mixed_settlement_is_batched_in_serial_but_singleton_in_eager():
+def test_b16_mixed_settlement_repairs_one_batch_and_reuses_promotions():
     prefixes = {f"request-{index:02d}": (10, 20 + index) for index in range(16)}
     request_ids = tuple(prefixes)
     promoted_ids, rejected_ids, mismatch_ids = request_ids[:5], request_ids[5:13], request_ids[13:]
@@ -89,22 +89,22 @@ def test_b16_mixed_settlement_is_batched_in_serial_but_singleton_in_eager():
         assert [(purpose, len(rows)) for purpose, rows in serial_calls] == (
             [("commit", 16)] + [("proposal", 16)] * 3
         )
-        # Current behavior: eleven separate repairs, then one combined recovery group.
+        # One repair batch excludes the five already materialized promotions.
         assert [(purpose, len(rows)) for purpose, rows in eager_calls] == (
-            [("commit", 1)] * 11 + [("proposal", 11)] * 3
+            [("commit", 11)] + [("proposal", 11)] * 3
         )
-        repairs = [rows[0] for purpose, rows in eager_calls if purpose == "commit"]
+        repairs = [row for purpose, rows in eager_calls if purpose == "commit" for row in rows]
         assert [row.request_id for row in repairs] == [f"sr-draft:{rid}" for rid in repair_ids]
         assert all(row.context == final_prefixes[rid] and len(row.suffix) == 1
                    for rid, row in zip(repair_ids, repairs))
         assert eager_backend.metrics.syncs - before_syncs == Counter({
-            "eager_abort": 11, "eager_parent_settlement": 16, "eager_rebase_complete": 11,
+            "eager_abort": 11, "eager_parent_settlement": 1, "eager_rebase_complete": 1,
             "bulk_token_d2h": 4, "proposal_complete": 1,
         })
         assert serial_backend.metrics.syncs["commit_complete"] == 1
         assert eager_backend.metrics.syncs["eager_step_complete"] == 5
         assert serial_backend.report()["draft_model_forward_count"] == 7
-        assert eager_backend.report()["draft_model_forward_count"] == 22
+        assert eager_backend.report()["draft_model_forward_count"] == 12
 
         serial_next = {row["request_id"]: row for row in serial_result["proposals"]}
         eager_next = {row["request_id"]: row for row in eager_result["proposals"]}

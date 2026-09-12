@@ -3,7 +3,7 @@
 补充原始 Draft 报告已返回并复核：[两项修复及新证据](rolling-eager-repairs.md)。
 它确认 63 个 starts 全在父轮反馈后、780 次审计及 156 次 B1 repair。本文件下文
 保留初次小包诊断时的证据边界；其中“尚缺原始记录”由该补充记录更新，而旧结果
-继续是 PASS 和有效负性能结果。A-only 已开始合并批量 admission 的重复审计。
+继续是 PASS 和有效负性能结果。A-only 合并批量 admission 的重复审计，A+B 再合并父轮修复；两次独立复测尚待服务器执行。
 
 诊断对象是 `4a6725b054990e47b7e9c4cf63f38b995d029856`，不是 GPU correctness
 小测试。结论边界：**生产运行确实没有记录到 eager/Target GPU 重叠；源码存在

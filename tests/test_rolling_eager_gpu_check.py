@@ -60,6 +60,24 @@ def test_real_backend_and_core_coordinate_both_receipt_orders_and_repair():
     device.shutdown()
 
 
+def test_three_request_physical_check_exercises_mixed_batch_settlement():
+    device = backend()
+    result = run_checks(device, [
+        {'request_id': f'r-{i}', 'prefix': (10, 20+i), 'remaining_output_tokens': 64}
+        for i in range(3)
+    ], eos_token_ids=(), vocab_size=100, snapshot=physical)
+    mixed = [r for r in result['events'] if r.get('stage') == 2]
+    assert {r['construction'] for r in mixed} == {
+        'success', 'parent_rejected', 'bridge_mismatch'}
+    assert all(len(r['settlement_batch_request_ids']) == 3 for r in mixed)
+    assert len(result['reference_comparisons']) == 21
+    assert all(r['exact'] for r in result['reference_comparisons'])
+    assert device.metrics.batches['commit'][2] > 0
+    assert device.metrics.batches['eager'][3] > 0
+    assert not device.states and not device._gpu_continuations
+    device.shutdown()
+
+
 @pytest.mark.parametrize("remaining", [1, 2, 5, 6, 9])
 def test_real_check_keeps_legal_length_and_tail_without_forcing_k4(remaining):
     device = backend()

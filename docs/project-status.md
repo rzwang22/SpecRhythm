@@ -35,9 +35,18 @@ claims.
 | [#2 simulator-semantics-v0.2](https://github.com/rzwang22/SpecRhythm/pull/2) | frozen draft; Phase 2 complete, not merged | proposal lifecycle, deterministic tree oracle, tree-aware allocators, base-preserving residual controls, Phase-2 nested search pools and common-snapshot oracle replay, path-aware eager and accounting | pure-Python proxy and oracle upper bounds only; no deployable oracle, measured search cost, GPU integration, or performance claim |
 | [#3 gpu-integration-v0.1](https://github.com/rzwang22/SpecRhythm/pull/3) | draft; Phase 3B.1 and corrected-20 Phase 3C.2 complete; Phase 3C.3 corrected-100 awaiting server run | hardened multi-rank primitives, corrected R3-real traces, common-prefix replay, request-bootstrap statistics, 2x shell decomposition and diagnostic learned ranker | user-run 3×A800 correctness artifacts plus Mac CPU tests; no packed-tree/serving engine, Dual-Batch, SLO, calibrated latency or speedup claim |
 | [#4 vllm-serving-v0.1](https://github.com/rzwang22/SpecRhythm/pull/4) | Draft/Open/unmerged; S0 CLOSED/PASS; S1-P G0–G3 PASS at `5a00049`; S2 G1 at `24b31a9` reported zero process exits/clean cleanup but rejected terminal-tail overlap; S2-only contract refinement awaiting retest | independent prefilled-KV resident pool, dynamic Poisson arrival/admission, Target/Serial/PingPong and engineering SLO/goodput | CPU/source contracts are not GPU qualification; finite-trace ideal PD-delivery boundary only |
-| [#5 rolling-eager-v0.1](https://github.com/rzwang22/SpecRhythm/pull/5) | Draft/Open/unmerged; stage-2 CI 8/8 PASS; operator B16 execution/measurement/cleanup PASS, valid negative eager result; diagnosis awaiting raw evidence export | shared continuation protocol, Serial-eager physical backend, bounded offline evidence export and diagnosis regressions | physical Draft regression PASS; native eager/Target overlap ZERO, throughput 62.0773 → 18.6409 tok/s; no performance fix or PingPong GPU mixing in diagnosis |
+| [#5 rolling-eager-v0.1](https://github.com/rzwang22/SpecRhythm/pull/5) | Draft/Open/unmerged; A-only CI 8/8 SUCCESS; A+B local gates PASS, GPU retest pending | shared continuation protocol, Serial-eager physical backend; separate batch-admission and batch-parent-repair commits, bounded attribution report | original B16 execution/measurement/cleanup PASS and valid negative result remain: native overlap ZERO, throughput 62.0773 → 18.6409 tok/s; new CPU results do not establish GPU benefit |
 
-## Serial-eager B16 negative-performance diagnosis
+## Serial-eager B16 repairs awaiting operator GPU retest
+
+A-only `bbf12170118961a88244ae97af949eeee7d6028a` is committed and normally pushed.
+A+B additionally batches compatible parent KV repairs and settlement audits while
+preserving promotion, per-request accounting, ordinary fallback, terminal release
+checks and failure fencing. The GPU correctness entry now exercises three-request
+mixed physical batches outside performance measurement. The [two-commit runbook](rolling-eager-retest-runbook.md)
+uses separate new roots and a Serial B16 control at each SHA, with first-failure
+export/stop and an interactive parent shell. New GPU evidence is PENDING; original
+PASS/negative results remain unchanged.
 
 The next repair iteration has verified the returned 149732487-byte raw Draft
 report (SHA256 `b769720b2c0e5520a76f07ba01dbc4c8aefe2d6a2a52a56fed3b2dead78f006a`).
@@ -51,6 +60,20 @@ A-only local gates: **2068 passed, 3 existing skips** in the Python 3.11 full
 suite (247.388s); **235 passed, zero skips** on Python 3.9 related tests and source
 contracts. Ruff, compileall, 277-file Python 3.9 grammar, 11 Bash scripts and
 Rolling Eager runbook blocks pass. No inference/measurement default was changed.
+A-only GitHub push/pull-request CI is **8/8 SUCCESS**, verified with Draft/Open
+unchanged. A+B local gates: Python 3.11 full suite **2083 passed, 3 existing skips**
+(329.106s), Python 3.9 related/source suite **250 passed, zero skips** (9.578s).
+Ruff, both-version compileall, 279-file Python 3.9 grammar, 11 Bash scripts,
+4 Rolling Eager runbook blocks and diff checks pass. The runbook's six tests
+execute substituted commands in the real parent/child Bash structure and prove
+first-failure export/stop at correctness, Serial, eager or attribution stages.
+Post-push A+B CI is reported separately at delivery. No local GPU execution.
+
+## Historical diagnosis at 6ee3260 (before the raw Draft return and repairs)
+
+The record below describes the evidence limits and next gate at the diagnosis
+commit. The returned raw evidence and the current repair gate are recorded above;
+the original measured result and its PASS status have not been changed.
 
 The user-run result at `4a6725b054990e47b7e9c4cf63f38b995d029856` is retained as
 valid: both B16 points pass execution, measurement and cleanup on the same frozen

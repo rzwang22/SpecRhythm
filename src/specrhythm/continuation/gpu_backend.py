@@ -73,7 +73,7 @@ same owner to process invalidation/termination ahead of the next token step.
         if self._gpu_writing:
             raise RuntimeError("GPU KV mutation attempted before the active write fence")
 
-    def _gpu_audit(self, request_ids=(), *, admitting=False):
+    def _gpu_audit(self, request_ids=(), *, admitting=False, settling=False):
         audit = getattr(self, "_audit", None)
         if audit is not None:
             packet = audit()
@@ -81,6 +81,11 @@ same owner to process invalidation/termination ahead of the next token step.
                 packet["requests"][rid]["state"] != "ACTIVE" for rid in request_ids
             ):
                 raise ValueError("eager GPU work requires admitted ACTIVE requests")
+            if settling and any(
+                packet["requests"][rid]["state"] not in ("ACTIVE", "FINISHED")
+                for rid in request_ids
+            ):
+                raise ValueError("S2 Draft commit before admission")
 
     def _gpu_job(self, work):
         self._gpu_check()
@@ -267,31 +272,31 @@ same owner to process invalidation/termination ahead of the next token step.
         self, plan: DraftCommitPlan, *, work=None,
         promoted_tokens: Optional[Tuple[int, ...]] = None,
     ):
-        """Apply a core-authorized parent settlement to the physical allocation.
+        return self.rebase_gpu_parents(((plan, work, promoted_tokens),))[plan.request_id]
 
-        Promotion is the sole extended-frontier path: validate full acceptance,
-        exact bridge, full branch identity, completion and candidate content.
-        Otherwise crop logically to accepted parent KV and overwrite only the
-        missing correction/bonus suffix. This never relaxes commit_frontier.
-        """
-        self._gpu_check()
-        key = (plan.request_id, plan.round_id)
-        fingerprint = _digest((plan, work, promoted_tokens))
-        old = self._gpu_rebases.get(key)
-        if old is not None:
-            if old[0] != fingerprint:
-                raise ValueError("conflicting duplicate GPU parent settlement")
-            return dict(old[1])
+    def _prepare_gpu_parent(self, plan, work, promoted_tokens):
+        """Pure per-request validation/row planning; no KV or ledger publication."""
+        state = self.states[plan.request_id]
+        if len(plan.final_prefix) > self.max_model_len:
+            raise ValueError("GPU settlement exceeds model context")
         if work is None:
             if promoted_tokens is not None:
                 raise ValueError("GPU promotion requires its physical continuation work")
             if any(j.work.request_id == plan.request_id for j in self._gpu_continuations.values()):
                 raise ValueError("GPU parent settlement omitted its active continuation")
-            result = super().commit_many((plan,))[plan.request_id]
-            self._gpu_rebases[key] = (fingerprint, dict(result))
-            return result
+            terminal_tail = (state.proposal is None and not plan.proposal and plan.terminal
+                             and len(plan.target_tail) == 1 and plan.accepted == 0)
+            if (state.next_round != plan.round_id or state.prefix != plan.parent_prefix
+                    or (state.proposal != plan.proposal and not terminal_tail)):
+                raise ValueError("stale Draft commit proposal/prefix/round")
+            valid = commit_frontier(plan, state.materialized)
+            refresh = (valid == len(plan.final_prefix) and not plan.terminal
+                       and valid != state.materialized)
+            frontier = valid - int(refresh)
+            row = (DraftMaterialization(state.internal_id, plan.final_prefix, frontier)
+                   if frontier < len(plan.final_prefix) else None)
+            return row, valid, refresh
         job = self._gpu_job(work)
-        state = self.states[plan.request_id]
         if (
             work.request_id != plan.request_id or work.prefix_version != plan.round_id
             or state.next_round != plan.round_id or state.prefix != plan.parent_prefix
@@ -305,8 +310,6 @@ same owner to process invalidation/termination ahead of the next token step.
             commit_frontier(plan, state.materialized)
         if state.materialized != expected:
             raise ValueError("GPU extended frontier lacks matching worker progress evidence")
-        if len(plan.final_prefix) > self.max_model_len:
-            raise ValueError("GPU settlement exceeds model context")
         if promoted_tokens is not None:
             promoted_tokens = token_tuple(promoted_tokens)
             if (
@@ -317,58 +320,128 @@ same owner to process invalidation/termination ahead of the next token step.
                 or plan.final_prefix != work.dependency_prefix + tuple(job.generated[:1])
             ):
                 raise ValueError("GPU continuation is not valid for physical promotion")
-        self._gpu_audit()
+            return None, state.materialized, False
+        valid = min(state.materialized, len(plan.parent_prefix) + plan.accepted)
+        row = None
+        if valid < len(plan.final_prefix) or not plan.terminal:
+            # Preserve the existing shortened-frontier logit refresh rule.
+            frontier = valid - int(valid == len(plan.final_prefix))
+            row = DraftMaterialization(state.internal_id, plan.final_prefix, frontier)
+        return row, valid, False
+
+    def rebase_gpu_parents(self, settlements):
+        """Validate together, materialize compatible repair rows once, then publish.
+
+        Same owner/model/allocator, ragged suffixes, and per-row frontier evidence
+        are shared with the ordinary backend. The worker enforces its existing
+        sequence/token limits; no silent B1 fallback or partial publication.
+        """
+        self._gpu_check()
+        settlements = tuple(settlements)
+        unique_ids([p.request_id for p, _, _ in settlements])
+        result, prepared = {}, []
+        for plan, work, tokens in settlements:
+            fingerprint = _digest((plan, work, tokens))
+            key = (plan.request_id, plan.round_id)
+            old = self._gpu_rebases.get(key)
+            if old is not None:
+                if old[0] != fingerprint:
+                    raise ValueError("conflicting duplicate GPU parent settlement")
+                result[plan.request_id] = dict(old[1])
+                continue
+            row, valid, refresh = self._prepare_gpu_parent(plan, work, tokens)
+            prepared.append((plan, work, tokens, row, valid, refresh, fingerprint))
+        if not prepared:
+            return result
+        if all(work is None for _, work, *_ in prepared):
+            # Eager disabled/tail-only batches keep the ordinary batched path,
+            # including its S2 admission audits and baseline commit_frontier.
+            ordinary = super().commit_many([p for p, *_ in prepared])
+            for plan, _, _, row, _, _, fingerprint in prepared:
+                value = {**ordinary[plan.request_id],
+                         "materialized_query_tokens": len(row.suffix) if row else 0}
+                self._gpu_rebases[(plan.request_id, plan.round_id)] = (fingerprint, dict(value))
+                result[plan.request_id] = value
+            return result
+        self._gpu_audit([p.request_id for p, *_ in prepared], settling=True)
         try:
             self.worker.fence("eager_parent_settlement")
-            snapshot = self.gpu_continuation_snapshot(work)
-            if promoted_tokens is None:
-                self.abort_gpu_continuation(work)
-                snapshot["aborted"] = True
-                valid = min(state.materialized, len(plan.parent_prefix) + plan.accepted)
-                if valid < len(plan.final_prefix) or not plan.terminal:
-                    # Recompute last-position logits if the accepted prefix is
-                    # shortened without a tail. Cached deeper logits are invalid.
-                    if valid == len(plan.final_prefix):
-                        valid -= 1
-                    row = DraftMaterialization(state.internal_id, plan.final_prefix, valid)
-                    state.next_logits = None
-                    self._gpu_writing = True
-                    logits = self.worker.materialize((row,), "commit")
-                    self.worker.fence("eager_rebase_complete")
-                    self._gpu_writing = False
-                    state.next_logits = logits[state.internal_id]
-                    self.metrics.counters["eager_rebase_materialized_tokens"] += len(row.suffix)
-                state.materialized = len(plan.final_prefix)
-                if plan.terminal:
-                    state.next_logits = None
-                state.proposal = None
-                self.metrics.counters["eager_discarded_tokens"] += len(job.generated)
-            else:
-                state.proposal = promoted_tokens
-                self.metrics.counters["eager_promoted"] += 1
-                self.metrics.counters["eager_promoted_candidates"] += len(promoted_tokens)
-            state.prefix = plan.final_prefix
-            state.next_round += 1
-            self.metrics.counters["commits"] += 1
-            self.metrics.counters["correction_tokens"] += plan.correction_count
-            self.metrics.counters["bonus_tokens"] += plan.bonus_count
-            self.metrics.counters["invalidated_tokens"] += len(plan.proposal) - plan.accepted
-            retired = self._gpu_retire(
-                work, "promoted" if promoted_tokens is not None else "discarded", snapshot
-            )
-            result = {
-                "materialized_kv_length": state.materialized,
-                "committed_prefix_hash": token_prefix_hash(state.prefix),
-                "continuation": {**snapshot, "retired": retired["retired"]},
-                "promoted_candidates": len(promoted_tokens or ()),
-                **self.worker.request_evidence(state.internal_id),
-            }
-            if plan.terminal:
-                # No further logits are consumed. Fenced release frees the whole
-                # private allocation, including invalid speculative high water.
-                self.finish_many((plan.request_id,))
+            snapshots = {}
+            for plan, work, tokens, *_ in prepared:
+                if work is not None:
+                    snapshots[plan.request_id] = self.gpu_continuation_snapshot(work)
+                    job = self._gpu_job(work)
+                    if tokens is None:
+                        # The shared fence above covers these bookkeeping aborts.
+                        if not job.aborted:
+                            job.aborted = True
+                            self.metrics.counters["eager_aborted"] += 1
+                        snapshots[plan.request_id]["aborted"] = True
+            rows = [row for _, _, _, row, *_ in prepared if row is not None]
+            logits = {}
+            if rows:
+                self._gpu_writing = True
+                for plan, _, _, row, *_ in prepared:
+                    if row is not None:
+                        self.states[plan.request_id].next_logits = None
+                logits = self.worker.materialize(rows, "commit")
+                self.worker.fence("eager_rebase_complete")
+                self._gpu_writing = False
+            for plan, work, tokens, row, valid, refresh, _ in prepared:
+                state = self.states[plan.request_id]
+                query_tokens = len(row.suffix) if row else 0
+                if tokens is None:
+                    state.materialized = len(plan.final_prefix)
+                    state.next_logits = logits.get(state.internal_id, state.next_logits)
+                    if plan.terminal:
+                        state.next_logits = None
+                    state.proposal = None
+                else:
+                    state.proposal = token_tuple(tokens)
+                    self.metrics.counters["eager_promoted"] += 1
+                    self.metrics.counters["eager_promoted_candidates"] += len(tokens)
+                if work is not None:
+                    if tokens is None:
+                        self.metrics.counters["eager_discarded_tokens"] += len(
+                            self._gpu_job(work).generated)
+                        self.metrics.counters["eager_rebase_materialized_tokens"] += query_tokens
+                    retired = self._gpu_retire(
+                        work, "promoted" if tokens is not None else "discarded",
+                        snapshots[plan.request_id])
+                    continuation = {"continuation": retired,
+                                    "promoted_candidates": len(tokens or ())}
+                else:
+                    self.metrics.counters["rollback_requests"] += 1
+                    self.metrics.counters["commit_materialized_tokens"] += query_tokens
+                    self.metrics.counters["logit_refresh_requests"] += int(refresh)
+                    continuation = {"valid_prefix_before_materialization": valid}
+                state.prefix = plan.final_prefix
+                state.next_round += 1
+                for name, count in (("commits", 1), ("correction_tokens", plan.correction_count),
+                                    ("bonus_tokens", plan.bonus_count),
+                                    ("invalidated_tokens", len(plan.proposal)-plan.accepted)):
+                    self.metrics.counters[name] += count
+                result[plan.request_id] = {
+                    "materialized_kv_length": state.materialized,
+                    "committed_prefix_hash": token_prefix_hash(state.prefix),
+                    "materialized_query_tokens": query_tokens, **continuation,
+                    **self.worker.request_evidence(state.internal_id),
+                }
+            if any(work is None for _, work, *_ in prepared):
+                self.metrics.counters["commit_batches"] += 1
+                self.metrics.counters["correction_bonus_batches"] += int(any(
+                    work is None and row is not None and plan.target_tail
+                    for plan, work, _, row, *_ in prepared))
+            # Validate the new pool before releasing terminal allocations. Release
+            # is another physical-state change, so audit it separately when needed.
             self._gpu_audit()
-            self._gpu_rebases[key] = (fingerprint, dict(result))
+            terminal_ids = [p.request_id for p, *_ in prepared if p.terminal]
+            if terminal_ids:
+                self.finish_many(terminal_ids)
+                self._gpu_audit()
+            for plan, _, _, _, _, _, fingerprint in prepared:
+                self._gpu_rebases[(plan.request_id, plan.round_id)] = (
+                    fingerprint, dict(result[plan.request_id]))
             return result
         except Exception:
             try:
@@ -383,6 +456,8 @@ same owner to process invalidation/termination ahead of the next token step.
         unique_ids(request_ids)
         if set(request_ids) - set(self.states) - self.retired:
             raise ValueError("cannot finish an unknown Draft request")
+        if not request_ids:
+            return
         for job in list(self._gpu_continuations.values()):
             if job.work.request_id in request_ids:
                 self.abort_gpu_continuation(job.work)

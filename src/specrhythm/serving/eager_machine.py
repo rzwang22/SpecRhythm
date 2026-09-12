@@ -313,11 +313,10 @@ class EagerSerialMachine(DiagnosticSerialMachine):
                 c = self.core._state(rid).continuations[self.works[rid].work_id]
                 if c.status == ContinuationStatus.WAITING_DRAFT:
                     return None
-        results = []
+        pending = []
         for row in rows:
             rid, key = row["request_id"], (row["request_id"], row["round_id"])
             if key in self.parent_results:
-                results.append(self.parent_results[key])
                 continue
             plan, decision = self.parent_plans[key]
             work = self.works.get(rid)
@@ -327,12 +326,15 @@ class EagerSerialMachine(DiagnosticSerialMachine):
             )
             if work and tokens is None:
                 self._abort(rid, "dependency_invalid")
-            before_queries = self.backend.metrics.query_tokens["commit"]
-            physical = self.backend.rebase_gpu_parent(plan, work=work, promoted_tokens=tokens)
+            pending.append((plan, decision, work, c, tokens))
+        physical_results = self.backend.rebase_gpu_parents([
+            (plan, work, tokens) for plan, _, work, _, tokens in pending
+        ])
+        for plan, decision, work, c, tokens in pending:
+            rid, key = plan.request_id, (plan.request_id, plan.round_id)
+            physical = physical_results[rid]
             state = self.core._state(rid)
-            state.accounting.draft_materialized_tokens += (
-                self.backend.metrics.query_tokens["commit"] - before_queries
-            )
+            state.accounting.draft_materialized_tokens += physical["materialized_query_tokens"]
             if tokens is None and not plan.terminal:
                 require(
                     physical["materialized_kv_length"] == len(plan.final_prefix),
@@ -378,8 +380,7 @@ class EagerSerialMachine(DiagnosticSerialMachine):
                 bridge_matches=int(tokens is not None),
                 bridge_mismatches=int(c is not None and c.reason == "bridge_mismatch"),
             )
-            results.append(result)
-        return results
+        return [self.parent_results[(row["request_id"], row["round_id"])] for row in rows]
 
     def finish_authoritative(self, row):
         rid = row["request_id"]
