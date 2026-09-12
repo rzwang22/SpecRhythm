@@ -35,9 +35,55 @@ claims.
 | [#2 simulator-semantics-v0.2](https://github.com/rzwang22/SpecRhythm/pull/2) | frozen draft; Phase 2 complete, not merged | proposal lifecycle, deterministic tree oracle, tree-aware allocators, base-preserving residual controls, Phase-2 nested search pools and common-snapshot oracle replay, path-aware eager and accounting | pure-Python proxy and oracle upper bounds only; no deployable oracle, measured search cost, GPU integration, or performance claim |
 | [#3 gpu-integration-v0.1](https://github.com/rzwang22/SpecRhythm/pull/3) | draft; Phase 3B.1 and corrected-20 Phase 3C.2 complete; Phase 3C.3 corrected-100 awaiting server run | hardened multi-rank primitives, corrected R3-real traces, common-prefix replay, request-bootstrap statistics, 2x shell decomposition and diagnostic learned ranker | user-run 3×A800 correctness artifacts plus Mac CPU tests; no packed-tree/serving engine, Dual-Batch, SLO, calibrated latency or speedup claim |
 | [#4 vllm-serving-v0.1](https://github.com/rzwang22/SpecRhythm/pull/4) | Draft/Open/unmerged; S0 CLOSED/PASS; S1-P G0–G3 PASS at `5a00049`; S2 G1 at `24b31a9` reported zero process exits/clean cleanup but rejected terminal-tail overlap; S2-only contract refinement awaiting retest | independent prefilled-KV resident pool, dynamic Poisson arrival/admission, Target/Serial/PingPong and engineering SLO/goodput | CPU/source contracts are not GPU qualification; finite-trace ideal PD-delivery boundary only |
-| [#5 rolling-eager-v0.1](https://github.com/rzwang22/SpecRhythm/pull/5) | Draft/Open/unmerged; stage 1 CI PASS; stage 2 implemented, operator GPU retest PENDING | shared fixed-length continuation protocol, one physical Draft owner, explicit Serial-eager fixed/decode-scan route, CPU integration and GPU regression entry | GPU correctness, overlap and performance PENDING; no PingPong GPU mixing or scheduler-policy change |
+| [#5 rolling-eager-v0.1](https://github.com/rzwang22/SpecRhythm/pull/5) | Draft/Open/unmerged; stage-2 CI 8/8 PASS; operator B16 execution/measurement/cleanup PASS, valid negative eager result; diagnosis awaiting raw evidence export | shared continuation protocol, Serial-eager physical backend, bounded offline evidence export and diagnosis regressions | physical Draft regression PASS; native eager/Target overlap ZERO, throughput 62.0773 → 18.6409 tok/s; no performance fix or PingPong GPU mixing in diagnosis |
 
-## Rolling Eager Continuation stage 2 (implemented; operator GPU retest PENDING)
+## Serial-eager B16 negative-performance diagnosis
+
+The user-run result at `4a6725b054990e47b7e9c4cf63f38b995d029856` is retained as
+valid: both B16 points pass execution, measurement and cleanup on the same frozen
+resident360 workload. Step wall time rises 770.232 → 2444.746 ms while committed
+tokens/step change only 47.923 → 45.615. The physical Draft regression has 14 exact
+reference comparisons and complete release. It is separate from production
+concurrency evidence. CI for that measured commit was verified 8/8 SUCCESS.
+
+The returned small bundle reports native GPU overlap lower/upper = 0 and physical
+status ZERO; outer UNKNOWN is the existing conservative label, not missing-bounds
+evidence. It omits raw runtime/backend/transport timelines. Reported unhidden wait
+is 8.923837 seconds (28.05% of the eager window); the other 22.887864 seconds remain
+unpartitioned, not attributed wholesale to CPU, locks or scheduling.
+
+Source and diagnosis-only CPU tests identify a late-launch mechanism: each B16
+enrollment repeats a full 360-resident audit; 17 such audits precede first worker
+forward. Feedback queued during admission is processed before stepping, cancelling
+rejected-parent work without GPU launch. This explains how start/complete can equal
+full-accept count but does not prove the actual latency cause without raw intervals.
+Separately, eager parent repair executes per-request B1 materialize/fence, whereas
+normal/recovery and eager token steps keep batching. A mixed-result regression
+compares actual baseline/eager backend calls and conserves prefixes/KV/output.
+
+This revision adds only a bounded offline exporter, characterization tests and
+documentation. Runtime inference, sampling, K4, static eligibility, safety checks,
+logging/measurement boundaries and the default Serial path remain unchanged.
+Original result files are never rewritten. The next gate is the user's read-only
+export of existing evidence, followed by separately evaluated minimal admission
+and parent-settlement batching fixes if the evidence supports them. No AutoDL/GPU
+execution, automatic scan or cross-run GPU UUID comparison is performed here.
+See [diagnosis](rolling-eager-b16-diagnosis.md) and
+[evidence commands](rolling-eager-evidence-runbook.md).
+
+Final diagnostic-tree validation: Python 3.11 full suite **2058 passed, 3 existing
+skips** (284.470 seconds), including **30 new cases** (25 offline-export, 4 owner
+launch-order, 1 mixed-batch repair). Python 3.9 Rolling Eager and pinned vLLM source
+contracts: **225 passed, zero skips**. Ruff, both-version compileall, Python 3.9
+grammar for 275 source/test files, all 11 repository Bash scripts, the new runbook
+block and diff checks pass. An initial sandboxed Python 3.9 run denied `ps` and
+Unix socket `bind`; the same assertions pass with those required local operations
+permitted. No test was relaxed. Exporting the returned small bundle leaves every
+source file's hash/mtime unchanged and preserves original PASS while reporting
+absent native timelines as MISSING. New-commit CI is reported independently at
+delivery; the measured 4a6725b commit's verified CI remains 8/8 SUCCESS.
+
+## Rolling Eager Continuation stage 2 (implementation record before operator retest)
 
 The existing branch and Draft PR #5 now connect the shared stage-1 authority to
 the real paged-KV Draft backend. Only Target TP rank 0 enqueues an immutable
@@ -94,9 +140,9 @@ S1/models/topology, two warmup rotations, a 30-second window, one repeat,
 and bound-prefix identity. Its child Bash stops at the first failure and retains
 evidence. The delivery includes a copy filled with the actual final commit SHA.
 No AutoDL connection or GPU execution is performed in this implementation task.
-GPU correctness / overlap / performance remain **PENDING**; the next gate is the
-user-run capacity and physical correctness checks, then Serial B16 and only after
-its qualification Serial-eager B16.
+At that implementation checkpoint GPU evidence was PENDING. The operator has now
+returned capacity/correctness and both qualified B16 points; the valid negative
+performance result and remaining raw-evidence gate are recorded above.
 
 ## Rolling Eager Continuation stage 1 (CPU implementation; GPU integration PENDING)
 

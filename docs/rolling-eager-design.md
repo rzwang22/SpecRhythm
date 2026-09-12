@@ -3,10 +3,21 @@
 Stage 1 delivered the reusable CPU protocol at
 `e4076628b10ccb5fef712dabae645f712c32cb51`. Stage 2 connects that same protocol to
 the real Draft worker and an explicitly selected `serial-eager` fixed diagnostic
-mode. GPU correctness, overlap and performance remain **PENDING**: server execution
-belongs to the operator, and no AutoDL connection or GPU run was performed during
-implementation. Existing Target, Serial, PingPong and simulator defaults remain
+mode. The operator's B16 run at `4a6725b054990e47b7e9c4cf63f38b995d029856`
+passed the physical Draft regression and production execution/measurement/cleanup,
+but Serial-eager throughput fell from 62.0773 to 18.6409 tok/s with recorded native
+GPU overlap bounds both zero. This is a valid negative performance result.
+No AutoDL connection or GPU run was performed by the implementation/diagnosis task.
+Existing Target, Serial, PingPong and simulator defaults remain
 intact. PingPong GPU mixed admission is still deferred.
+
+The [B16 diagnosis](rolling-eager-b16-diagnosis.md) distinguishes the observed zero
+overlap from missing raw intervals. Source and deterministic CPU tests confirm
+repeated whole-pool admission audits before the first GPU step, queued feedback
+winning that race, and singleton parent KV repair while proposal generation stays
+batched. Exact production cost attribution awaits the original root's retained
+timelines, exported by the [read-only evidence runbook](rolling-eager-evidence-runbook.md).
+This diagnostic revision changes no execution path or experiment semantics.
 
 The feature branch remains `codex/rolling-eager-v0.1`, created from verified commit
 `5a16d00fd10778189db3addbff558a2260944b32`. Its dependent Draft PR uses PR #4's
@@ -466,5 +477,6 @@ Target sampling, EOS/length behavior, TP identity checks, stock Target budgets a
 KV ownership remain their existing authorities. The shared core, immutable
 owner messages, incremental physical backend, safe repair and versioned eligibility
 interfaces are reusable by the next PingPong stage. Dynamic urgency, per-request
-budget adaptation and Shaping remain outside scope. GPU correctness, overlap and
-performance are PENDING until the operator returns server evidence.
+budget adaptation and Shaping remain outside scope. The returned Serial B16
+correctness and negative-performance evidence are described at the top of this
+document; PingPong integration and any performance repair remain future work.
