@@ -36,6 +36,47 @@ claims.
 | [#3 gpu-integration-v0.1](https://github.com/rzwang22/SpecRhythm/pull/3) | draft; Phase 3B.1 and corrected-20 Phase 3C.2 complete; Phase 3C.3 corrected-100 awaiting server run | hardened multi-rank primitives, corrected R3-real traces, common-prefix replay, request-bootstrap statistics, 2x shell decomposition and diagnostic learned ranker | user-run 3×A800 correctness artifacts plus Mac CPU tests; no packed-tree/serving engine, Dual-Batch, SLO, calibrated latency or speedup claim |
 | [#4 vllm-serving-v0.1](https://github.com/rzwang22/SpecRhythm/pull/4) | Draft/Open/unmerged; S0 CLOSED/PASS; S1-P G0–G3 PASS at `5a00049`; S2 G1 at `24b31a9` reported zero process exits/clean cleanup but rejected terminal-tail overlap; S2-only contract refinement awaiting retest | independent prefilled-KV resident pool, dynamic Poisson arrival/admission, Target/Serial/PingPong and engineering SLO/goodput | CPU/source contracts are not GPU qualification; finite-trace ideal PD-delivery boundary only |
 
+## Rolling Eager Continuation stage 1 (CPU implementation; GPU integration PENDING)
+
+Branch `codex/rolling-eager-v0.1` starts at verified commit
+`5a16d00fd10778189db3addbff558a2260944b32`. Its new dependent Draft PR targets
+PR #4's head branch `codex/vllm-serving-v0.1`, inspected at that same SHA.
+PR #4 remains unmerged and its branch is unchanged; PR #2/#3 are untouched.
+
+The independent `specrhythm.continuation` package implements fixed four-candidate
+normal/eager work, a separate predicted bonus bridge, static stable-ID eligibility,
+owner-local versioned request/proposal/continuation state, complete dependency
+validation, both asynchronous arrival orders, repeatable promotion, rejection and
+bridge-mismatch recovery, cancellation/release and exact-once Target accounting.
+Immutable CPU scheduling views and dispatch adapters exercise cross-cohort next-stage
+admission, normal/eager deduplication, recovery alongside another Target request,
+provider switches and stale-intent rejection. A deterministic CPU token/KV executor
+runs the real protocol; provider failure and foreign-owner dispatch are fail-closed.
+
+The multi-round regression executes P0 → E1 → E2 rejection → normal R3 → E4 → E5 → E6
+with independent proposal/continuation IDs and both feedback orders. Its six Target
+commits total **28 tokens = 22 accepted candidates + 1 correction + 5 bonuses**.
+It generates 30 early tokens, promotes 20 reusable candidates and five bridges,
+discards five early tokens, and normally drafts four recovery candidates once.
+Static membership survives rejection. EOS, short output/tail boundaries, late and
+duplicate messages, decision versions, owner isolation and shutdown are exercised.
+
+Validation: **102 new CPU cases pass on Python 3.9.6 and 3.11.15**; focused pinned
+vLLM source plus new CPU contracts pass (119 cases). Final Python 3.11 full pytest
+with the exact pinned source export: **1952 passed, 3 skipped** in 212.558 seconds.
+The existing skips are one opt-in GPU test and two Linux-only process-lifecycle
+tests; no new test is skipped. Ruff, compileall, Python 3.9 grammar for all 257
+source/test files and git diff checks pass. CI for the delivered commit is reported
+with the Draft PR.
+
+No production GPU path, CLI mode or default simulator policy is changed. There is
+**no GPU performance result**, no AutoDL connection and no performance scan in this
+stage. CPU frontier evidence does not qualify actual GPU block reuse or mixed-batch
+capacity. The next gate is explicit user instruction to integrate Serial/PingPong
+GPU adapters and their owner/fence/KV/ready-mailbox boundaries; stop after this
+Draft PR. See [rolling-eager-design.md](rolling-eager-design.md) for the audited
+baseline rules, public API, test map and concrete next-stage module list.
+
 ## Resident360 PingPong warmup boundary repair (GPU retest PENDING)
 
 Base f718ea4dd27848a34bc7fff92d7b906acfecec0d; its retained small bundle confirms
