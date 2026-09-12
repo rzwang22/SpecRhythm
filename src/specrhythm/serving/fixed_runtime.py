@@ -6,6 +6,7 @@ import copy
 import os
 import time
 
+from specrhythm.continuation.trace import TRACE
 from specrhythm.phase4.stock_vllm import validate_worker_ranks
 from specrhythm.serving.common import read_json, require
 from specrhythm.serving.fixed_artifacts import checkpoint, record_error
@@ -35,6 +36,10 @@ CLASSES = {
     )
     for m, c in (("target", "Target"), ("serial", "Serial"), ("pingpong", "Ping"))
 }
+CLASSES["serial-eager"] = (
+    "specrhythm.serving.fixed_scheduler.FixedSerialScheduler",
+    "specrhythm.serving.eager_proposer.EagerSerialProposer",
+)
 
 
 def population(clock, inflight=()):
@@ -140,7 +145,15 @@ def commit_outputs(clock, outputs, packet, client, runtime_mode):
                     finish_reason=output.outputs[0].finish_reason,
                 )
             if output.finished and runtime_mode != "pingpong":
-                client.call("finish_request", {"request_id": rid})
+                payload = {"request_id": rid}
+                if runtime_mode == "serial-eager":
+                    from specrhythm.phase4.serial import token_prefix_hash
+
+                    final = (*clock.definitions[rid].prompt_token_ids, *tokens)
+                    payload.update(committed_prefix=list(final),
+                                   committed_prefix_hash=token_prefix_hash(final), terminal=True,
+                                   eos_token_ids=packet["eos_token_ids"])
+                client.call("finish_request", payload)
                 clock.released([rid], time.monotonic_ns())
         else:
             require(not output.finished, "diagnostic terminal output lacks commit")
@@ -257,7 +270,7 @@ def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5, 
             if window.time_expired(now):
                 break
             clock.observe(now)
-            status = client.call("status", {}) if grouped else {}
+            status = client.call("status", {}) if grouped or mode == "serial-eager" else {}
             require(
                 not status.get("failures"),
                 "diagnostic asynchronous Draft failed",
@@ -351,6 +364,7 @@ def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5, 
                 phases.append(phase_row)
             before = len(scheduler.s2_steps)
             start = time.monotonic_ns()
+            TRACE.event("coordinator_step_start", step_index=len(steps))
             if scan and window.time_expired(start):
                 break
             try:
@@ -393,6 +407,8 @@ def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5, 
                 committed = True
             finally:
                 end = time.monotonic_ns()
+                TRACE.event("coordinator_output_committed", step_index=len(steps),
+                            committed=committed, start_ns=end, end_ns=end)
                 # Preserve a completed engine step even if output/drain RPC fails.
                 steps.append(
                     {
@@ -570,7 +586,10 @@ def run(root, manifest_path, directory, point, *, probe=False):
         )
         draft = read_json(directory / "draft-startup.json")
         capacity = [r["s2_capacity"] for r in ranks] + [draft["s2_capacity"]]
-        checks = [capacity_for(definitions, r, active_limit=active) for r in capacity]
+        checks = [capacity_for(
+            definitions, r, active_limit=active,
+            speculative_tokens=9 if mode == "serial-eager" and r["role"] == "draft" else 4,
+        ) for r in capacity]
         for check in checks:
             check["block_deficit"] = max(0, check["required_blocks"] - check["num_gpu_blocks"])
             check["workspace_deficit_bytes"] = max(

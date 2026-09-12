@@ -23,6 +23,7 @@ from specrhythm.serving.s2_plan import MODES, RATIO, check_seal, sealed, selecti
 from specrhythm.serving.schema import load_requests
 
 BATCHES = (16, 32, 64, 128)
+EXPLICIT_MODES = (*MODES, "serial-eager")
 POOL_SIZE = 360
 SCHEMA = "specrhythm.decode-scan.v1"
 BOUNDARY = "prefilled resident pool; post-warmup full-batch decode; actual stop before drain"
@@ -62,7 +63,7 @@ def select(main, small_ids, seed=1666):
 
 
 def selected_point(mode, batch, repeat=0):
-    require(mode in MODES and batch in BATCHES, "unknown decode scan mode/B")
+    require(mode in EXPLICIT_MODES and batch in BATCHES, "unknown decode scan mode/B")
     return dict(
         mode=mode,
         runtime_mode=mode,
@@ -111,7 +112,7 @@ def manifest(execution, ids, workload_sha, opts, batch):
                         resident_requirement=POOL_SIZE,
                         target_sequence_limit=512,
                     )
-                    for m in MODES
+                    for m in EXPLICIT_MODES
                 },
                 "initial_request_ids": ids[:batch],
                 "cohorts": {"A": ids[: batch // 2], "B": ids[batch // 2 : batch]},
@@ -198,6 +199,11 @@ def prepare(root, s1, opts, *, seed=1666, s0=None):
                 for r in range(opts["repeats"])
                 for b in BATCHES
                 for m in MODES
+            ],
+            "optional_points": [
+                selected_point("serial-eager", b, r)
+                for r in range(opts["repeats"])
+                for b in BATCHES
             ],
             "boundary": BOUNDARY,
             "capacity": "PENDING per fresh point before decode",

@@ -22,6 +22,7 @@ from specrhythm.serving.s1_workload import load_execution, write_once
 from specrhythm.serving.s2_plan import sealed
 
 MODES = ("target", "serial", "serial-split", "pingpong")
+EXPLICIT_MODES = (*MODES, "serial-eager")
 SCENARIO = "prefill-complete, all requests ready; fixed-concurrency finite supply"
 POLICY = {
     f"cross_run_{key}_equality": "NOT_REQUIRED" for key in ("token", "length", "EOS", "round")
@@ -38,6 +39,7 @@ def settings(
     drain_timeout=60,
     observation="original-live",
     identity_matching="linear",
+    draft_audit="full",
 ):
     for name, value, minimum in (
         ("warmup_steps", warmup_steps, 0),
@@ -61,7 +63,9 @@ def settings(
     from specrhythm.serving.fixed_identity import MODES as IDENTITY_MODES
 
     require(identity_matching in IDENTITY_MODES, "unknown fixed identity matching mode")
+    require(draft_audit in ("full", "runtime"), "unknown Draft audit mode")
     return dict(
+        draft_audit=draft_audit,
         warmup_steps=warmup_steps,
         samples=samples,
         repeats=repeats,
@@ -75,7 +79,7 @@ def settings(
 
 def capacity_metadata(mode, resident_count=None, *, active_limit=64, resident_requirement=100,
                       target_sequence_limit=128):
-    require(mode in MODES, "unknown fixed diagnostic mode", actual=mode)
+    require(mode in EXPLICIT_MODES, "unknown fixed diagnostic mode", actual=mode)
     grouped = mode in ("serial-split", "pingpong")
     return {
         "resident_request_requirement": resident_requirement,
@@ -91,12 +95,16 @@ def capacity_metadata(mode, resident_count=None, *, active_limit=64, resident_re
         "draft_query_token_limit": 4096,
         "max_model_len": 4096,
         "proposal_budget": 4,
+        **({"eager_candidate_length": 4, "predicted_bridge_tokens": 1,
+            "draft_speculative_capacity_tokens": 9,
+            "draft_extra_speculative_tokens": 5} if mode == "serial-eager" else {}),
         "actual_KV_limits": "model-loaded per-rank actual-capacity.json; never guessed",
     }
 
 
 def point(mode, *, kind="continuous", batch=None, half="A", repeat=0, warmup=False):
-    require(mode in MODES and kind in ("continuous", "initial-state"), "invalid diagnostic point")
+    require(mode in EXPLICIT_MODES and kind in ("continuous", "initial-state"),
+            "invalid diagnostic point")
     require(half in ("A", "B"), "invalid shape half")
     if kind == "initial-state":
         require(batch in (32, 64), "initial-state B must be 32 or 64")
@@ -153,7 +161,7 @@ def build_manifest(execution, ids, workload_sha, options):
                 "schema_version": "specrhythm.fixed-diagnostic.v1",
                 "scenario": SCENARIO,
                 "options": options,
-                "capacity": {m: capacity_metadata(m) for m in MODES},
+                "capacity": {m: capacity_metadata(m) for m in EXPLICIT_MODES},
                 "initial_request_ids": ids[:64],
                 "cohorts": {"A": ids[:32], "B": ids[32:64]},
                 "replacement_request_ids": ids[64:],

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 
+from specrhythm.serving.fixed_audit import FixedAuditMixin
 from specrhythm.serving.fixed_observe import TIMERS, DeviceTimeline
 from specrhythm.serving.fixed_settle import (
     DiagnosticSerialMachine as diagnostic_serial_machine,
@@ -16,6 +17,10 @@ from specrhythm.serving.s2_draft import S2DraftBackend
 
 def serve(config, directory, socket_path, mode, *, backend_class=None):
     """Only the fixed diagnostic service opts into the explicit stop protocol."""
+    if mode == "serial-eager":
+        from specrhythm.serving.eager_draft import serve as serve_eager
+
+        return serve_eager(config, directory, socket_path, backend_class=backend_class)
     from specrhythm.phase4.dual_service import DualDraftUnixServer
     from specrhythm.phase4.transport import CheckpointJsonl
     from specrhythm.serving.fixed_artifacts import record_error
@@ -81,7 +86,7 @@ def serve(config, directory, socket_path, mode, *, backend_class=None):
     finish_current("draft")
 
 
-class FixedDraftBackend(S2DraftBackend):
+class FixedDraftBackend(FixedAuditMixin, S2DraftBackend):
     def __init__(self, config, *, worker=None):
         super().__init__(config, worker=worker)
         self.fixed_proposals = []

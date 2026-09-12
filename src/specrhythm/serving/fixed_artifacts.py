@@ -6,6 +6,7 @@ import time
 import traceback
 from collections import Counter
 
+from specrhythm.continuation.trace import TRACE
 from specrhythm.serving.common import read_json
 from specrhythm.serving.s2_pool import publish
 
@@ -38,6 +39,7 @@ def record_error(directory, error, phase):
         print(f"[diagnostic secondary] cannot retain {phase} error: {save_error}", flush=True)
 
 
+@TRACE.observe("coordinator_checkpoint")
 def checkpoint(
     directory,
     manifest,
@@ -105,6 +107,18 @@ def checkpoint(
 def retained_report(directory, report):
     """Works after a killed coordinator too; missing final reports stay secondary."""
     result = dict(report)
+    backend_path = directory / "draft-backend-report.json"
+    if (result.get("mode", result.get("point", {}).get("mode")) == "serial-eager"
+            and backend_path.exists()):
+        eager = read_json(backend_path).get("rolling_eager")
+        if isinstance(eager, dict):
+            result["rolling_eager_retained"] = {
+                "counters": eager.get("counters"),
+                "pending_work": eager.get("pending_work"),
+                "owner_stopped": eager.get("owner_stopped"),
+                "GPU_overlap": "UNKNOWN",
+                "qualification": "raw lifetime evidence; not a window or cleanup PASS",
+            }
     for filename, field in (
         ("measurement-snapshot.json", "measurement_snapshot"),
         ("drain-state.json", "drain"),

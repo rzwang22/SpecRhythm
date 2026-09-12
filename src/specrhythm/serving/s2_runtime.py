@@ -29,6 +29,10 @@ CLASSES = {
     )
     for m, c in (("target", "Target"), ("serial", "Serial"), ("pingpong", "Ping"))
 }
+CLASSES["serial-eager"] = (
+    "specrhythm.serving.s2_scheduler.S2SerialScheduler",
+    "specrhythm.serving.eager_proposer.EagerSerialProposer",
+)
 
 
 def configure(root, manifest_path, directory, mode):
@@ -90,13 +94,15 @@ def configure(root, manifest_path, directory, mode):
         SR_PHASE4_DUAL_DRAFT_SOCKET=os.environ["SR_S2_DRAFT_SOCKET"],
         SR_PHASE4_RESIDENT_SETUP="1",
         SR_PHASE4_DECODE_READY_MODE="1",
-        SR_PHASE4_RESIDENT_CONSUMER="serial" if mode == "serial" else "target-only",
+        SR_PHASE4_RESIDENT_CONSUMER="serial" if mode in ("serial", "serial-eager")
+        else "target-only",
         SR_PHASE4_DUAL_BATCH="1" if mode == "pingpong" else "0",
         SR_PHASE4_DUAL_RESIDENT="1" if mode == "pingpong" else "0",
         SR_PHASE4_DUAL_MICROBATCH_SIZE=str(ACTIVE_LIMIT),
         SR_PHASE4_DUAL_TEST_COORDINATION="none",
     )
-    consumer = {"target": "target-only", "serial": "serial", "pingpong": "dual-batch"}[mode]
+    consumer = {"target": "target-only", "serial": "serial", "serial-eager": "serial",
+                "pingpong": "dual-batch"}[mode]
     write_once(
         directory / "setup-control.json",
         build_setup_control(
@@ -206,7 +212,7 @@ def initial_work(mode, admitted, clock, warm, client, packet):
     definitions = clock.definitions
     if mode == "target":
         return
-    if mode == "serial":
+    if mode in ("serial", "serial-eager"):
         rows = [
             {
                 "request_id": rid,
@@ -463,7 +469,15 @@ def prepare_resident(llm, definitions, directory, mode, eos, timeout=14400, logp
     if mode != "pingpong":
         for rid, b in bootstrap.items():
             if b["terminal"]:
-                client.call("finish_request", {"request_id": rid})
+                payload = {"request_id": rid}
+                if mode == "serial-eager":
+                    payload.update(
+                        committed_prefix=list(warm[rid].logical_committed_prefix_token_ids),
+                        committed_prefix_hash=warm[rid].logical_committed_prefix_sha256,
+                        terminal=True,
+                        eos_token_ids=eos,
+                    )
+                client.call("finish_request", payload)
     pool = scheduler.freeze_pool()
     draft_pool = read_json(directory / "draft-pool.json")
     active_ids = {r for r, b in bootstrap.items() if not b["terminal"]}

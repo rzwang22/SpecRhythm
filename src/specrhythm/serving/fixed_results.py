@@ -301,6 +301,11 @@ def summarize(manifest_path, directory, point, *, probe=False):
         if not probe:
             require(runtime["point"] == point, "runtime mode/point identity differs")
         backend = read_json(directory / "draft-backend-report.json")
+        if point["mode"] == "serial-eager":
+            from specrhythm.serving.eager_results import eager_columns, summarize_eager
+
+            base["rolling_eager"] = summarize_eager(backend, runtime)
+            base.update(eager_columns(base))
         lifecycle = read_json(directory / "process-lifecycle.json")
         checks = execution_checks(
             runtime, definitions, backend, lifecycle, manifest["execution"]["eos_token_ids"]
@@ -534,9 +539,10 @@ def measurements(manifest, runtime, backend, point):
     draft = [
         r for r in backend["fixed_proposals"] if r["start_ns"] >= start and r["end_ns"] <= end
     ]
-    draft_forwards = [
-        r for r in backend["fixed_device"]["forwards"] if r["purpose"] in ("proposal", "commit")
-    ]
+    purposes = ("proposal", "commit", "eager") if point["mode"] == "serial-eager" else (
+        "proposal", "commit")
+    draft_forwards = [r for r in backend["fixed_device"]["forwards"]
+                      if r["purpose"] in purposes]
     for p in backend["fixed_proposals"]:
         # Sorted cumulative sums avoid proposal x forward joins.
         p["wall_ms"] = (p["end_ns"] - p["start_ns"]) / 1e6
@@ -556,7 +562,7 @@ def measurements(manifest, runtime, backend, point):
     for p in backend["fixed_proposals"]:
         a, b = bisect.bisect_left(starts, p["start_ns"]), bisect.bisect_right(starts, p["end_ns"])
         p["gpu_event_ms"] = cumulative[b] - cumulative[a]
-    overlap = overlap_metrics(devices, backend["fixed_device"], start, end)
+    overlap = overlap_metrics(devices, backend["fixed_device"], start, end, purposes=purposes)
     if point["mode"] == "serial-split":
         require(
             overlap["event_overlap_lower_ms"] == 0,
@@ -785,13 +791,13 @@ def population_metrics(runtime, start, end):
     }
 
 
-def overlap_metrics(devices, draft, start, end):
+def overlap_metrics(devices, draft, start, end, *, purposes=("proposal", "commit")):
     def intervals(rows, inner):
         a, b = ("start_upper_ns", "end_lower_ns") if inner else ("start_lower_ns", "end_upper_ns")
         return clipped([(r[a], r[b]) for r in rows if r[b] > r[a]], start, end)
 
     targets = [f for d in devices for f in d["device"]["forwards"]]
-    drafts = [f for f in draft["forwards"] if f.get("purpose") in ("proposal", "commit")]
+    drafts = [f for f in draft["forwards"] if f.get("purpose") in purposes]
     low = duration(intersections(intervals(targets, True), intervals(drafts, True)))
     high = duration(intersections(intervals(targets, False), intervals(drafts, False)))
     return {
@@ -879,6 +885,7 @@ def stage_shape(manifest, point, target, draft):
 
 
 def emit_result(directory, report, point):
+    from specrhythm.serving.eager_results import eager_columns
     from specrhythm.serving.fixed_artifacts import retained_report
 
     report = retained_report(directory, report)
@@ -910,6 +917,7 @@ def emit_result(directory, report, point):
         "accepted_tokens",
         "verified_proposed_tokens",
         "rejected_tokens",
+        *eager_columns(report),
     )
     with (directory / "light-summary.csv").open("x", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fields)

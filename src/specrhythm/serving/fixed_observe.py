@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import functools
 import os
+import threading
 import time
 from collections import defaultdict
 from contextlib import contextmanager
 
+from specrhythm.continuation.trace import TRACE, references
 from specrhythm.serving.common import require
 
 
@@ -22,7 +24,9 @@ class Timers:
             yield
         finally:
             self.rows.append(
-                dict(category=category, start_ns=start, end_ns=time.monotonic_ns(), **fields)
+                dict(category=category, start_ns=start, end_ns=time.monotonic_ns(),
+                     **({"pid": os.getpid(), "thread_id": threading.get_ident()}
+                        if TRACE.enabled else {}), **fields)
             )
 
     def report(self):
@@ -31,6 +35,7 @@ class Timers:
             counts[r["category"]]["count"] += 1
             counts[r["category"]]["inclusive_host_ms"] += (r["end_ns"] - r["start_ns"]) / 1e6
         return {
+            "causal_timeline": TRACE.report(),
             "aggregate": dict(counts),
             "intervals": list(self.rows),
             "aggregation": "inclusive/nested categories; do not add or infer critical path",
@@ -50,6 +55,20 @@ def wrap(owner, name, category):
 
     @functools.wraps(original)
     def measured(*args, **kwargs):
+        if TRACE.enabled and category == "ipc":
+            operation = args[1] if len(args) > 1 else kwargs["operation"]
+            payload = args[2] if len(args) > 2 else kwargs["payload"]
+            with TRACE.span("transport_rpc", operation=operation, requests=references(
+                    payload.get("requests", payload.get("synchronizations", ())))):
+                with TIMERS.span(category):
+                    result = original(*args, **kwargs)
+                if isinstance(result, dict) and all(type(result.get(k)) is int for k in (
+                        "transport_start_ns", "transport_end_ns")):
+                    TRACE.event("transport_exchange", start_ns=result["transport_start_ns"],
+                                end_ns=result["transport_end_ns"],
+                                service_receive_ns=result.get("service_receive_ns"),
+                                service_send_ns=result.get("service_send_ns"))
+                return result
         with TIMERS.span(category):
             return original(*args, **kwargs)
 
@@ -147,6 +166,8 @@ class DeviceTimeline:
     def before(self, _module, _args):
         start = self.torch.cuda.Event(enable_timing=True)
         meta = self.metadata()
+        if TRACE.enabled:
+            meta["causal_context"] = dict(getattr(TRACE.local, "fields", {}))
         host = time.monotonic_ns()
         start.record()
         self.current = (start, host, meta)

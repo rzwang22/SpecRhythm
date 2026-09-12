@@ -114,7 +114,7 @@ def poisson_trace(ids, arrival_rate_qps, arrival_seed=1667, order_seed=1668):
     )
 
 
-def capacity_for(rows, rank, *, active_limit=ACTIVE_LIMIT):
+def capacity_for(rows, rank, *, active_limit=ACTIVE_LIMIT, speculative_tokens=4):
     """All prefixes + largest active growth, including speculative and allocator margins.
 
     A fresh engine rebuilds initial state; there are no KV snapshot tensor copies.
@@ -128,12 +128,15 @@ def capacity_for(rows, rank, *, active_limit=ACTIVE_LIMIT):
         rank=rank,
     )
     require(rank["role"] in ("target", "draft"), "unknown capacity rank role")
+    require(type(speculative_tokens) is int and speculative_tokens >= 4,
+            "speculative capacity cannot be less than the baseline K4 reserve")
 
     def ceil(n):
         return (n + block - 1) // block
 
     initial = [ceil(r.prompt_length + (rank["role"] == "draft")) for r in rows]
-    growth = [ceil(r.prompt_length + r.maximum_new_tokens + 4) - p for r, p in zip(rows, initial)]
+    growth = [ceil(r.prompt_length + r.maximum_new_tokens + speculative_tokens) - p
+              for r, p in zip(rows, initial)]
     active = min(active_limit, len(rows))
     reserve = max(32, math.ceil(available * 0.05))
     partial = active  # Conservative one extra private partial/copy block per active request.
@@ -151,6 +154,9 @@ def capacity_for(rows, rank, *, active_limit=ACTIVE_LIMIT):
         "num_gpu_blocks": available,
         "prefix_blocks": sum(initial),
         "worst_active_growth_blocks": sum(sorted(growth, reverse=True)[:active]),
+        **({"speculative_capacity_tokens": speculative_tokens,
+            "extra_speculative_tokens": speculative_tokens - 4}
+           if speculative_tokens != 4 else {}),
         "active_limit": active_limit,
         "pool_size": len(rows),
         "partial_block_copy_margin": partial,

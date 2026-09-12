@@ -132,6 +132,7 @@ def execute(root, gate, mode, manifest_path, directory, *, probe=False, policy=N
         # Explicit new entry point only; old S2 keeps the original launcher and qualifier.
         env["SR_FIXED_POINT"] = str(directory / "point.json")
         options = manifest["fixed_diagnostic"]["options"]
+        env["SR_FIXED_DRAFT_AUDIT"] = options.get("draft_audit", "full")
         env["SR_FIXED_OBSERVATION"] = options.get("observation", "original-live")
         env["SR_FIXED_IDENTITY_MATCHING"] = options.get("identity_matching", "linear")
         if diagnostic.get("scan"):

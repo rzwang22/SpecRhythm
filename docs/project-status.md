@@ -1,6 +1,6 @@
 # SpecRhythm project status
 
-Last updated: 2026-09-12
+Last updated: 2026-09-13
 
 Maintenance rule: every code-changing PR updates this file with its scope, status, evidence,
 known limitations, and next gate before that PR is considered complete.
@@ -35,6 +35,279 @@ claims.
 | [#2 simulator-semantics-v0.2](https://github.com/rzwang22/SpecRhythm/pull/2) | frozen draft; Phase 2 complete, not merged | proposal lifecycle, deterministic tree oracle, tree-aware allocators, base-preserving residual controls, Phase-2 nested search pools and common-snapshot oracle replay, path-aware eager and accounting | pure-Python proxy and oracle upper bounds only; no deployable oracle, measured search cost, GPU integration, or performance claim |
 | [#3 gpu-integration-v0.1](https://github.com/rzwang22/SpecRhythm/pull/3) | draft; Phase 3B.1 and corrected-20 Phase 3C.2 complete; Phase 3C.3 corrected-100 awaiting server run | hardened multi-rank primitives, corrected R3-real traces, common-prefix replay, request-bootstrap statistics, 2x shell decomposition and diagnostic learned ranker | user-run 3×A800 correctness artifacts plus Mac CPU tests; no packed-tree/serving engine, Dual-Batch, SLO, calibrated latency or speedup claim |
 | [#4 vllm-serving-v0.1](https://github.com/rzwang22/SpecRhythm/pull/4) | Draft/Open/unmerged; S0 CLOSED/PASS; S1-P G0–G3 PASS at `5a00049`; S2 G1 at `24b31a9` reported zero process exits/clean cleanup but rejected terminal-tail overlap; S2-only contract refinement awaiting retest | independent prefilled-KV resident pool, dynamic Poisson arrival/admission, Target/Serial/PingPong and engineering SLO/goodput | CPU/source contracts are not GPU qualification; finite-trace ideal PD-delivery boundary only |
+| [#5 rolling-eager-v0.1](https://github.com/rzwang22/SpecRhythm/pull/5) | Draft/Open/unmerged; returned 465c215 B16 pair PASS; explicit audit-layer four-point retest pending | shared protocol, A+B, eligibility snapshot fix; default full and opt-in incremental Draft runtime audit, compact report/failure export | original results unchanged; latest Serial/eager 60.040693/45.305571 tok/s, native overlap 4.436982–4.585746 ms; new GPU correctness/overlap/performance PENDING |
+
+## Current Serial-eager gate: Draft audit layers
+
+The returned `465c2159b4b58d8c0e79fc3f66f38083e88368cb` evidence preserves original
+execution/measurement/cleanup PASS. Both actual windows and native TP ranks have
+been rechecked. The 102.52–102.58 ms dequeue-to-first-GPU delay contains two full
+resident360 audits averaging 81.70 ms; five token-step functions average 388.62 ms,
+including 269.22 ms of nested physical audit and 101.71 ms GPU forward sum. These
+inclusive values are not additive. The old exporter reproduces a >64 MiB output
+overflow; this evidence-export issue does not invalidate the performance points.
+
+`draft_audit=full` remains default. Opt-in runtime maintains ownership at actual
+allocator allocate/free boundaries and checks only affected requests during stable
+token steps, with immutable prefix/version invalidation and fresh control reads.
+Initial freeze, peaks, full counters, terminal receipts, fences and final release
+audits remain functional. Runtime checks have separate counters, not fabricated
+full-check counts. Target full audits and JSON control parsing remain unchanged.
+A+B, K4, static eligibility, feedback priority and batch WAITING_DRAFT are unchanged.
+Baseline S1/S2 and Serial/PingPong default algorithms remain intact.
+
+The [design/diagnosis](rolling-eager-audit-layers.md) maps side effects and remaining
+costs. The [repository runbook](rolling-eager-audit-runbook.md) executes exactly four
+same-SHA independent roots (Serial/eager × full/runtime), each capacity → GPU
+correctness → B16/360/2-warmup/30s performance with matched observation. Compact
+point/four-point JSON keeps no raw arrays; bounded bundles record missing/truncated
+sources explicitly. First failure preserves the original error and stops later
+points while the parent interactive shell remains open.
+
+Local gates: full Python 3.11 pytest **2133 passed, 3 existing skips** (246.303s);
+Python 3.9 related suite and all five source-contract files **225 passed**, zero
+skips (14.438s). The final compact-report/boundary-metadata checks also pass all
+31 focused tests on Python 3.9. Ruff, both-version compileall, 294-file Python 3.9
+grammar, all 13 repository Bash files, 13 Rolling Eager runbook Bash blocks and
+git diff checks pass. CI status is reported separately after ordinary push.
+GPU correctness,
+overlap and performance of this change remain PENDING; no AutoDL connection or GPU
+execution occurred. After delivery, wait for operator evidence; do not expand the
+grid or change batch recovery scheduling. Historical sections below retain their
+original results but no longer define the next test gate.
+
+## Serial-eager startup latency after the returned A+B run
+
+Operator evidence at `068c40a8ead1138568b7f846af348d3f732c28d4` retains all
+execution/measurement/cleanup PASS: Serial 61.064037 tok/s versus eager 38.162742,
+39/25 full B16 steps, 1869/1162 tokens, native overlap lower/upper ZERO. Mean
+complete host step is 783.000/1215.756 ms; only 70.206/54.646 ms of the respective
+windows lies outside complete steps. These step durations are not Target GPU time.
+A+B batching is physically supported by 15 audits/step and one batched parent
+repair per step (~19.918 ms event sum); eager GPU work remains ~101.355 ms/step.
+
+Observation commit `33b6588004376e930ebabe1c9c768eca0b025371` adds bounded default-off
+causal host spans and a v2 exporter
+that retains both Target ranks' native bounds, explicit request/parent/work joins,
+snapshot history counts, queue/feedback/batch-gate boundaries, and a disjoint
+coordinator wall-time partition. The returned v1 package omitted raw Target
+intervals although its server reporter used them; the ZERO summary stays valid,
+but exact local Target timelines remain unavailable. No missing span is invented.
+
+Source and a 32-round real-core CPU regression establish that provider evaluation
+deepcopies growing unrelated history four times per successful rolling round;
+its declared provider contract needs only request_id. The separate performance
+revision uses an isolated immutable identity view, preserving
+decision versions and all A+B checks. No further audit, fence, feedback-priority
+or batch-recovery change is bundled with it. A-only is now historical, not a
+new retest target. [Latency diagnosis](rolling-eager-critical-path.md) and the
+[repository runbook](rolling-eager-latency-runbook.md) specify exactly three user-run
+B16 points across observation/fix roots, with bounded failure export and an
+interactive parent shell. New GPU performance/overlap remain PENDING.
+Observation local gates: **2099 passed, 3 existing skips** on Python 3.11
+(245.067s); Python 3.9 related suite **248 passed** plus **60 passed** in two
+additional existing source-contract files. Ruff, both-version compileall,
+287-file Python 3.9 grammar, 12 Bash scripts, eight Rolling Eager runbook blocks
+and diff checks pass. The two initial shell-test failures were missing `python`
+on PATH after creating a private test venv; the complete suite passes with the
+correct PATH and unchanged assertions. GPU execution remains operator-only.
+
+Immutable-view local gates: **2102 passed, 3 existing skips** on Python 3.11
+(256.13s), **311 passed** on Python 3.9 across the related regressions and all five
+source-contract files (13.763s, zero skips). Full Ruff, both compileall versions,
+287-file Python 3.9 grammar, 12 Bash scripts, eight runbook Bash blocks and diff
+checks pass. The 32-round guard preserves 129 evaluations and 160 committed tokens
+while forbidding RequestState history copies in the eligibility hot path; provider
+isolation, version regression and live switches are covered. Small CPU samples
+record light-mode overhead separately, without a server performance claim.
+Post-push GitHub CI is tracked independently in the PR delivery record.
+
+## Historical Serial-eager B16 batch repairs
+
+The A+B result has now returned; the startup-latency section above supersedes this
+earlier delivery's pending gate. A-only is retained as history, not a new test point.
+
+A-only `bbf12170118961a88244ae97af949eeee7d6028a` is committed and normally pushed.
+A+B additionally batches compatible parent KV repairs and settlement audits while
+preserving promotion, per-request accounting, ordinary fallback, terminal release
+checks and failure fencing. The GPU correctness entry now exercises three-request
+mixed physical batches outside performance measurement. The [two-commit runbook](rolling-eager-retest-runbook.md)
+uses separate new roots and a Serial B16 control at each SHA, with first-failure
+export/stop and an interactive parent shell. New GPU evidence is PENDING; original
+PASS/negative results remain unchanged.
+
+The next repair iteration has verified the returned 149732487-byte raw Draft
+report (SHA256 `b769720b2c0e5520a76f07ba01dbc4c8aefe2d6a2a52a56fed3b2dead78f006a`).
+All 63 measured starts follow parent full-accept feedback; 13 cycles each perform
+17 pre-forward audits/6120 prefix visits, and all 156 parent-repair forwards are
+B1. A-only now batches physical enrollment with one whole-pool audit while
+retaining per-request checks and fresh before/after token-step audits. Parent
+settlement remains unchanged in A-only. [Repair evidence and scope](rolling-eager-repairs.md)
+record the independent commits; new GPU correctness/performance remain pending.
+A-only local gates: **2068 passed, 3 existing skips** in the Python 3.11 full
+suite (247.388s); **235 passed, zero skips** on Python 3.9 related tests and source
+contracts. Ruff, compileall, 277-file Python 3.9 grammar, 11 Bash scripts and
+Rolling Eager runbook blocks pass. No inference/measurement default was changed.
+A-only GitHub push/pull-request CI is **8/8 SUCCESS**, verified with Draft/Open
+unchanged. A+B local gates: Python 3.11 full suite **2083 passed, 3 existing skips**
+(329.106s), Python 3.9 related/source suite **250 passed, zero skips** (9.578s).
+Ruff, both-version compileall, 279-file Python 3.9 grammar, 11 Bash scripts,
+4 Rolling Eager runbook blocks and diff checks pass. The runbook's six tests
+execute substituted commands in the real parent/child Bash structure and prove
+first-failure export/stop at correctness, Serial, eager or attribution stages.
+Post-push A+B CI is reported separately at delivery. No local GPU execution.
+
+## Historical diagnosis at 6ee3260 (before the raw Draft return and repairs)
+
+The record below describes the evidence limits and next gate at the diagnosis
+commit. The returned raw evidence and the current repair gate are recorded above;
+the original measured result and its PASS status have not been changed.
+
+The user-run result at `4a6725b054990e47b7e9c4cf63f38b995d029856` is retained as
+valid: both B16 points pass execution, measurement and cleanup on the same frozen
+resident360 workload. Step wall time rises 770.232 → 2444.746 ms while committed
+tokens/step change only 47.923 → 45.615. The physical Draft regression has 14 exact
+reference comparisons and complete release. It is separate from production
+concurrency evidence. CI for that measured commit was verified 8/8 SUCCESS.
+
+The returned small bundle reports native GPU overlap lower/upper = 0 and physical
+status ZERO; outer UNKNOWN is the existing conservative label, not missing-bounds
+evidence. It omits raw runtime/backend/transport timelines. Reported unhidden wait
+is 8.923837 seconds (28.05% of the eager window); the other 22.887864 seconds remain
+unpartitioned, not attributed wholesale to CPU, locks or scheduling.
+
+Source and diagnosis-only CPU tests identify a late-launch mechanism: each B16
+enrollment repeats a full 360-resident audit; 17 such audits precede first worker
+forward. Feedback queued during admission is processed before stepping, cancelling
+rejected-parent work without GPU launch. This explains how start/complete can equal
+full-accept count but does not prove the actual latency cause without raw intervals.
+Separately, eager parent repair executes per-request B1 materialize/fence, whereas
+normal/recovery and eager token steps keep batching. A mixed-result regression
+compares actual baseline/eager backend calls and conserves prefixes/KV/output.
+
+This revision adds only a bounded offline exporter, characterization tests and
+documentation. Runtime inference, sampling, K4, static eligibility, safety checks,
+logging/measurement boundaries and the default Serial path remain unchanged.
+Original result files are never rewritten. The next gate is the user's read-only
+export of existing evidence, followed by separately evaluated minimal admission
+and parent-settlement batching fixes if the evidence supports them. No AutoDL/GPU
+execution, automatic scan or cross-run GPU UUID comparison is performed here.
+See [diagnosis](rolling-eager-b16-diagnosis.md) and
+[evidence commands](rolling-eager-evidence-runbook.md).
+
+Final diagnostic-tree validation: Python 3.11 full suite **2058 passed, 3 existing
+skips** (284.470 seconds), including **30 new cases** (25 offline-export, 4 owner
+launch-order, 1 mixed-batch repair). Python 3.9 Rolling Eager and pinned vLLM source
+contracts: **225 passed, zero skips**. Ruff, both-version compileall, Python 3.9
+grammar for 275 source/test files, all 11 repository Bash scripts, the new runbook
+block and diff checks pass. An initial sandboxed Python 3.9 run denied `ps` and
+Unix socket `bind`; the same assertions pass with those required local operations
+permitted. No test was relaxed. Exporting the returned small bundle leaves every
+source file's hash/mtime unchanged and preserves original PASS while reporting
+absent native timelines as MISSING. New-commit CI is reported independently at
+delivery; the measured 4a6725b commit's verified CI remains 8/8 SUCCESS.
+
+## Rolling Eager Continuation stage 2 (implementation record before operator retest)
+
+The existing branch and Draft PR #5 now connect the shared stage-1 authority to
+the real paged-KV Draft backend. Only Target TP rank 0 enqueues an immutable
+continuation before the pinned vLLM model-forward hook. All Target ranks wait for
+that enqueue acknowledgement. The existing Draft model runs on one owner thread;
+mailbox feedback is processed between fenced batched token steps. Enrollment does
+not wait for Draft execution and is counted separately from physical start.
+
+The GPU backend fills the unmaterialized fourth parent candidate, then generates
+the bridge and four eager candidates. Full acceptance plus an exact bridge and
+dependency match retains KV and promotes the four candidates. Rejection or bridge
+mismatch crops the logical frontier, invalidates cached logits and physically
+repairs only the missing correction/bonus suffix. Private allocated blocks may
+remain at their high-water capacity until fenced release; no per-round full
+prefix replay or weakened baseline `commit_frontier` is used. Static eligibility
+survives recovery, and the provider switch remains reusable for next-stage
+PingPong scheduling without enabling GPU mixing in this revision.
+
+`serial-eager` is an explicit fixed-diagnostic/decode-scan selection with K=4 and
+an extra five-token Draft speculative reservation. Existing default modes and
+scan points remain unchanged. The runtime passes authoritative terminal prefixes,
+allows promoted/recovered/tail requests in the same batch, and extends the common
+drain deadline through owner join, physical release and log flush. Summary,
+status, errors, stop and bundle retain the eager evidence. Generated, promoted,
+verified and accepted candidates are distinct; only Target commits are output.
+Wait intervals are clipped to the existing decode window. GPU overlap requires
+native CUDA clock bounds; host concurrency alone is `UNKNOWN`.
+
+CPU integration covers the real adapter/owner/socket/backend code with substituted
+device operations, including both feedback orders, repeated promotion → rejection
+→ recovery → promotion, partial cancellation, TP submission order, tail/refill,
+bounded shutdown and producer-to-summary accounting. The operator-only
+`python -m specrhythm.continuation.gpu_check` entry compares real physical KV
+continuations and recovery against separate ordinary Draft reference allocations.
+Its deliberately constructed parent receipts are labelled `INJECTED_DIAGNOSTIC`;
+natural Target event observations come from the actual Serial-eager B16 run.
+
+Validation on the delivered stage-2 tree: **2028 passed, 3 pre-existing skips**
+in the final Python 3.11.15 full pytest run (225.216 seconds), including **76 new
+stage-2 cases**. Python 3.9.6 passes all 178 Rolling Eager cases plus 17 pinned
+vLLM source cases (**195 passed, zero skips**). Ruff, both-version compileall,
+Python 3.9 grammar for all 271 source/test files, 11 repository Bash scripts,
+the runbook Bash blocks and Git diff checks pass. An initial full-suite run hit
+the unchanged five-second process-cleanup test timeout; two isolated unchanged
+reruns and subsequent full suites passed. No timeout, skip or assertion was
+relaxed. The three final skips remain the opt-in CUDA test and two Linux-only
+process-lifecycle cases. Stage-1 commit
+`e4076628b10ccb5fef712dabae645f712c32cb51` was confirmed **8/8 CI checks SUCCESS**
+before stage 2; stage-2 CI is reported for the actual pushed commit on Draft PR #5.
+
+The [GPU runbook](rolling-eager-gpu-runbook.md) freezes resident360, the existing
+S1/models/topology, two warmup rotations, a 30-second window, one repeat,
+`samples=None`, setup 900 seconds, drain 60 seconds, buffered-live observation
+and bound-prefix identity. Its child Bash stops at the first failure and retains
+evidence. The delivery includes a copy filled with the actual final commit SHA.
+No AutoDL connection or GPU execution is performed in this implementation task.
+At that implementation checkpoint GPU evidence was PENDING. The operator has now
+returned capacity/correctness and both qualified B16 points; the valid negative
+performance result and remaining raw-evidence gate are recorded above.
+
+## Rolling Eager Continuation stage 1 (CPU implementation; GPU integration PENDING)
+
+Branch `codex/rolling-eager-v0.1` starts at verified commit
+`5a16d00fd10778189db3addbff558a2260944b32`. Its new dependent Draft PR targets
+PR #4's head branch `codex/vllm-serving-v0.1`, inspected at that same SHA.
+PR #4 remains unmerged and its branch is unchanged; PR #2/#3 are untouched.
+
+The independent `specrhythm.continuation` package implements fixed four-candidate
+normal/eager work, a separate predicted bonus bridge, static stable-ID eligibility,
+owner-local versioned request/proposal/continuation state, complete dependency
+validation, both asynchronous arrival orders, repeatable promotion, rejection and
+bridge-mismatch recovery, cancellation/release and exact-once Target accounting.
+Immutable CPU scheduling views and dispatch adapters exercise cross-cohort next-stage
+admission, normal/eager deduplication, recovery alongside another Target request,
+provider switches and stale-intent rejection. A deterministic CPU token/KV executor
+runs the real protocol; provider failure and foreign-owner dispatch are fail-closed.
+
+The multi-round regression executes P0 → E1 → E2 rejection → normal R3 → E4 → E5 → E6
+with independent proposal/continuation IDs and both feedback orders. Its six Target
+commits total **28 tokens = 22 accepted candidates + 1 correction + 5 bonuses**.
+It generates 30 early tokens, promotes 20 reusable candidates and five bridges,
+discards five early tokens, and normally drafts four recovery candidates once.
+Static membership survives rejection. EOS, short output/tail boundaries, late and
+duplicate messages, decision versions, owner isolation and shutdown are exercised.
+
+Validation: **102 new CPU cases pass on Python 3.9.6 and 3.11.15**; focused pinned
+vLLM source plus new CPU contracts pass (119 cases). Final Python 3.11 full pytest
+with the exact pinned source export: **1952 passed, 3 skipped** in 212.558 seconds.
+The existing skips are one opt-in GPU test and two Linux-only process-lifecycle
+tests; no new test is skipped. Ruff, compileall, Python 3.9 grammar for all 257
+source/test files and git diff checks pass. CI for the delivered commit is reported
+with the Draft PR.
+
+No production GPU path, CLI mode or default simulator policy is changed. There is
+**no GPU performance result**, no AutoDL connection and no performance scan in this
+stage. CPU frontier evidence does not qualify actual GPU block reuse or mixed-batch
+capacity. The next gate is explicit user instruction to integrate Serial/PingPong
+GPU adapters and their owner/fence/KV/ready-mailbox boundaries; stop after this
+Draft PR. See [rolling-eager-design.md](rolling-eager-design.md) for the audited
+baseline rules, public API, test map and concrete next-stage module list.
 
 ## Resident360 PingPong warmup boundary repair (GPU retest PENDING)
 
