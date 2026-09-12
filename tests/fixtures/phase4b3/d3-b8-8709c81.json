@@ -1,0 +1,1340 @@
+{
+  "fixtures": [
+    {
+      "initial": {
+        "batch-8-0": [
+          23526,
+          25009,
+          304,
+          6364,
+          25,
+          220,
+          16,
+          11,
+          220,
+          17,
+          11,
+          220,
+          18,
+          11,
+          220,
+          19,
+          11
+        ],
+        "batch-8-1": [
+          23526,
+          25009,
+          304,
+          6364,
+          25,
+          220,
+          16,
+          11,
+          220,
+          17,
+          11,
+          220,
+          18,
+          11,
+          220,
+          19,
+          11,
+          220,
+          20,
+          11
+        ],
+        "batch-8-2": [
+          23526,
+          25009,
+          304,
+          6364,
+          25,
+          220,
+          16,
+          11,
+          220,
+          17,
+          11,
+          220,
+          18,
+          11,
+          220,
+          19,
+          11,
+          220,
+          20,
+          11,
+          220,
+          21,
+          11
+        ],
+        "batch-8-3": [
+          23526,
+          25009,
+          304,
+          6364,
+          25,
+          220,
+          16,
+          11,
+          220,
+          17,
+          11,
+          220,
+          18,
+          11,
+          220,
+          19,
+          11,
+          220,
+          20,
+          11,
+          220,
+          21,
+          11,
+          220,
+          22,
+          11
+        ],
+        "batch-8-4": [
+          23526,
+          25009,
+          304,
+          6364,
+          25,
+          220,
+          16,
+          11,
+          220,
+          17,
+          11,
+          220,
+          18,
+          11,
+          220,
+          19,
+          11,
+          220,
+          20,
+          11,
+          220,
+          21,
+          11,
+          220,
+          22,
+          11,
+          220,
+          23,
+          11
+        ],
+        "batch-8-5": [
+          23526,
+          25009,
+          304,
+          6364,
+          25,
+          220,
+          16,
+          11,
+          220,
+          17,
+          11,
+          220,
+          18,
+          11,
+          220,
+          19,
+          11,
+          220,
+          20,
+          11,
+          220,
+          21,
+          11,
+          220,
+          22,
+          11,
+          220,
+          23,
+          11,
+          220,
+          24,
+          11
+        ],
+        "batch-8-6": [
+          23526,
+          25009,
+          304,
+          6364,
+          25,
+          220,
+          16,
+          11,
+          220,
+          17,
+          11,
+          220,
+          18,
+          11,
+          220,
+          19,
+          11,
+          220,
+          20,
+          11,
+          220,
+          21,
+          11,
+          220,
+          22,
+          11,
+          220,
+          23,
+          11,
+          220,
+          24,
+          11,
+          220,
+          16,
+          15,
+          11
+        ],
+        "batch-8-7": [
+          23526,
+          25009,
+          304,
+          6364,
+          25,
+          220,
+          16,
+          11,
+          220,
+          17,
+          11,
+          220,
+          18,
+          11,
+          220,
+          19,
+          11,
+          220,
+          20,
+          11,
+          220,
+          21,
+          11,
+          220,
+          22,
+          11,
+          220,
+          23,
+          11,
+          220,
+          24,
+          11,
+          220,
+          16,
+          15,
+          11,
+          220,
+          16,
+          16,
+          11
+        ]
+      },
+      "name": "batch-8",
+      "rounds": [
+        {
+          "expected": {
+            "batch-8-0": [
+              220,
+              20
+            ],
+            "batch-8-1": [
+              220,
+              21,
+              11,
+              220
+            ],
+            "batch-8-2": [
+              220,
+              22,
+              11,
+              220
+            ],
+            "batch-8-3": [
+              220,
+              23,
+              11,
+              220
+            ],
+            "batch-8-4": [
+              220,
+              24,
+              11,
+              220
+            ],
+            "batch-8-5": [
+              220,
+              16,
+              15,
+              11
+            ],
+            "batch-8-6": [
+              220,
+              16,
+              16,
+              11
+            ],
+            "batch-8-7": [
+              220,
+              16,
+              17,
+              11
+            ]
+          },
+          "proposals": [
+            {
+              "committed_prefix_hash": "da5644d795264481c2847ce471ea310fac80248b021286d121a1c24f064237bb",
+              "committed_prefix_len": 17,
+              "eos_token_ids": [
+                151645,
+                20
+              ],
+              "remaining_output_budget": 10,
+              "request_id": "batch-8-0",
+              "round_id": 0
+            },
+            {
+              "committed_prefix_hash": "a011c7506a5a204809911a465a992c8d8f7fbe2ef9db9c362b60f494a6587b1e",
+              "committed_prefix_len": 20,
+              "eos_token_ids": [
+                151645
+              ],
+              "remaining_output_budget": 11,
+              "request_id": "batch-8-1",
+              "round_id": 0
+            },
+            {
+              "committed_prefix_hash": "1f60b2523b72e3e102915933ab7335e50427bb6c1bb0106c00c5c812a51a46f3",
+              "committed_prefix_len": 23,
+              "eos_token_ids": [
+                151645
+              ],
+              "remaining_output_budget": 12,
+              "request_id": "batch-8-2",
+              "round_id": 0
+            },
+            {
+              "committed_prefix_hash": "eaf940b028c2f882d4fbccf5c7b8e3ad3bcc12b39f736d28128cd67b1b50b707",
+              "committed_prefix_len": 26,
+              "eos_token_ids": [
+                151645
+              ],
+              "remaining_output_budget": 10,
+              "request_id": "batch-8-3",
+              "round_id": 0
+            },
+            {
+              "committed_prefix_hash": "91fd8867d2e7bbb15aac76b8a5ed50dd42fc59df30c4068ff39f3360effeb7d5",
+              "committed_prefix_len": 29,
+              "eos_token_ids": [
+                151645
+              ],
+              "remaining_output_budget": 11,
+              "request_id": "batch-8-4",
+              "round_id": 0
+            },
+            {
+              "committed_prefix_hash": "b3aef34d8092585c5df69052ec6d34d8aec24d984fcf147befb29454aa85f1a5",
+              "committed_prefix_len": 32,
+              "eos_token_ids": [
+                151645
+              ],
+              "remaining_output_budget": 12,
+              "request_id": "batch-8-5",
+              "round_id": 0
+            },
+            {
+              "committed_prefix_hash": "23c2ad5119d63f0a2f8927b461d42db3069ed44f2f67bda112c4a6007b4fc412",
+              "committed_prefix_len": 36,
+              "eos_token_ids": [
+                151645
+              ],
+              "remaining_output_budget": 10,
+              "request_id": "batch-8-6",
+              "round_id": 0
+            },
+            {
+              "committed_prefix_hash": "330d0708ed15bf85eabeba491d08f1f247ab08ad317c3dea70625fa3d3c6aa5e",
+              "committed_prefix_len": 40,
+              "eos_token_ids": [
+                151645
+              ],
+              "remaining_output_budget": 11,
+              "request_id": "batch-8-7",
+              "round_id": 0
+            }
+          ],
+          "synchronizations": [
+            {
+              "committed_delta": [
+                220,
+                20
+              ],
+              "committed_prefix_hash": "a84e3b7ca28caf988cd992309d5cc9b6a2c2aad61d98cd406f661d9ecfac6568",
+              "request_id": "batch-8-0",
+              "round_id": 0,
+              "terminal": true
+            },
+            {
+              "committed_delta": [
+                227
+              ],
+              "committed_prefix_hash": "6cab4c1be0f128969317c2816ad936e514bc4006efa1114ed444d741a80f6dc7",
+              "request_id": "batch-8-1",
+              "round_id": 0,
+              "terminal": false
+            },
+            {
+              "committed_delta": [
+                227
+              ],
+              "committed_prefix_hash": "d99435aab6566dc2b9b7780a16f29b2208aff386e61fb109b0f6429b6d5715ca",
+              "request_id": "batch-8-2",
+              "round_id": 0,
+              "terminal": false
+            },
+            {
+              "committed_delta": [
+                227
+              ],
+              "committed_prefix_hash": "cab39c22dc965a5ea3b78d79b5633eef88706c5cabce900cf77809c953e5404d",
+              "request_id": "batch-8-3",
+              "round_id": 0,
+              "terminal": false
+            },
+            {
+              "committed_delta": [
+                227
+              ],
+              "committed_prefix_hash": "8ddec98cc579bcca1db9af8e0c8181968b6a730fd3f890bd5a93374d9ae9c3a7",
+              "request_id": "batch-8-4",
+              "round_id": 0,
+              "terminal": false
+            },
+            {
+              "committed_delta": [
+                227
+              ],
+              "committed_prefix_hash": "8c2779c665fade09c1c485d6363d6976c432dc21de8ce080806fcc38e12611e1",
+              "request_id": "batch-8-5",
+              "round_id": 0,
+              "terminal": false
+            },
+            {
+              "committed_delta": [
+                227
+              ],
+              "committed_prefix_hash": "727625fbe9bc9518b328a5415bb730d7bc6d589df8c18fa430415e5c0670e8c8",
+              "request_id": "batch-8-6",
+              "round_id": 0,
+              "terminal": false
+            },
+            {
+              "committed_delta": [
+                227
+              ],
+              "committed_prefix_hash": "9defe996653578254f12d88ee91a3b07c0dee895366234b8add08382d9499bf9",
+              "request_id": "batch-8-7",
+              "round_id": 0,
+              "terminal": false
+            }
+          ]
+        },
+        {
+          "expected": {
+            "batch-8-1": [
+              11,
+              220,
+              21,
+              11
+            ],
+            "batch-8-2": [
+              11,
+              220,
+              22,
+              11
+            ],
+            "batch-8-3": [
+              11,
+              220,
+              23,
+              11
+            ],
+            "batch-8-4": [
+              11,
+              220,
+              24,
+              11
+            ],
+            "batch-8-5": [
+              11,
+              220,
+              16,
+              15
+            ],
+            "batch-8-6": [
+              11,
+              220,
+              16,
+              16
+            ],
+            "batch-8-7": [
+              11,
+              220,
+              16,
+              17
+            ]
+          },
+          "proposals": [
+            {
+              "committed_prefix_hash": "6cab4c1be0f128969317c2816ad936e514bc4006efa1114ed444d741a80f6dc7",
+              "committed_prefix_len": 21,
+              "eos_token_ids": [
+                151645
+              ],
+              "remaining_output_budget": 10,
+              "request_id": "batch-8-1",
+              "round_id": 1
+            },
+            {
+              "committed_prefix_hash": "d99435aab6566dc2b9b7780a16f29b2208aff386e61fb109b0f6429b6d5715ca",
+              "committed_prefix_len": 24,
+              "eos_token_ids": [
+                151645
+              ],
+              "remaining_output_budget": 11,
+              "request_id": "batch-8-2",
+              "round_id": 1
+            },
+            {
+              "committed_prefix_hash": "cab39c22dc965a5ea3b78d79b5633eef88706c5cabce900cf77809c953e5404d",
+              "committed_prefix_len": 27,
+              "eos_token_ids": [
+                151645
+              ],
+              "remaining_output_budget": 9,
+              "request_id": "batch-8-3",
+              "round_id": 1
+            },
+            {
+              "committed_prefix_hash": "8ddec98cc579bcca1db9af8e0c8181968b6a730fd3f890bd5a93374d9ae9c3a7",
+              "committed_prefix_len": 30,
+              "eos_token_ids": [
+                151645
+              ],
+              "remaining_output_budget": 10,
+              "request_id": "batch-8-4",
+              "round_id": 1
+            },
+            {
+              "committed_prefix_hash": "8c2779c665fade09c1c485d6363d6976c432dc21de8ce080806fcc38e12611e1",
+              "committed_prefix_len": 33,
+              "eos_token_ids": [
+                151645
+              ],
+              "remaining_output_budget": 11,
+              "request_id": "batch-8-5",
+              "round_id": 1
+            },
+            {
+              "committed_prefix_hash": "727625fbe9bc9518b328a5415bb730d7bc6d589df8c18fa430415e5c0670e8c8",
+              "committed_prefix_len": 37,
+              "eos_token_ids": [
+                151645
+              ],
+              "remaining_output_budget": 9,
+              "request_id": "batch-8-6",
+              "round_id": 1
+            },
+            {
+              "committed_prefix_hash": "9defe996653578254f12d88ee91a3b07c0dee895366234b8add08382d9499bf9",
+              "committed_prefix_len": 41,
+              "eos_token_ids": [
+                151645
+              ],
+              "remaining_output_budget": 10,
+              "request_id": "batch-8-7",
+              "round_id": 1
+            }
+          ],
+          "synchronizations": [
+            {
+              "committed_delta": [
+                11,
+                227
+              ],
+              "committed_prefix_hash": "6d097359354f9da03feaf6adc448087aa9ebdbff2fcb3aca89f44f98dd3b0df6",
+              "request_id": "batch-8-1",
+              "round_id": 1,
+              "terminal": false
+            },
+            {
+              "committed_delta": [
+                11,
+                227
+              ],
+              "committed_prefix_hash": "2dd3c0c770f601b6c0ca34857b258cdb32d065b49bff3b24655923f2b608e5a5",
+              "request_id": "batch-8-2",
+              "round_id": 1,
+              "terminal": false
+            },
+            {
+              "committed_delta": [
+                11,
+                227
+              ],
+              "committed_prefix_hash": "c306cf2eb5299da6325a2ee7f1be7cac7c592cba5479c524e31240bebbcadd42",
+              "request_id": "batch-8-3",
+              "round_id": 1,
+              "terminal": false
+            },
+            {
+              "committed_delta": [
+                11,
+                227
+              ],
+              "committed_prefix_hash": "8f6f7c870d5cd052a7036c83195fba81c1a945d3553e5437551e6d7b56d3bfc3",
+              "request_id": "batch-8-4",
+              "round_id": 1,
+              "terminal": false
+            },
+            {
+              "committed_delta": [
+                11,
+                227
+              ],
+              "committed_prefix_hash": "de3edd7926503d0c41ee38a54e29f6591b04d314dcfe8918bec71726085bd370",
+              "request_id": "batch-8-5",
+              "round_id": 1,
+              "terminal": false
+            },
+            {
+              "committed_delta": [
+                11,
+                227
+              ],
+              "committed_prefix_hash": "6c68a1bf96f60a1a606dc48d0ed8ad1fe279fe82e66b8e41b17f323ad9176a97",
+              "request_id": "batch-8-6",
+              "round_id": 1,
+              "terminal": false
+            },
+            {
+              "committed_delta": [
+                11,
+                227
+              ],
+              "committed_prefix_hash": "ef69dedc377a9b861c320a6138b8091a3b832a7ebf9bdacd4c737e2f9ff44000",
+              "request_id": "batch-8-7",
+              "round_id": 1,
+              "terminal": false
+            }
+          ]
+        },
+        {
+          "expected": {
+            "batch-8-1": [
+              11,
+              227,
+              11,
+              227
+            ],
+            "batch-8-2": [
+              11,
+              22,
+              11,
+              23
+            ],
+            "batch-8-3": [
+              11,
+              23,
+              11,
+              24
+            ],
+            "batch-8-4": [
+              11,
+              24,
+              11,
+              16
+            ],
+            "batch-8-5": [
+              11,
+              16,
+              15,
+              11
+            ],
+            "batch-8-6": [
+              11,
+              16,
+              16,
+              11
+            ],
+            "batch-8-7": [
+              11,
+              16,
+              17,
+              11
+            ]
+          },
+          "proposals": [
+            {
+              "committed_prefix_hash": "6d097359354f9da03feaf6adc448087aa9ebdbff2fcb3aca89f44f98dd3b0df6",
+              "committed_prefix_len": 23,
+              "eos_token_ids": [
+                151645
+              ],
+              "remaining_output_budget": 8,
+              "request_id": "batch-8-1",
+              "round_id": 2
+            },
+            {
+              "committed_prefix_hash": "2dd3c0c770f601b6c0ca34857b258cdb32d065b49bff3b24655923f2b608e5a5",
+              "committed_prefix_len": 26,
+              "eos_token_ids": [
+                151645
+              ],
+              "remaining_output_budget": 9,
+              "request_id": "batch-8-2",
+              "round_id": 2
+            },
+            {
+              "committed_prefix_hash": "c306cf2eb5299da6325a2ee7f1be7cac7c592cba5479c524e31240bebbcadd42",
+              "committed_prefix_len": 29,
+              "eos_token_ids": [
+                151645
+              ],
+              "remaining_output_budget": 7,
+              "request_id": "batch-8-3",
+              "round_id": 2
+            },
+            {
+              "committed_prefix_hash": "8f6f7c870d5cd052a7036c83195fba81c1a945d3553e5437551e6d7b56d3bfc3",
+              "committed_prefix_len": 32,
+              "eos_token_ids": [
+                151645
+              ],
+              "remaining_output_budget": 8,
+              "request_id": "batch-8-4",
+              "round_id": 2
+            },
+            {
+              "committed_prefix_hash": "de3edd7926503d0c41ee38a54e29f6591b04d314dcfe8918bec71726085bd370",
+              "committed_prefix_len": 35,
+              "eos_token_ids": [
+                151645
+              ],
+              "remaining_output_budget": 9,
+              "request_id": "batch-8-5",
+              "round_id": 2
+            },
+            {
+              "committed_prefix_hash": "6c68a1bf96f60a1a606dc48d0ed8ad1fe279fe82e66b8e41b17f323ad9176a97",
+              "committed_prefix_len": 39,
+              "eos_token_ids": [
+                151645
+              ],
+              "remaining_output_budget": 7,
+              "request_id": "batch-8-6",
+              "round_id": 2
+            },
+            {
+              "committed_prefix_hash": "ef69dedc377a9b861c320a6138b8091a3b832a7ebf9bdacd4c737e2f9ff44000",
+              "committed_prefix_len": 43,
+              "eos_token_ids": [
+                151645
+              ],
+              "remaining_output_budget": 8,
+              "request_id": "batch-8-7",
+              "round_id": 2
+            }
+          ],
+          "synchronizations": [
+            {
+              "committed_delta": [
+                11,
+                227,
+                11,
+                227,
+                234
+              ],
+              "committed_prefix_hash": "d90f1a93d829af87c423d9b564e85cedbe9437a570ab51af621b23f14e675d4c",
+              "request_id": "batch-8-1",
+              "round_id": 2,
+              "terminal": false
+            },
+            {
+              "committed_delta": [
+                11,
+                22,
+                11,
+                23,
+                30
+              ],
+              "committed_prefix_hash": "a7d6da28d62dbea27f9d94f1cf6fd83f0203745b5103e6462751d85fb703106f",
+              "request_id": "batch-8-2",
+              "round_id": 2,
+              "terminal": false
+            },
+            {
+              "committed_delta": [
+                11,
+                23,
+                11,
+                24,
+                31
+              ],
+              "committed_prefix_hash": "95c351e5c871e779260808e36d94cc4142456530b8c3fab35528dc9d197337a3",
+              "request_id": "batch-8-3",
+              "round_id": 2,
+              "terminal": false
+            },
+            {
+              "committed_delta": [
+                11,
+                24,
+                11,
+                16,
+                23
+              ],
+              "committed_prefix_hash": "e3d8d5eba602e073a2d6813722391f20d5b2e2783419b21b6dcf495747a17581",
+              "request_id": "batch-8-4",
+              "round_id": 2,
+              "terminal": false
+            },
+            {
+              "committed_delta": [
+                11,
+                16,
+                15,
+                11,
+                18
+              ],
+              "committed_prefix_hash": "d5237a8181efe90648b916a941325c7e50e7799d24261d402f18fe3405b0e264",
+              "request_id": "batch-8-5",
+              "round_id": 2,
+              "terminal": false
+            },
+            {
+              "committed_delta": [
+                11,
+                16,
+                16,
+                11,
+                18
+              ],
+              "committed_prefix_hash": "ade0e4834c5af1bcd77340f56ad52de8598a353b7ed993fc3cb8717ad2989f07",
+              "request_id": "batch-8-6",
+              "round_id": 2,
+              "terminal": false
+            },
+            {
+              "committed_delta": [
+                11,
+                16,
+                17,
+                11,
+                18
+              ],
+              "committed_prefix_hash": "b1cfe74ccc5deb392a88b9c8cb5bdef86d3c8800fb182ce4ecd8dbb99dc8ec32",
+              "request_id": "batch-8-7",
+              "round_id": 2,
+              "terminal": false
+            }
+          ]
+        },
+        {
+          "expected": {
+            "batch-8-1": [
+              11,
+              227
+            ],
+            "batch-8-2": [
+              4710,
+              785,
+              4396
+            ],
+            "batch-8-3": [
+              11
+            ],
+            "batch-8-4": [
+              11,
+              17
+            ],
+            "batch-8-5": [
+              11,
+              19,
+              11
+            ],
+            "batch-8-6": [
+              11
+            ],
+            "batch-8-7": [
+              11,
+              19
+            ]
+          },
+          "proposals": [
+            {
+              "committed_prefix_hash": "d90f1a93d829af87c423d9b564e85cedbe9437a570ab51af621b23f14e675d4c",
+              "committed_prefix_len": 28,
+              "eos_token_ids": [
+                151645
+              ],
+              "remaining_output_budget": 3,
+              "request_id": "batch-8-1",
+              "round_id": 3
+            },
+            {
+              "committed_prefix_hash": "a7d6da28d62dbea27f9d94f1cf6fd83f0203745b5103e6462751d85fb703106f",
+              "committed_prefix_len": 31,
+              "eos_token_ids": [
+                151645
+              ],
+              "remaining_output_budget": 4,
+              "request_id": "batch-8-2",
+              "round_id": 3
+            },
+            {
+              "committed_prefix_hash": "95c351e5c871e779260808e36d94cc4142456530b8c3fab35528dc9d197337a3",
+              "committed_prefix_len": 34,
+              "eos_token_ids": [
+                151645
+              ],
+              "remaining_output_budget": 2,
+              "request_id": "batch-8-3",
+              "round_id": 3
+            },
+            {
+              "committed_prefix_hash": "e3d8d5eba602e073a2d6813722391f20d5b2e2783419b21b6dcf495747a17581",
+              "committed_prefix_len": 37,
+              "eos_token_ids": [
+                151645
+              ],
+              "remaining_output_budget": 3,
+              "request_id": "batch-8-4",
+              "round_id": 3
+            },
+            {
+              "committed_prefix_hash": "d5237a8181efe90648b916a941325c7e50e7799d24261d402f18fe3405b0e264",
+              "committed_prefix_len": 40,
+              "eos_token_ids": [
+                151645
+              ],
+              "remaining_output_budget": 4,
+              "request_id": "batch-8-5",
+              "round_id": 3
+            },
+            {
+              "committed_prefix_hash": "ade0e4834c5af1bcd77340f56ad52de8598a353b7ed993fc3cb8717ad2989f07",
+              "committed_prefix_len": 44,
+              "eos_token_ids": [
+                151645
+              ],
+              "remaining_output_budget": 2,
+              "request_id": "batch-8-6",
+              "round_id": 3
+            },
+            {
+              "committed_prefix_hash": "b1cfe74ccc5deb392a88b9c8cb5bdef86d3c8800fb182ce4ecd8dbb99dc8ec32",
+              "committed_prefix_len": 48,
+              "eos_token_ids": [
+                151645
+              ],
+              "remaining_output_budget": 3,
+              "request_id": "batch-8-7",
+              "round_id": 3
+            }
+          ],
+          "synchronizations": [
+            {
+              "committed_delta": [
+                11,
+                227,
+                234
+              ],
+              "committed_prefix_hash": "5fd8d63db26d5c450f2748e0c7d1fcb26ced2f7f09fbcd36e8dea206520391ef",
+              "request_id": "batch-8-1",
+              "round_id": 3,
+              "terminal": true
+            },
+            {
+              "committed_delta": [
+                4710,
+                785,
+                4396,
+                4403
+              ],
+              "committed_prefix_hash": "39e084891fc9de051ae3c17993834d3757eed897fd0b9e0310507ac705c1b3fb",
+              "request_id": "batch-8-2",
+              "round_id": 3,
+              "terminal": true
+            },
+            {
+              "committed_delta": [
+                11,
+                18
+              ],
+              "committed_prefix_hash": "f482135f18ede0551b195761b3845ce5acc335c9db7c042af9e54c015ca2b0f6",
+              "request_id": "batch-8-3",
+              "round_id": 3,
+              "terminal": true
+            },
+            {
+              "committed_delta": [
+                11,
+                17,
+                24
+              ],
+              "committed_prefix_hash": "552fb6db7e53bd521228f6cccfea2091e5ae1e71cc518346d0715fc97ce89f5f",
+              "request_id": "batch-8-4",
+              "round_id": 3,
+              "terminal": true
+            },
+            {
+              "committed_delta": [
+                11,
+                19,
+                11,
+                18
+              ],
+              "committed_prefix_hash": "c1820b7aa23cc151106cf7d6b809b1f86121b963a1c47229ebfbdb055851f00a",
+              "request_id": "batch-8-5",
+              "round_id": 3,
+              "terminal": true
+            },
+            {
+              "committed_delta": [
+                11,
+                18
+              ],
+              "committed_prefix_hash": "76d9fde50869237a6132ad53450c9b5f7ce2614034d142e0e0341afb0b93d785",
+              "request_id": "batch-8-6",
+              "round_id": 3,
+              "terminal": true
+            },
+            {
+              "committed_delta": [
+                11,
+                19,
+                26
+              ],
+              "committed_prefix_hash": "390748e58619da0ac2fb081ad57edfc898d074fbe1607214f7c302ad2f7dccc0",
+              "request_id": "batch-8-7",
+              "round_id": 3,
+              "terminal": true
+            }
+          ]
+        }
+      ],
+      "synthetic_eos_policy_token": 20
+    }
+  ],
+  "observed": [
+    {
+      "actual": {
+        "batch-8-0": [
+          220,
+          20
+        ],
+        "batch-8-1": [
+          220,
+          21,
+          11,
+          220
+        ],
+        "batch-8-2": [
+          220,
+          22,
+          11,
+          220
+        ],
+        "batch-8-3": [
+          220,
+          23,
+          11,
+          220
+        ],
+        "batch-8-4": [
+          220,
+          24,
+          11,
+          220
+        ],
+        "batch-8-5": [
+          220,
+          16,
+          15,
+          11
+        ],
+        "batch-8-6": [
+          220,
+          16,
+          16,
+          11
+        ],
+        "batch-8-7": [
+          220,
+          16,
+          17,
+          11
+        ]
+      },
+      "draft_proposals_exact": true,
+      "expected": {
+        "batch-8-0": [
+          220,
+          20
+        ],
+        "batch-8-1": [
+          220,
+          21,
+          11,
+          220
+        ],
+        "batch-8-2": [
+          220,
+          22,
+          11,
+          220
+        ],
+        "batch-8-3": [
+          220,
+          23,
+          11,
+          220
+        ],
+        "batch-8-4": [
+          220,
+          24,
+          11,
+          220
+        ],
+        "batch-8-5": [
+          220,
+          16,
+          15,
+          11
+        ],
+        "batch-8-6": [
+          220,
+          16,
+          16,
+          11
+        ],
+        "batch-8-7": [
+          220,
+          16,
+          17,
+          11
+        ]
+      },
+      "fixture": "batch-8",
+      "round": 0
+    },
+    {
+      "actual": {
+        "batch-8-1": [
+          11,
+          220,
+          21,
+          11
+        ],
+        "batch-8-2": [
+          11,
+          220,
+          22,
+          11
+        ],
+        "batch-8-3": [
+          11,
+          220,
+          23,
+          11
+        ],
+        "batch-8-4": [
+          11,
+          220,
+          24,
+          11
+        ],
+        "batch-8-5": [
+          11,
+          220,
+          16,
+          15
+        ],
+        "batch-8-6": [
+          11,
+          220,
+          16,
+          16
+        ],
+        "batch-8-7": [
+          11,
+          220,
+          16,
+          17
+        ]
+      },
+      "draft_proposals_exact": true,
+      "expected": {
+        "batch-8-1": [
+          11,
+          220,
+          21,
+          11
+        ],
+        "batch-8-2": [
+          11,
+          220,
+          22,
+          11
+        ],
+        "batch-8-3": [
+          11,
+          220,
+          23,
+          11
+        ],
+        "batch-8-4": [
+          11,
+          220,
+          24,
+          11
+        ],
+        "batch-8-5": [
+          11,
+          220,
+          16,
+          15
+        ],
+        "batch-8-6": [
+          11,
+          220,
+          16,
+          16
+        ],
+        "batch-8-7": [
+          11,
+          220,
+          16,
+          17
+        ]
+      },
+      "fixture": "batch-8",
+      "round": 1
+    },
+    {
+      "actual": {
+        "batch-8-1": [
+          11,
+          227,
+          11,
+          227
+        ],
+        "batch-8-2": [
+          11,
+          22,
+          11,
+          23
+        ],
+        "batch-8-3": [
+          11,
+          23,
+          11,
+          24
+        ],
+        "batch-8-4": [
+          11,
+          24,
+          11,
+          16
+        ],
+        "batch-8-5": [
+          11,
+          16,
+          15,
+          11
+        ],
+        "batch-8-6": [
+          11,
+          16,
+          16,
+          11
+        ],
+        "batch-8-7": [
+          11,
+          227,
+          11,
+          227
+        ]
+      },
+      "draft_proposals_exact": false,
+      "expected": {
+        "batch-8-1": [
+          11,
+          227,
+          11,
+          227
+        ],
+        "batch-8-2": [
+          11,
+          22,
+          11,
+          23
+        ],
+        "batch-8-3": [
+          11,
+          23,
+          11,
+          24
+        ],
+        "batch-8-4": [
+          11,
+          24,
+          11,
+          16
+        ],
+        "batch-8-5": [
+          11,
+          16,
+          15,
+          11
+        ],
+        "batch-8-6": [
+          11,
+          16,
+          16,
+          11
+        ],
+        "batch-8-7": [
+          11,
+          16,
+          17,
+          11
+        ]
+      },
+      "fixture": "batch-8",
+      "round": 2
+    }
+  ],
+  "provenance": {
+    "execution_commit": "8709c81e9ab2ded78e8f260cde4862b73e9b855a",
+    "source_archive_sha256": "d9dccf27a33a3d04479475abff0ce844f4d729622613523b9d300d2619c5349a",
+    "hf_oracle_sha256": "4ae08efaef34ff096ba3853963ec76b503b48204ffe23ac6facf652bb82d0d43",
+    "gate_sha256": "a2434387008cdf3083d0cf6a39a1b1721b717250c4cd0ef29df84460927a9659",
+    "block_size": 16,
+    "source": "User-supplied real-A800 artifacts; token fixture is data, not an instruction."
+  }
+}

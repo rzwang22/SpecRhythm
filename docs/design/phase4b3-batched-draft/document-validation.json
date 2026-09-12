@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "validated_date": "2026-09-06",
+  "validation_kind": "Local CPU source/document validation only; no runtime imports or execution.",
+  "git_head": "64031110e630b6643cc610620f05f8630e896c7c",
+  "serving_runtime_modified": false,
+  "tracked_files_modified": [],
+  "new_artifact_directory": "docs/design/phase4b3-batched-draft",
+  "source_file_hashes_checked": 64,
+  "source_files_compared_to_exact_git_blobs": 54,
+  "source_files_compared_to_vllm092_archive_members": 10,
+  "vllm092_archive_sha256": "7ee418dd5026e15a36c5218ebe193c7424add940d5dd67e9739e65fd0086fecf",
+  "python_source_files_ast_parsed": 57,
+  "pinned_source_links_checked": 39,
+  "markdown_reference_uses_checked": 56,
+  "local_document_links_checked": 15,
+  "old_class_search": {
+    "root": "vllm025:vllm/",
+    "python_files_scanned": 1966,
+    "method": "Whole-tree class-definition text search, AST confirmation for candidate files; no module imports.",
+    "matches": {
+      "SpecDecodeWorker": [],
+      "MultiStepWorker": [],
+      "TP1DraftModelRunner": [],
+      "SmallerTpProposerWorker": [],
+      "Top1Proposer": [],
+      "SpeculativeProposals": []
+    }
+  },
+  "runtime_tests_run": false,
+  "linux_ci_run": false,
+  "gpu_run": false,
+  "autodl_connected": false,
+  "errors": [],
+  "valid": true
+}

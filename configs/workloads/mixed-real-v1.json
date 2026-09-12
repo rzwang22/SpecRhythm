@@ -1,0 +1,34 @@
+{
+  "schema_version": "specrhythm.serving-config.v1",
+  "workload_family": "mixed-real-v1",
+  "seed": 1664,
+  "arrival_seed": 1665,
+  "language": "English",
+  "request_style": "single-turn",
+  "enable_thinking": false,
+  "add_generation_prompt": true,
+  "max_model_len": 4096,
+  "speculative_reserve_tokens": 4,
+  "natural_eos": true,
+  "base_time_scale": 1.0,
+  "instruction_version": "mixed-real-v1-instructions-v1",
+  "instructions": {
+    "chat": "",
+    "code": "Solve the following programming problem. Provide a Python solution.\n\n",
+    "summarization": "Summarize the following article concisely.\n\n",
+    "reasoning": "Solve the following math problem and explain your solution.\n\n"
+  },
+  "class_limits": {
+    "chat": {"prompt_tokens": 1024, "maximum_new_tokens": 512},
+    "code": {"prompt_tokens": 1536, "maximum_new_tokens": 1024},
+    "summarization": {"prompt_tokens": 3072, "maximum_new_tokens": 512},
+    "reasoning": {"prompt_tokens": 1024, "maximum_new_tokens": 1024}
+  },
+  "splits": {
+    "main": {"workload_id": "mixed-real-v1-main1000", "quotas": {"chat": 300, "code": 300, "summarization": 200, "reasoning": 200}},
+    "calibration": {"workload_id": "mixed-real-v1-calibration200", "quotas": {"chat": 50, "code": 50, "summarization": 50, "reasoning": 50}}
+  },
+  "arrival": {"timestamp_field": "timestamp", "unit": "ms", "sort": "timestamp,original_line_index", "selection": "first-main-then-calibration", "start_index": 0},
+  "slo_policy_ref": null,
+  "calibration_status": "pending"
+}

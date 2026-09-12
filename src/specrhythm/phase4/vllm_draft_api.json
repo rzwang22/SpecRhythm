@@ -1,0 +1,1299 @@
+{
+  "schema_version": 1,
+  "vllm_version": "0.25.1",
+  "vllm_commit": "752a3a504485790a2e8491cacbb35c137339ad34",
+  "required_patch_state": "existing-five-patch-stack",
+  "files": [
+    {
+      "path": "vllm/engine/arg_utils.py",
+      "base_sha256": "3b3ffa6b403d34188c6d2fe7a2dc36debcee7402a17fc6a6145e885130f3dacd",
+      "required_installed_sha256": "3b3ffa6b403d34188c6d2fe7a2dc36debcee7402a17fc6a6145e885130f3dacd",
+      "symbols": [
+        {
+          "symbol": "EngineArgs",
+          "line": 414,
+          "fields": [
+            "model",
+            "enable_return_routed_experts",
+            "model_weights",
+            "served_model_name",
+            "tokenizer",
+            "hf_config_path",
+            "runner",
+            "convert",
+            "skip_tokenizer_init",
+            "enable_prompt_embeds",
+            "tokenizer_mode",
+            "trust_remote_code",
+            "allowed_local_media_path",
+            "allowed_media_domains",
+            "download_dir",
+            "safetensors_load_strategy",
+            "safetensors_prefetch_num_threads",
+            "safetensors_prefetch_block_size",
+            "load_format",
+            "config_format",
+            "dtype",
+            "kv_cache_dtype",
+            "seed",
+            "max_model_len",
+            "cudagraph_capture_sizes",
+            "max_cudagraph_capture_size",
+            "ir_op_priority",
+            "distributed_executor_backend",
+            "pipeline_parallel_size",
+            "master_addr",
+            "master_port",
+            "nnodes",
+            "node_rank",
+            "distributed_timeout_seconds",
+            "cpu_distributed_timeout_seconds",
+            "numa_bind",
+            "numa_bind_nodes",
+            "numa_bind_cpus",
+            "device_ids",
+            "tensor_parallel_size",
+            "prefill_context_parallel_size",
+            "decode_context_parallel_size",
+            "dcp_comm_backend",
+            "dcp_kv_cache_interleave_size",
+            "cp_kv_cache_interleave_size",
+            "data_parallel_size",
+            "data_parallel_rank",
+            "data_parallel_start_rank",
+            "data_parallel_size_local",
+            "data_parallel_address",
+            "data_parallel_rpc_port",
+            "data_parallel_hybrid_lb",
+            "data_parallel_external_lb",
+            "data_parallel_multi_port_external_lb",
+            "data_parallel_backend",
+            "enable_expert_parallel",
+            "enable_ep_weight_filter",
+            "moe_backend",
+            "linear_backend",
+            "all2all_backend",
+            "enable_elastic_ep",
+            "enable_dbo",
+            "ubatch_size",
+            "dbo_decode_token_threshold",
+            "dbo_prefill_token_threshold",
+            "disable_nccl_for_dp_synchronization",
+            "eplb_config",
+            "enable_eplb",
+            "expert_placement_strategy",
+            "_api_process_count",
+            "_api_process_rank",
+            "max_parallel_loading_workers",
+            "block_size",
+            "enable_prefix_caching",
+            "prefix_caching_hash_algo",
+            "disable_sliding_window",
+            "disable_cascade_attn",
+            "offload_backend",
+            "cpu_offload_gb",
+            "cpu_offload_params",
+            "offload_group_size",
+            "offload_num_in_group",
+            "offload_prefetch_step",
+            "offload_params",
+            "gpu_memory_utilization",
+            "kv_cache_memory_bytes",
+            "max_num_batched_tokens",
+            "max_num_partial_prefills",
+            "max_long_partial_prefills",
+            "long_prefill_token_threshold",
+            "max_num_seqs",
+            "max_logprobs",
+            "logprobs_mode",
+            "use_fp64_gumbel",
+            "disable_log_stats",
+            "aggregate_engine_logging",
+            "revision",
+            "code_revision",
+            "hf_token",
+            "hf_overrides",
+            "model_class_overrides",
+            "tokenizer_revision",
+            "quantization",
+            "quantization_config",
+            "allow_deprecated_quantization",
+            "enforce_eager",
+            "disable_custom_all_reduce",
+            "language_model_only",
+            "limit_mm_per_prompt",
+            "enable_mm_embeds",
+            "interleave_mm_strings",
+            "media_io_kwargs",
+            "mm_processor_kwargs",
+            "mm_processor_cache_gb",
+            "mm_processor_cache_type",
+            "mm_shm_cache_max_object_size_mb",
+            "mm_encoder_only",
+            "mm_encoder_tp_mode",
+            "mm_encoder_attn_backend",
+            "mm_encoder_attn_dtype",
+            "mm_encoder_fp8_scale_path",
+            "mm_encoder_fp8_scale_save_path",
+            "mm_encoder_fp8_scale_save_margin",
+            "io_processor_plugin",
+            "renderer_num_workers",
+            "skip_mm_profiling",
+            "video_pruning_rate",
+            "mm_tensor_ipc",
+            "mm_ipc_gpu_memory_gb",
+            "enable_lora",
+            "max_loras",
+            "max_lora_rank",
+            "default_mm_loras",
+            "fully_sharded_loras",
+            "max_cpu_loras",
+            "lora_dtype",
+            "lora_target_modules",
+            "enable_tower_connector_lora",
+            "specialize_active_lora",
+            "enable_mixed_moe_lora_format",
+            "ray_workers_use_nsight",
+            "num_gpu_blocks_override",
+            "model_loader_extra_config",
+            "ignore_patterns",
+            "enable_chunked_prefill",
+            "disable_chunked_mm_input",
+            "scheduler_reserve_full_isl",
+            "prefill_schedule_interval",
+            "watermark",
+            "disable_hybrid_kv_cache_manager",
+            "structured_outputs_config",
+            "reasoning_parser",
+            "reasoning_parser_plugin",
+            "speculative_config",
+            "spec_method",
+            "spec_model",
+            "spec_tokens",
+            "diffusion_config",
+            "show_hidden_metrics_for_version",
+            "otlp_traces_endpoint",
+            "collect_detailed_traces",
+            "kv_cache_metrics",
+            "kv_cache_metrics_sample",
+            "cudagraph_metrics",
+            "enable_layerwise_nvtx_tracing",
+            "enable_mfu_metrics",
+            "enable_logging_iteration_details",
+            "jit_monitor_mode",
+            "jit_monitor_verbose",
+            "enable_mm_processor_stats",
+            "scheduling_policy",
+            "scheduler_cls",
+            "pooler_config",
+            "compilation_config",
+            "attention_config",
+            "mamba_config",
+            "kernel_config",
+            "enable_flashinfer_autotune",
+            "worker_cls",
+            "worker_extension_cls",
+            "profiler_config",
+            "kv_transfer_config",
+            "kv_events_config",
+            "ec_transfer_config",
+            "reasoning_config",
+            "generation_config",
+            "enable_sleep_mode",
+            "enable_cumem_allocator",
+            "override_generation_config",
+            "model_impl",
+            "override_attention_dtype",
+            "attention_backend",
+            "calculate_kv_scales",
+            "kv_cache_dtype_skip_layers",
+            "mamba_cache_dtype",
+            "mamba_ssm_cache_dtype",
+            "mamba_block_size",
+            "mamba_cache_mode",
+            "mamba_backend",
+            "enable_mamba_cache_stochastic_rounding",
+            "mamba_cache_philox_rounds",
+            "additional_config",
+            "use_tqdm_on_load",
+            "pt_load_map_location",
+            "logits_processors",
+            "async_scheduling",
+            "stream_interval",
+            "kv_sharing_fast_prefill",
+            "optimization_level",
+            "performance_mode",
+            "kv_offloading_size",
+            "kv_offloading_backend",
+            "tokens_only",
+            "shutdown_timeout",
+            "weight_transfer_config",
+            "fail_on_environ_validation",
+            "gdn_prefill_backend"
+          ],
+          "methods": [
+            {
+              "name": "create_engine_config",
+              "signature": "self, usage_context: UsageContext | None=None, headless: bool=False",
+              "line": 1818
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "vllm/config/__init__.py",
+      "base_sha256": "03c309be8de8038ed134cd3dfa81a6bc856049e24fe8d4582818f5c0f6f9080f",
+      "required_installed_sha256": "03c309be8de8038ed134cd3dfa81a6bc856049e24fe8d4582818f5c0f6f9080f",
+      "symbols": []
+    },
+    {
+      "path": "vllm/v1/executor/abstract.py",
+      "base_sha256": "419002195d13cf050c3ea9705d18a12456c890c27c470a1efadce7de27ded0b1",
+      "required_installed_sha256": "419002195d13cf050c3ea9705d18a12456c890c27c470a1efadce7de27ded0b1",
+      "symbols": [
+        {
+          "symbol": "Executor",
+          "line": 37,
+          "fields": [
+            "uses_ray",
+            "supports_pp"
+          ],
+          "methods": [
+            {
+              "name": "__init__",
+              "signature": "self, vllm_config: VllmConfig",
+              "line": 95
+            },
+            {
+              "name": "_init_executor",
+              "signature": "self",
+              "line": 115
+            },
+            {
+              "name": "initialize_from_config",
+              "signature": "self, kv_cache_configs: list[KVCacheConfig]",
+              "line": 118
+            },
+            {
+              "name": "determine_available_memory",
+              "signature": "self",
+              "line": 146
+            },
+            {
+              "name": "get_kv_cache_specs",
+              "signature": "self",
+              "line": 149
+            },
+            {
+              "name": "collective_rpc",
+              "signature": "self, method: str | Callable[[WorkerBase], _R], timeout: float | None=None, args: tuple=(), kwargs: dict | None=None, non_block: Literal[False]=False",
+              "line": 153
+            },
+            {
+              "name": "collective_rpc",
+              "signature": "self, method: str | Callable[[WorkerBase], _R], timeout: float | None=None, args: tuple=(), kwargs: dict | None=None, non_block: Literal[True]=True",
+              "line": 188
+            },
+            {
+              "name": "collective_rpc",
+              "signature": "self, method, timeout=None, args=(), kwargs=None, non_block: bool=False",
+              "line": 199
+            },
+            {
+              "name": "execute_model",
+              "signature": "self, scheduler_output: SchedulerOutput, non_block: Literal[False]=False",
+              "line": 210
+            },
+            {
+              "name": "execute_model",
+              "signature": "self, scheduler_output: SchedulerOutput, non_block: Literal[True]=True",
+              "line": 216
+            },
+            {
+              "name": "execute_model",
+              "signature": "self, scheduler_output: SchedulerOutput, non_block: bool=False",
+              "line": 221
+            },
+            {
+              "name": "sample_tokens",
+              "signature": "self, grammar_output: GrammarOutput | None, non_block: Literal[False]=False",
+              "line": 230
+            },
+            {
+              "name": "sample_tokens",
+              "signature": "self, grammar_output: GrammarOutput | None, non_block: Literal[True]=True",
+              "line": 236
+            },
+            {
+              "name": "sample_tokens",
+              "signature": "self, grammar_output: GrammarOutput | None, non_block: bool=False",
+              "line": 241
+            },
+            {
+              "name": "shutdown",
+              "signature": "self",
+              "line": 276
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "vllm/v1/executor/uniproc_executor.py",
+      "base_sha256": "4625c8e59aef1482600b02204701d348d7f716427581d3cf23b06bff9b056abe",
+      "required_installed_sha256": "4625c8e59aef1482600b02204701d348d7f716427581d3cf23b06bff9b056abe",
+      "symbols": [
+        {
+          "symbol": "UniProcExecutor",
+          "line": 45,
+          "fields": [],
+          "methods": [
+            {
+              "name": "_init_executor",
+              "signature": "self",
+              "line": 46
+            },
+            {
+              "name": "collective_rpc",
+              "signature": "self, method: str | Callable, timeout: float | None=None, args: tuple=(), kwargs: dict | None=None, non_block: bool=False, single_value: bool=False",
+              "line": 79
+            },
+            {
+              "name": "execute_model",
+              "signature": "self, scheduler_output: SchedulerOutput, non_block: bool=False",
+              "line": 108
+            },
+            {
+              "name": "sample_tokens",
+              "signature": "self, grammar_output: GrammarOutput | None, non_block: bool=False",
+              "line": 123
+            },
+            {
+              "name": "shutdown",
+              "signature": "self",
+              "line": 141
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "vllm/v1/worker/worker_base.py",
+      "base_sha256": "7da44338c2645ebf03d23394e452b31a8e3da1011fd1b42fcfcccfe99551b3fe",
+      "required_installed_sha256": "7da44338c2645ebf03d23394e452b31a8e3da1011fd1b42fcfcccfe99551b3fe",
+      "symbols": [
+        {
+          "symbol": "WorkerWrapperBase",
+          "line": 187,
+          "fields": [],
+          "methods": [
+            {
+              "name": "__init__",
+              "signature": "self, rpc_rank: int=0, global_rank: int | None=None",
+              "line": 196
+            },
+            {
+              "name": "shutdown",
+              "signature": "self",
+              "line": 218
+            },
+            {
+              "name": "init_worker",
+              "signature": "self, all_kwargs: list[dict[str, Any]]",
+              "line": 230
+            },
+            {
+              "name": "initialize_from_config",
+              "signature": "self, kv_cache_configs: list[Any]",
+              "line": 321
+            },
+            {
+              "name": "init_device",
+              "signature": "self",
+              "line": 327
+            },
+            {
+              "name": "execute_model",
+              "signature": "self, scheduler_output: SchedulerOutput",
+              "line": 346
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "vllm/v1/worker/gpu_worker.py",
+      "base_sha256": "7e00284da7b453154af47300630483ed7ea5a5d79e724c5ee61d4a24edaf930e",
+      "required_installed_sha256": "7e00284da7b453154af47300630483ed7ea5a5d79e724c5ee61d4a24edaf930e",
+      "symbols": [
+        {
+          "symbol": "Worker",
+          "line": 126,
+          "fields": [],
+          "methods": [
+            {
+              "name": "__init__",
+              "signature": "self, vllm_config: VllmConfig, local_rank: int, rank: int, distributed_init_method: str, is_driver_worker: bool=False",
+              "line": 127
+            },
+            {
+              "name": "init_device",
+              "signature": "self",
+              "line": 279
+            },
+            {
+              "name": "load_model",
+              "signature": "self, *, load_dummy_weights: bool=False",
+              "line": 406
+            },
+            {
+              "name": "determine_available_memory",
+              "signature": "self",
+              "line": 430
+            },
+            {
+              "name": "get_kv_cache_spec",
+              "signature": "self",
+              "line": 679
+            },
+            {
+              "name": "initialize_from_config",
+              "signature": "self, kv_cache_config: KVCacheConfig",
+              "line": 695
+            },
+            {
+              "name": "compile_or_warm_up_model",
+              "signature": "self",
+              "line": 724
+            },
+            {
+              "name": "get_model",
+              "signature": "self",
+              "line": 905
+            },
+            {
+              "name": "sample_tokens",
+              "signature": "self, grammar_output: 'GrammarOutput | None'",
+              "line": 948
+            },
+            {
+              "name": "execute_model",
+              "signature": "self, scheduler_output: 'SchedulerOutput'",
+              "line": 955
+            },
+            {
+              "name": "shutdown",
+              "signature": "self",
+              "line": 1221
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "vllm/v1/worker/gpu_model_runner.py",
+      "base_sha256": "6c92ded8468f44d6df863a617ce588f132fa6df7031feecc0cc421702a41610e",
+      "required_installed_sha256": "2905189397b1517659e6606f5bc36c7ca226330f42255c579207fe38f61f9e19",
+      "symbols": [
+        {
+          "symbol": "ExecuteModelState",
+          "line": 424,
+          "fields": [
+            "scheduler_output",
+            "logits",
+            "spec_decode_metadata",
+            "spec_decode_common_attn_metadata",
+            "hidden_states",
+            "sample_hidden_states",
+            "aux_hidden_states",
+            "ec_connector_output",
+            "cudagraph_stats",
+            "slot_mappings"
+          ],
+          "methods": []
+        },
+        {
+          "symbol": "GPUModelRunner",
+          "line": 440,
+          "fields": [],
+          "methods": [
+            {
+              "name": "__init__",
+              "signature": "self, vllm_config: VllmConfig, device: torch.device",
+              "line": 443
+            },
+            {
+              "name": "_update_states",
+              "signature": "self, scheduler_output: 'SchedulerOutput'",
+              "line": 1152
+            },
+            {
+              "name": "_update_streaming_request",
+              "signature": "self, req_id: str, new_req_data: NewRequestData",
+              "line": 1580
+            },
+            {
+              "name": "_prepare_inputs",
+              "signature": "self, scheduler_output: 'SchedulerOutput', num_scheduled_tokens: np.ndarray",
+              "line": 1914
+            },
+            {
+              "name": "get_model",
+              "signature": "self",
+              "line": 3259
+            },
+            {
+              "name": "execute_model",
+              "signature": "self, scheduler_output: 'SchedulerOutput', intermediate_tensors: IntermediateTensors | None=None",
+              "line": 4070
+            },
+            {
+              "name": "sample_tokens",
+              "signature": "self, grammar_output: 'GrammarOutput | None'",
+              "line": 4456
+            },
+            {
+              "name": "load_model",
+              "signature": "self, load_dummy_weights: bool=False",
+              "line": 5204
+            },
+            {
+              "name": "shutdown",
+              "signature": "self",
+              "line": 6403
+            },
+            {
+              "name": "get_kv_cache_spec",
+              "signature": "self",
+              "line": 7561
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "vllm/v1/worker/gpu_input_batch.py",
+      "base_sha256": "de1ea4fc9d43fc6079dd375e407c2b6d93f5e1a11f49732d13654c41eaf30a65",
+      "required_installed_sha256": "de1ea4fc9d43fc6079dd375e407c2b6d93f5e1a11f49732d13654c41eaf30a65",
+      "symbols": [
+        {
+          "symbol": "CachedRequestState",
+          "line": 35,
+          "fields": [
+            "req_id",
+            "prompt_token_ids",
+            "mm_features",
+            "sampling_params",
+            "generator",
+            "block_ids",
+            "num_computed_tokens",
+            "output_token_ids",
+            "mrope_positions",
+            "mrope_position_delta",
+            "xdrope_positions",
+            "lora_request",
+            "prompt_embeds",
+            "in_progress_prompt_logprobs_cpu",
+            "prompt_is_token_ids",
+            "prev_num_draft_len",
+            "pooling_params",
+            "pooling_states"
+          ],
+          "methods": []
+        },
+        {
+          "symbol": "InputBatch",
+          "line": 92,
+          "fields": [],
+          "methods": [
+            {
+              "name": "__init__",
+              "signature": "self, max_num_reqs: int, max_model_len: int, max_num_batched_tokens: int, device: torch.device, vocab_size: int, block_sizes: list[int], kernel_block_sizes: list[int], max_num_blocks_per_req: list[int] | None=None, logitsprocs: LogitsProcessors | None=None, logitsprocs_need_output_token_ids: bool=False, num_spec_tokens: int=0, is_pooling_model: bool=False, cp_kv_cache_interleave_size: int=1, reasoning_config: ReasoningConfig | None=None",
+              "line": 93
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "vllm/v1/worker/block_table.py",
+      "base_sha256": "b3a6649b968fba0b48c333d7ac96e65cc713a86133cc7eef0a8399f5339ec600",
+      "required_installed_sha256": "b3a6649b968fba0b48c333d7ac96e65cc713a86133cc7eef0a8399f5339ec600",
+      "symbols": []
+    },
+    {
+      "path": "vllm/v1/core/sched/output.py",
+      "base_sha256": "f2816589726053556dc6eef90e09b901c51f1e08ba41c9b79106d9f4acb89f6d",
+      "required_installed_sha256": "f2816589726053556dc6eef90e09b901c51f1e08ba41c9b79106d9f4acb89f6d",
+      "symbols": [
+        {
+          "symbol": "NewRequestData",
+          "line": 31,
+          "fields": [
+            "req_id",
+            "prompt_token_ids",
+            "mm_features",
+            "sampling_params",
+            "pooling_params",
+            "block_ids",
+            "num_computed_tokens",
+            "lora_request",
+            "prompt_embeds",
+            "prompt_is_token_ids",
+            "prefill_token_ids"
+          ],
+          "methods": []
+        },
+        {
+          "symbol": "CachedRequestData",
+          "line": 112,
+          "fields": [
+            "req_ids",
+            "resumed_req_ids",
+            "new_token_ids",
+            "all_token_ids",
+            "new_block_ids",
+            "num_computed_tokens",
+            "num_output_tokens"
+          ],
+          "methods": [
+            {
+              "name": "make_empty",
+              "signature": "cls",
+              "line": 168
+            }
+          ]
+        },
+        {
+          "symbol": "SchedulerOutput",
+          "line": 181,
+          "fields": [
+            "scheduled_new_reqs",
+            "scheduled_cached_reqs",
+            "num_scheduled_tokens",
+            "total_num_scheduled_tokens",
+            "scheduled_spec_decode_tokens",
+            "scheduled_encoder_inputs",
+            "num_common_prefix_blocks",
+            "finished_req_ids",
+            "free_encoder_mm_hashes",
+            "preempted_req_ids",
+            "has_structured_output_requests",
+            "pending_structured_output_tokens",
+            "num_invalid_spec_tokens",
+            "kv_connector_metadata",
+            "ec_connector_metadata",
+            "new_block_ids_to_zero",
+            "num_spec_tokens_to_schedule"
+          ],
+          "methods": [
+            {
+              "name": "make_empty",
+              "signature": "cls",
+              "line": 248
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "vllm/v1/core/sched/scheduler.py",
+      "base_sha256": "e25d4c9a95abdbe8e516714ed02574d929ca0d5e8c11c4cc73b84d3a3b905443",
+      "required_installed_sha256": "ffaefd61869589f086e6acdf9a0c4f55f80d5dad145ca3f6fff2379f7a4e2455",
+      "symbols": []
+    },
+    {
+      "path": "vllm/v1/core/kv_cache_manager.py",
+      "base_sha256": "be9c50918c8cd01736102de4020e2a9a8650675bcd4eb4227d40d2bede6bb853",
+      "required_installed_sha256": "be9c50918c8cd01736102de4020e2a9a8650675bcd4eb4227d40d2bede6bb853",
+      "symbols": [
+        {
+          "symbol": "KVCacheBlocks",
+          "line": 30,
+          "fields": [
+            "blocks"
+          ],
+          "methods": [
+            {
+              "name": "get_block_ids",
+              "signature": "self, allow_none: Literal[False]=False",
+              "line": 62
+            },
+            {
+              "name": "get_block_ids",
+              "signature": "self, allow_none: Literal[True]=True",
+              "line": 68
+            },
+            {
+              "name": "get_block_ids",
+              "signature": "self, allow_none: bool=False",
+              "line": 73
+            }
+          ]
+        },
+        {
+          "symbol": "KVCacheManager",
+          "line": 114,
+          "fields": [],
+          "methods": [
+            {
+              "name": "__init__",
+              "signature": "self, kv_cache_config: KVCacheConfig, max_model_len: int, scheduler_block_size: int, hash_block_size: int, max_num_batched_tokens: int | None=None, enable_caching: bool=True, use_eagle: bool=False, log_stats: bool=False, enable_kv_cache_events: bool=False, dcp_world_size: int=1, pcp_world_size: int=1, metrics_collector: KVCacheMetricsCollector | None=None, watermark: float=0.0",
+              "line": 115
+            },
+            {
+              "name": "allocate_slots",
+              "signature": "self, request: Request, num_new_tokens: int, num_new_computed_tokens: int=0, new_computed_blocks: KVCacheBlocks | None=None, num_lookahead_tokens: int=0, num_external_computed_tokens: int=0, delay_cache_blocks: bool=False, num_encoder_tokens: int=0, full_sequence_must_fit: bool=False, reserved_blocks: int=0, has_scheduled_reqs: bool=True",
+              "line": 248
+            },
+            {
+              "name": "free",
+              "signature": "self, request: Request",
+              "line": 466
+            },
+            {
+              "name": "get_block_ids",
+              "signature": "self, request_id: str",
+              "line": 596
+            },
+            {
+              "name": "take_new_block_ids",
+              "signature": "self",
+              "line": 637
+            },
+            {
+              "name": "new_step_starts",
+              "signature": "self",
+              "line": 644
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "vllm/v1/core/kv_cache_utils.py",
+      "base_sha256": "3ca561818019cef84c43c6d3839627145fd049f9479d40fc733ae142d6d71df3",
+      "required_installed_sha256": "3ca561818019cef84c43c6d3839627145fd049f9479d40fc733ae142d6d71df3",
+      "symbols": [
+        {
+          "symbol": "resolve_kv_cache_block_sizes",
+          "line": 607,
+          "signature": "kv_cache_config: KVCacheConfig, vllm_config: VllmConfig"
+        },
+        {
+          "symbol": "generate_scheduler_kv_cache_config",
+          "line": 1766,
+          "signature": "kv_cache_configs: list[KVCacheConfig]"
+        },
+        {
+          "symbol": "get_kv_cache_configs",
+          "line": 2005,
+          "signature": "vllm_config: VllmConfig, kv_cache_specs: list[dict[str, KVCacheSpec]], available_memory: list[int]"
+        }
+      ]
+    },
+    {
+      "path": "vllm/v1/core/single_type_kv_cache_manager.py",
+      "base_sha256": "26d78d1bd457f7e26debaeb2918734c7b1f0ca2830c4d90b054dff7c940741b1",
+      "required_installed_sha256": "26d78d1bd457f7e26debaeb2918734c7b1f0ca2830c4d90b054dff7c940741b1",
+      "symbols": [
+        {
+          "symbol": "register_all_kvcache_specs",
+          "line": 1499,
+          "signature": "vllm_config"
+        }
+      ]
+    },
+    {
+      "path": "vllm/v1/kv_cache_interface.py",
+      "base_sha256": "28fb0bf520e7047ed20f9240fe884050bb8b3812f14fd3ed434dfc7526a73a7b",
+      "required_installed_sha256": "28fb0bf520e7047ed20f9240fe884050bb8b3812f14fd3ed434dfc7526a73a7b",
+      "symbols": [
+        {
+          "symbol": "FullAttentionSpec",
+          "line": 206,
+          "fields": [
+            "head_size_v",
+            "sliding_window",
+            "attention_chunk_size",
+            "non_causal"
+          ],
+          "methods": []
+        },
+        {
+          "symbol": "KVCacheGroupSpec",
+          "line": 905,
+          "fields": [
+            "layer_names",
+            "kv_cache_spec",
+            "is_eagle_group"
+          ],
+          "methods": []
+        },
+        {
+          "symbol": "KVCacheConfig",
+          "line": 920,
+          "fields": [
+            "num_blocks",
+            "kv_cache_tensors",
+            "kv_cache_groups"
+          ],
+          "methods": []
+        }
+      ]
+    },
+    {
+      "path": "vllm/v1/request.py",
+      "base_sha256": "06b1c6ad3cc0223c2036b4a2e317868fa4988391b4b024bc5e5f54672b7d2c80",
+      "required_installed_sha256": "06b1c6ad3cc0223c2036b4a2e317868fa4988391b4b024bc5e5f54672b7d2c80",
+      "symbols": [
+        {
+          "symbol": "Request",
+          "line": 59,
+          "fields": [],
+          "methods": [
+            {
+              "name": "__init__",
+              "signature": "self, request_id: str, prompt_token_ids: list[int] | None, sampling_params: SamplingParams | None, pooling_params: PoolingParams | None, client_index: int=0, arrival_time: float | None=None, prompt_embeds: torch.Tensor | None=None, prompt_is_token_ids: list[bool] | None=None, mm_features: list[MultiModalFeatureSpec] | None=None, lora_request: 'LoRARequest | None'=None, cache_salt: str | None=None, priority: int=0, trace_headers: Mapping[str, str] | None=None, block_hasher: Callable[['Request'], list['BlockHash']] | None=None, resumable: bool=False, reasoning_ended: bool | None=None, reasoning_parser_kwargs: dict[str, Any] | None=None, abort_immediately: bool=False",
+              "line": 60
+            }
+          ]
+        },
+        {
+          "symbol": "RequestStatus",
+          "line": 323,
+          "fields": [],
+          "methods": []
+        }
+      ]
+    },
+    {
+      "path": "vllm/distributed/parallel_state.py",
+      "base_sha256": "60e8096c41b5cbbd225db85506cf17dc2ebd28eb12308520172ad6f74dd49ded",
+      "required_installed_sha256": "60e8096c41b5cbbd225db85506cf17dc2ebd28eb12308520172ad6f74dd49ded",
+      "symbols": [
+        {
+          "symbol": "get_world_group",
+          "line": 1276,
+          "signature": ""
+        },
+        {
+          "symbol": "get_tp_group",
+          "line": 1368,
+          "signature": ""
+        },
+        {
+          "symbol": "get_pp_group",
+          "line": 1384,
+          "signature": ""
+        },
+        {
+          "symbol": "destroy_model_parallel",
+          "line": 2047,
+          "signature": ""
+        },
+        {
+          "symbol": "destroy_distributed_environment",
+          "line": 2086,
+          "signature": ""
+        }
+      ]
+    },
+    {
+      "path": "vllm/sampling_params.py",
+      "base_sha256": "41a8f63edbac1002f3c318fdf6e295b088ec389c310baafea15f0684720808cb",
+      "required_installed_sha256": "41a8f63edbac1002f3c318fdf6e295b088ec389c310baafea15f0684720808cb",
+      "symbols": [
+        {
+          "symbol": "SamplingParams",
+          "line": 199,
+          "fields": [
+            "n",
+            "presence_penalty",
+            "frequency_penalty",
+            "repetition_penalty",
+            "temperature",
+            "top_p",
+            "top_k",
+            "min_p",
+            "seed",
+            "stop",
+            "stop_token_ids",
+            "ignore_eos",
+            "max_tokens",
+            "min_tokens",
+            "logprobs",
+            "prompt_logprobs",
+            "logprob_token_ids",
+            "flat_logprobs",
+            "detokenize",
+            "skip_special_tokens",
+            "spaces_between_special_tokens",
+            "include_stop_str_in_output",
+            "output_kind",
+            "skip_clone",
+            "output_text_buffer_length",
+            "_eos_token_id",
+            "_all_stop_token_ids",
+            "structured_outputs",
+            "logit_bias",
+            "allowed_token_ids",
+            "extra_args",
+            "routed_experts_prompt_start",
+            "bad_words",
+            "_bad_words_token_ids",
+            "skip_reading_prefix_cache",
+            "thinking_token_budget",
+            "repetition_detection"
+          ],
+          "methods": []
+        }
+      ]
+    },
+    {
+      "path": "vllm/config/vllm.py",
+      "base_sha256": "caf6db4dbbafb3e2194022d779e4635e78ea1f51bfc5d299997640cd2806cb05",
+      "required_installed_sha256": "caf6db4dbbafb3e2194022d779e4635e78ea1f51bfc5d299997640cd2806cb05",
+      "symbols": [
+        {
+          "symbol": "OptimizationLevel",
+          "line": 77,
+          "fields": [],
+          "methods": []
+        },
+        {
+          "symbol": "VllmConfig",
+          "line": 287,
+          "fields": [
+            "model_config",
+            "cache_config",
+            "parallel_config",
+            "scheduler_config",
+            "device_config",
+            "load_config",
+            "offload_config",
+            "attention_config",
+            "mamba_config",
+            "kernel_config",
+            "lora_config",
+            "speculative_config",
+            "diffusion_config",
+            "structured_outputs_config",
+            "observability_config",
+            "quant_config",
+            "compilation_config",
+            "profiler_config",
+            "kv_transfer_config",
+            "kv_events_config",
+            "ec_transfer_config",
+            "reasoning_config",
+            "additional_config",
+            "instance_id",
+            "optimization_level",
+            "performance_mode",
+            "weight_transfer_config",
+            "shutdown_timeout"
+          ],
+          "methods": []
+        }
+      ]
+    },
+    {
+      "path": "vllm/config/model.py",
+      "base_sha256": "41cdd96fd1c9f141a96938fa2d08032cfcb89a4925d7d10b64ef937884791908",
+      "required_installed_sha256": "41cdd96fd1c9f141a96938fa2d08032cfcb89a4925d7d10b64ef937884791908",
+      "symbols": [
+        {
+          "symbol": "ModelConfig",
+          "line": 107,
+          "fields": [
+            "model",
+            "model_weights",
+            "runner",
+            "convert",
+            "tokenizer",
+            "tokenizer_mode",
+            "trust_remote_code",
+            "dtype",
+            "seed",
+            "hf_config",
+            "hf_text_config",
+            "hf_config_path",
+            "allowed_local_media_path",
+            "allowed_media_domains",
+            "revision",
+            "code_revision",
+            "tokenizer_revision",
+            "max_model_len",
+            "spec_target_max_model_len",
+            "quantization",
+            "quantization_config",
+            "allow_deprecated_quantization",
+            "enforce_eager",
+            "enable_return_routed_experts",
+            "max_logprobs",
+            "logprobs_mode",
+            "use_fp64_gumbel",
+            "disable_sliding_window",
+            "disable_cascade_attn",
+            "skip_tokenizer_init",
+            "enable_prompt_embeds",
+            "served_model_name",
+            "config_format",
+            "hf_token",
+            "hf_overrides",
+            "model_class_overrides",
+            "generation_config",
+            "override_generation_config",
+            "enable_sleep_mode",
+            "sleep_mode_backend",
+            "enable_cumem_allocator",
+            "model_impl",
+            "override_attention_dtype",
+            "logits_processors",
+            "io_processor_plugin",
+            "renderer_num_workers",
+            "pooler_config",
+            "multimodal_config",
+            "language_model_only",
+            "limit_mm_per_prompt",
+            "enable_mm_embeds",
+            "media_io_kwargs",
+            "mm_processor_kwargs",
+            "mm_processor_cache_gb",
+            "mm_processor_cache_type",
+            "mm_shm_cache_max_object_size_mb",
+            "mm_encoder_only",
+            "mm_encoder_tp_mode",
+            "mm_encoder_attn_backend",
+            "mm_encoder_attn_dtype",
+            "mm_encoder_fp8_scale_path",
+            "mm_encoder_fp8_scale_save_path",
+            "mm_encoder_fp8_scale_save_margin",
+            "interleave_mm_strings",
+            "skip_mm_profiling",
+            "video_pruning_rate",
+            "mm_tensor_ipc",
+            "mm_ipc_gpu_memory_gb"
+          ],
+          "methods": []
+        }
+      ]
+    },
+    {
+      "path": "vllm/config/parallel.py",
+      "base_sha256": "2bb0c2d54a0c3211c5ea1ddeed731d0e2a5d95fb58972f92845268959f0c818e",
+      "required_installed_sha256": "2bb0c2d54a0c3211c5ea1ddeed731d0e2a5d95fb58972f92845268959f0c818e",
+      "symbols": [
+        {
+          "symbol": "EPLBConfig",
+          "line": 57,
+          "fields": [
+            "window_size",
+            "step_interval",
+            "num_redundant_experts",
+            "log_balancedness",
+            "log_balancedness_interval",
+            "use_async",
+            "policy",
+            "communicator"
+          ],
+          "methods": []
+        },
+        {
+          "symbol": "ParallelConfig",
+          "line": 117,
+          "fields": [
+            "pipeline_parallel_size",
+            "tensor_parallel_size",
+            "prefill_context_parallel_size",
+            "data_parallel_size",
+            "data_parallel_size_local",
+            "data_parallel_rank",
+            "data_parallel_rank_local",
+            "data_parallel_master_ip",
+            "data_parallel_rpc_port",
+            "data_parallel_master_port",
+            "data_parallel_backend",
+            "data_parallel_external_lb",
+            "data_parallel_hybrid_lb",
+            "is_moe_model",
+            "enable_expert_parallel",
+            "enable_ep_weight_filter",
+            "enable_eplb",
+            "eplb_config",
+            "expert_placement_strategy",
+            "all2all_backend",
+            "max_parallel_loading_workers",
+            "disable_custom_all_reduce",
+            "enable_elastic_ep",
+            "enable_dbo",
+            "ubatch_size",
+            "dbo_decode_token_threshold",
+            "dbo_prefill_token_threshold",
+            "disable_nccl_for_dp_synchronization",
+            "ray_workers_use_nsight",
+            "ray_runtime_env",
+            "placement_group",
+            "distributed_executor_backend",
+            "worker_cls",
+            "sd_worker_cls",
+            "worker_extension_cls",
+            "master_addr",
+            "master_port",
+            "node_rank",
+            "nnodes",
+            "numa_bind",
+            "numa_bind_nodes",
+            "numa_bind_cpus",
+            "assigned_physical_gpu_ids",
+            "distributed_timeout_seconds",
+            "cpu_distributed_timeout_seconds",
+            "world_size",
+            "rank",
+            "_data_parallel_master_port_list",
+            "_coord_store_port",
+            "decode_context_parallel_size",
+            "dcp_kv_cache_interleave_size",
+            "dcp_comm_backend",
+            "cp_kv_cache_interleave_size",
+            "data_parallel_index",
+            "_api_process_count",
+            "_api_process_rank"
+          ],
+          "methods": []
+        }
+      ]
+    },
+    {
+      "path": "vllm/config/scheduler.py",
+      "base_sha256": "a816cf79a3e74ffc0984f9bebb274275b26f46be8b28cb77a29388a0996263c8",
+      "required_installed_sha256": "a816cf79a3e74ffc0984f9bebb274275b26f46be8b28cb77a29388a0996263c8",
+      "symbols": [
+        {
+          "symbol": "SchedulerConfig",
+          "line": 26,
+          "fields": [
+            "max_model_len",
+            "is_encoder_decoder",
+            "DEFAULT_MAX_NUM_BATCHED_TOKENS",
+            "DEFAULT_MAX_NUM_BATCHED_TOKENS_FOR_BATCHED_DP",
+            "DEFAULT_MAX_NUM_SEQS",
+            "runner_type",
+            "max_num_batched_tokens",
+            "max_num_scheduled_tokens",
+            "max_num_seqs",
+            "max_num_partial_prefills",
+            "max_long_partial_prefills",
+            "long_prefill_token_threshold",
+            "enable_chunked_prefill",
+            "is_multimodal_model",
+            "max_num_encoder_input_tokens",
+            "encoder_cache_size",
+            "policy",
+            "disable_chunked_mm_input",
+            "scheduler_cls",
+            "disable_hybrid_kv_cache_manager",
+            "scheduler_reserve_full_isl",
+            "watermark",
+            "prefill_schedule_interval",
+            "async_scheduling",
+            "stream_interval"
+          ],
+          "methods": []
+        }
+      ]
+    },
+    {
+      "path": "vllm/config/cache.py",
+      "base_sha256": "0a0d3583f493b599097b2613f1b772de9f74471f6892be21a7920f2bd6fdf15a",
+      "required_installed_sha256": "0a0d3583f493b599097b2613f1b772de9f74471f6892be21a7920f2bd6fdf15a",
+      "symbols": [
+        {
+          "symbol": "CacheConfig",
+          "line": 44,
+          "fields": [
+            "DEFAULT_BLOCK_SIZE",
+            "block_size",
+            "user_specified_block_size",
+            "user_specified_mamba_block_size",
+            "hash_block_size",
+            "gpu_memory_utilization",
+            "cache_dtype",
+            "is_attention_free",
+            "num_gpu_blocks_override",
+            "sliding_window",
+            "enable_prefix_caching",
+            "prefix_caching_hash_algo",
+            "calculate_kv_scales",
+            "kv_cache_dtype_skip_layers",
+            "mamba_page_size_padded",
+            "skip_page_size_padded",
+            "mamba_block_size",
+            "mamba_cache_dtype",
+            "mamba_ssm_cache_dtype",
+            "mamba_cache_mode",
+            "num_gpu_blocks",
+            "num_cpu_blocks",
+            "kv_cache_size_tokens",
+            "kv_cache_max_concurrency",
+            "kv_sharing_fast_prefill",
+            "kv_cache_memory_bytes",
+            "kv_offloading_size",
+            "kv_offloading_backend",
+            "_block_size_resolved"
+          ],
+          "methods": []
+        }
+      ]
+    },
+    {
+      "path": "vllm/v1/worker/kv_connector_model_runner_mixin.py",
+      "base_sha256": "d140e79e93b8670a2100b8b365606d3af402430a59c990ef65820da987ef4974",
+      "required_installed_sha256": "d140e79e93b8670a2100b8b365606d3af402430a59c990ef65820da987ef4974",
+      "symbols": [
+        {
+          "symbol": "KVConnectorModelRunnerMixin",
+          "line": 34,
+          "fields": [],
+          "methods": [
+            {
+              "name": "maybe_get_kv_connector_output",
+              "signature": "scheduler_output: 'SchedulerOutput', defer_finalize: bool=False",
+              "line": 51
+            },
+            {
+              "name": "_get_kv_connector_output",
+              "signature": "scheduler_output: 'SchedulerOutput', wait_for_save: bool=True, defer_finalize: bool=False",
+              "line": 78
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "vllm/v1/worker/ec_connector_model_runner_mixin.py",
+      "base_sha256": "4cab531525c37d9549cff0df4bf15f4432ccacde4e130235c492a4c83c5fa0c6",
+      "required_installed_sha256": "4cab531525c37d9549cff0df4bf15f4432ccacde4e130235c492a4c83c5fa0c6",
+      "symbols": [
+        {
+          "symbol": "ECConnectorModelRunnerMixin",
+          "line": 25,
+          "fields": [],
+          "methods": []
+        }
+      ]
+    }
+  ],
+  "runtime_assertions": {
+    "Worker/runner/executor": "Imported Worker file must match audited distribution; MRV1 module/class, independent real world1/rank0; one model object before/after warmup.",
+    "VllmConfig": "ordinary Qwen3-0.6B, TP/PP/DP1, no speculative/LoRA/KV/EC transfer, eager, no prefix caching, no hybrid/EPLB.",
+    "ExecuteModelState": "exact NamedTuple fields; one owned logit row per InputBatch.req_ids; no spec/aux/connector/graph deferred obligations; consume once.",
+    "InputBatch/streaming rebase": "Full file hash and source test for existing-ID rebase, prompt/context/block/computed frontier replacement; actual row bijection checked each forward.",
+    "KVCacheManager/Request": "Full-attention spec, real nonempty initialized KV, allocator-only IDs; no capacity fallback; explicit computed frontier; group block IDs and release accounting.",
+    "SchedulerOutput/NewRequestData": "Exact source fields/signatures; nonempty suffix spans with sum-of-token counts; no spec/encoder/connector requests; one actual model hook pair per execution.",
+    "torch": "one visible CUDA device, all resident parameter device/dtype checks; batched argmax and one CPU transfer; synchronize/event ownership on one thread.",
+    "lifecycle": "executor/worker shutdown on owner thread, remove hooks and destroy private groups, no Target world ownership."
+  }
+}

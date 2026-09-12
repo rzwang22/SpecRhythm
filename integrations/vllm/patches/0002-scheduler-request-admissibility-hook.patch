@@ -1,0 +1,16 @@
+diff --git a/vllm/v1/core/sched/scheduler.py b/vllm/v1/core/sched/scheduler.py
+index 8e01035..56a1e1e 100644
+--- a/vllm/v1/core/sched/scheduler.py
++++ b/vllm/v1/core/sched/scheduler.py
+@@ -444,0 +445,11 @@ class Scheduler(SchedulerInterface):
++            request_admissible = getattr(
++                self, "_request_admissible_for_schedule", None
++            )
++            if request_admissible is not None and not request_admissible(request):
++                # Optional external readiness contract.  The stock Scheduler has
++                # no hook, so default behavior is byte-for-byte unchanged.  A
++                # blocked request consumes no budget or KV allocation and does
++                # not prevent later requests from being considered.
++                req_index += 1
++                continue
++

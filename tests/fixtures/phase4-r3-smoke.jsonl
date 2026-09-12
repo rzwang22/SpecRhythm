@@ -1,0 +1,5 @@
+{"request_id":"r3-code-0","task_class":"code","prompt_text":"def add(a, b):\n","prompt_token_ids":[1,2,3],"prompt_length":3,"maximum_new_tokens":4,"sampling_seed":1664,"tokenizer_fingerprint":"fixture-tokenizer"}
+{"request_id":"r3-code-1","task_class":"code","prompt_text":"def sub(a, b):\n","prompt_token_ids":[4,5,6],"prompt_length":3,"maximum_new_tokens":4,"sampling_seed":1665,"tokenizer_fingerprint":"fixture-tokenizer"}
+{"request_id":"r3-code-2","task_class":"code","prompt_text":"def mul(a, b):\n","prompt_token_ids":[7,8,9],"prompt_length":3,"maximum_new_tokens":4,"sampling_seed":1666,"tokenizer_fingerprint":"fixture-tokenizer"}
+{"request_id":"r3-chat-0","task_class":"chat","prompt_text":"<|im_start|>user\nHello<|im_end|>\n<|im_start|>assistant\n","prompt_token_ids":[10,11,12],"prompt_length":3,"maximum_new_tokens":4,"sampling_seed":1667,"tokenizer_fingerprint":"fixture-tokenizer"}
+{"request_id":"r3-summary-0","task_class":"summarization","prompt_text":"Summarize the following document:\n\nFixture.","prompt_token_ids":[13,14,15],"prompt_length":3,"maximum_new_tokens":4,"sampling_seed":1668,"tokenizer_fingerprint":"fixture-tokenizer"}

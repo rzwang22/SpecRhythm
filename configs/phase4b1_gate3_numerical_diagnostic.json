@@ -1,0 +1,34 @@
+{
+  "schema_version": "specrhythm.phase4b1-gate3-numerical-plan.v1",
+  "diagnostic_only": true,
+  "expected_request_count": 100,
+  "position_indexing": "zero-based-generated-token-index",
+  "source_gate3_commit": "32b09a6749dc44200fffe37411002d862ca1098a",
+  "source_failed_root": "phase4b1-gate3-recovery/Gate-3-corrected-100",
+  "requests": [
+    {
+      "request_id": "r3-c7ee1a73ee79dd6dc21cb8dc",
+      "output_position": 3,
+      "stock_selected_token_id": 600,
+      "resident_selected_token_id": 296
+    },
+    {
+      "request_id": "r3-32ae44a69fffd76f0dd4b787",
+      "output_position": 4,
+      "stock_selected_token_id": 3435,
+      "resident_selected_token_id": 15
+    },
+    {
+      "request_id": "r3-646c340a0281105c1c20de27",
+      "output_position": 12,
+      "stock_selected_token_id": 448,
+      "resident_selected_token_id": 323
+    },
+    {
+      "request_id": "r3-e00f5312321ec537a9c716cd",
+      "output_position": 2,
+      "stock_selected_token_id": 23826,
+      "resident_selected_token_id": 1674
+    }
+  ]
+}
