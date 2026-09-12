@@ -101,6 +101,9 @@ def successful(root, config):
 
 def run(root, *, batch=None, mode=None, remaining=False, probe=False, single_point=False):
     config = load(root)
+    require(config["options"].get("draft_audit", "full") == "full"
+            or (mode in ("serial", "serial-eager") and single_point),
+            "runtime Draft audit requires an explicit Serial/Serial-eager single point")
     require(not single_point or (mode is not None and batch in BATCHES and not remaining),
             "single-point diagnostic requires explicit mode/batch and no --remaining")
     with root_lock(root):
@@ -339,6 +342,7 @@ def main(argv=None):
     p.add_argument("--remaining", action="store_true")
     p.add_argument("--single-point", action="store_true",
                    help="explicit one-point diagnostic: waive only the B16 order prerequisite")
+    p.add_argument("--draft-audit", choices=("full", "runtime"), default="full")
     p.add_argument("--observation", choices=("buffered-live",), default="buffered-live")
     p.add_argument("--identity-matching", choices=("bound-prefix",), default="bound-prefix")
     p.add_argument("--selection-seed", type=int, default=1666)
@@ -358,6 +362,7 @@ def main(argv=None):
                 root,
                 args.s1.resolve(),
                 options(
+                    draft_audit=args.draft_audit,
                     warmup_steps=args.warmup_steps,
                     repeats=args.repeats,
                     window_seconds=args.window_seconds,

@@ -71,14 +71,16 @@ same owner to process invalidation/termination ahead of the next token step.
 
     def _gpu_check(self):
         self._check()
-        if self._gpu_writing:
+        if self._gpu_writing or (getattr(self, "audit_guard", None) is not None
+                                 and self.audit_guard.pending):
             raise RuntimeError("GPU KV mutation attempted before the active write fence")
 
     @TRACE.observe("physical_gpu_audit")
     def _gpu_audit(self, request_ids=(), *, admitting=False, settling=False):
         audit = getattr(self, "_audit", None)
         if audit is not None:
-            packet = audit()
+            packet = (self.audit_requests(request_ids)
+                      if getattr(self, "audit_mode", "full") == "runtime" else audit())
             if admitting and any(
                 packet["requests"][rid]["state"] != "ACTIVE" for rid in request_ids
             ):
@@ -225,7 +227,7 @@ same owner to process invalidation/termination ahead of the next token step.
             self.gpu_continuation_records.append(record)
             if hasattr(self, "history"):
                 self.history.append(dict(record))
-            self._gpu_audit()
+            self._gpu_audit([job.work.request_id for job in active])
             return {job.work.work_id: self._gpu_completion(job) for job in jobs}
         except Exception:
             # A failed forward may still have launched writes. Attempt a fence
@@ -447,11 +449,11 @@ same owner to process invalidation/termination ahead of the next token step.
                     for plan, work, _, row, *_ in prepared))
             # Validate the new pool before releasing terminal allocations. Release
             # is another physical-state change, so audit it separately when needed.
-            self._gpu_audit()
+            self._gpu_audit([p.request_id for p, *_ in prepared])
             terminal_ids = [p.request_id for p, *_ in prepared if p.terminal]
             if terminal_ids:
                 self.finish_many(terminal_ids)
-                self._gpu_audit()
+                self._gpu_audit(terminal_ids)
             for plan, _, _, _, _, _, fingerprint in prepared:
                 self._gpu_rebases[(plan.request_id, plan.round_id)] = (
                     fingerprint, dict(result[plan.request_id]))

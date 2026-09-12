@@ -20,7 +20,7 @@ def bundle(root, output):
     candidates = [(root.parent / (root.name+suffix), 'summary/'+root.name+suffix)
                   for suffix in ('-complete-small.tar.gz', '-failure-small.tar.gz',
                                  '-operator-small.tar.gz', '-manual-small.tar.gz',
-                                 '-attribution.json', '-timeline.svg')]
+                                 '-attribution.json', '-timeline.svg', '-audit-report.json')]
     for point in sorted((root/'runs').glob('*/point.json')):
         if (point.is_symlink() or not point.resolve().is_relative_to(root)
                 or point.stat().st_size > 65536):

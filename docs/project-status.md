@@ -35,7 +35,46 @@ claims.
 | [#2 simulator-semantics-v0.2](https://github.com/rzwang22/SpecRhythm/pull/2) | frozen draft; Phase 2 complete, not merged | proposal lifecycle, deterministic tree oracle, tree-aware allocators, base-preserving residual controls, Phase-2 nested search pools and common-snapshot oracle replay, path-aware eager and accounting | pure-Python proxy and oracle upper bounds only; no deployable oracle, measured search cost, GPU integration, or performance claim |
 | [#3 gpu-integration-v0.1](https://github.com/rzwang22/SpecRhythm/pull/3) | draft; Phase 3B.1 and corrected-20 Phase 3C.2 complete; Phase 3C.3 corrected-100 awaiting server run | hardened multi-rank primitives, corrected R3-real traces, common-prefix replay, request-bootstrap statistics, 2x shell decomposition and diagnostic learned ranker | user-run 3×A800 correctness artifacts plus Mac CPU tests; no packed-tree/serving engine, Dual-Batch, SLO, calibrated latency or speedup claim |
 | [#4 vllm-serving-v0.1](https://github.com/rzwang22/SpecRhythm/pull/4) | Draft/Open/unmerged; S0 CLOSED/PASS; S1-P G0–G3 PASS at `5a00049`; S2 G1 at `24b31a9` reported zero process exits/clean cleanup but rejected terminal-tail overlap; S2-only contract refinement awaiting retest | independent prefilled-KV resident pool, dynamic Poisson arrival/admission, Target/Serial/PingPong and engineering SLO/goodput | CPU/source contracts are not GPU qualification; finite-trace ideal PD-delivery boundary only |
-| [#5 rolling-eager-v0.1](https://github.com/rzwang22/SpecRhythm/pull/5) | Draft/Open/unmerged; returned A+B B16 PASS; separate observation and immutable-view revisions, GPU retest pending | shared continuation protocol, Serial-eager batch admission/parent repair; bounded startup causality and identity-only eligibility view | original and A+B results remain valid negative results; A+B Serial/eager 61.064/38.163 tok/s, native overlap ZERO; new CPU results do not establish GPU benefit |
+| [#5 rolling-eager-v0.1](https://github.com/rzwang22/SpecRhythm/pull/5) | Draft/Open/unmerged; returned 465c215 B16 pair PASS; explicit audit-layer four-point retest pending | shared protocol, A+B, eligibility snapshot fix; default full and opt-in incremental Draft runtime audit, compact report/failure export | original results unchanged; latest Serial/eager 60.040693/45.305571 tok/s, native overlap 4.436982–4.585746 ms; new GPU correctness/overlap/performance PENDING |
+
+## Current Serial-eager gate: Draft audit layers
+
+The returned `465c2159b4b58d8c0e79fc3f66f38083e88368cb` evidence preserves original
+execution/measurement/cleanup PASS. Both actual windows and native TP ranks have
+been rechecked. The 102.52–102.58 ms dequeue-to-first-GPU delay contains two full
+resident360 audits averaging 81.70 ms; five token-step functions average 388.62 ms,
+including 269.22 ms of nested physical audit and 101.71 ms GPU forward sum. These
+inclusive values are not additive. The old exporter reproduces a >64 MiB output
+overflow; this evidence-export issue does not invalidate the performance points.
+
+`draft_audit=full` remains default. Opt-in runtime maintains ownership at actual
+allocator allocate/free boundaries and checks only affected requests during stable
+token steps, with immutable prefix/version invalidation and fresh control reads.
+Initial freeze, peaks, full counters, terminal receipts, fences and final release
+audits remain functional. Runtime checks have separate counters, not fabricated
+full-check counts. Target full audits and JSON control parsing remain unchanged.
+A+B, K4, static eligibility, feedback priority and batch WAITING_DRAFT are unchanged.
+Baseline S1/S2 and Serial/PingPong default algorithms remain intact.
+
+The [design/diagnosis](rolling-eager-audit-layers.md) maps side effects and remaining
+costs. The [repository runbook](rolling-eager-audit-runbook.md) executes exactly four
+same-SHA independent roots (Serial/eager × full/runtime), each capacity → GPU
+correctness → B16/360/2-warmup/30s performance with matched observation. Compact
+point/four-point JSON keeps no raw arrays; bounded bundles record missing/truncated
+sources explicitly. First failure preserves the original error and stops later
+points while the parent interactive shell remains open.
+
+Local gates: full Python 3.11 pytest **2133 passed, 3 existing skips** (246.303s);
+Python 3.9 related suite and all five source-contract files **225 passed**, zero
+skips (14.438s). The final compact-report/boundary-metadata checks also pass all
+31 focused tests on Python 3.9. Ruff, both-version compileall, 294-file Python 3.9
+grammar, all 13 repository Bash files, 13 Rolling Eager runbook Bash blocks and
+git diff checks pass. CI status is reported separately after ordinary push.
+GPU correctness,
+overlap and performance of this change remain PENDING; no AutoDL connection or GPU
+execution occurred. After delivery, wait for operator evidence; do not expand the
+grid or change batch recovery scheduling. Historical sections below retain their
+original results but no longer define the next test gate.
 
 ## Serial-eager startup latency after the returned A+B run
 

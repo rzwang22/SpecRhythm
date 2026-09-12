@@ -261,7 +261,7 @@ def stop(root):
     return {"action": "controlled stop requested", "directory": str(directory)}
 
 
-def _worker(root, count):
+def _worker(root, count, draft_audit=None):
     from specrhythm.continuation.gpu_backend import RollingVllmDraftBackend
     from specrhythm.phase4.config import load_phase4_config
     from specrhythm.serving.fixed_artifacts import record_error
@@ -285,11 +285,20 @@ def _worker(root, count):
 
     signal.signal(signal.SIGTERM, interrupted)
     try:
-        backend = RollingVllmDraftBackend(config)
+        if draft_audit is None:
+            backend = RollingVllmDraftBackend(config)
+        else:
+            from specrhythm.continuation.audit_gpu_check import prepare
+
+            backend = prepare(config, directory, requests, draft_audit)
         require(backend.provenance.get("physical_gpu_id") == 0,
                 "GPU correctness must use the real Draft device")
         with (directory / "events.jsonl").open("x") as events:
             def save(event):
+                if draft_audit is not None:
+                    from specrhythm.continuation.audit_gpu_check import initialized
+
+                    initialized(event)
                 events.write(json.dumps(event, sort_keys=True) + "\n")
                 events.flush()
 
@@ -428,7 +437,7 @@ def _supervise(directory, command, env, *, timeout, drain_timeout):
     require(valid, "GPU correctness check failed; retain this root and worker.log")
 
 
-def run(root, *, count=2, timeout=900, drain_timeout=60):
+def run(root, *, count=2, timeout=900, drain_timeout=60, draft_audit=None):
     """Launch only when explicitly requested; read-only commands never reach this path."""
     from specrhythm.serving.s1_preflight import clean_environment, git_identity
     from specrhythm.serving.s2_cli import root_lock
@@ -445,6 +454,10 @@ def run(root, *, count=2, timeout=900, drain_timeout=60):
         env.update(CUDA_VISIBLE_DEVICES="0", SR_VLLM_SOURCE=config["execution"]["vllm_source"])
         command = [sys.executable, "-m", "specrhythm.continuation.gpu_check", "_worker",
                    "--root", str(root), "--request-count", str(count)]
+        if draft_audit is not None:
+            require(draft_audit == config['options'].get('draft_audit', 'full'),
+                    'correctness audit mode differs from point configuration')
+            command.extend(['--draft-audit', draft_audit])
         supervise(directory, command, env, timeout=timeout, drain_timeout=drain_timeout)
     return status(root)
 
@@ -454,15 +467,17 @@ def main(argv=None):
     parser.add_argument("command", choices=("run", "status", "errors", "stop", "_worker"))
     parser.add_argument("--root", required=True, type=Path)
     parser.add_argument("--request-count", type=int, default=2)
+    parser.add_argument("--draft-audit", choices=("full", "runtime"))
     parser.add_argument("--timeout", type=float, default=900)
     parser.add_argument("--drain-timeout", type=float, default=60)
     args = parser.parse_args(argv)
     root = args.root.resolve()
     if args.command == "_worker":
-        return _worker(root, args.request_count)
+        return _worker(root, args.request_count, args.draft_audit)
     try:
         value = (run(root, count=args.request_count, timeout=args.timeout,
-                     drain_timeout=args.drain_timeout) if args.command == "run"
+                     drain_timeout=args.drain_timeout, draft_audit=args.draft_audit)
+                 if args.command == "run"
                  else {"status": status, "errors": errors, "stop": stop}[args.command](root))
         print(json.dumps(value, indent=2, default=str), flush=True)
         return 0

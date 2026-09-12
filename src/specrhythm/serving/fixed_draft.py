@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 
+from specrhythm.serving.fixed_audit import FixedAuditMixin
 from specrhythm.serving.fixed_observe import TIMERS, DeviceTimeline
 from specrhythm.serving.fixed_settle import (
     DiagnosticSerialMachine as diagnostic_serial_machine,
@@ -85,7 +86,7 @@ def serve(config, directory, socket_path, mode, *, backend_class=None):
     finish_current("draft")
 
 
-class FixedDraftBackend(S2DraftBackend):
+class FixedDraftBackend(FixedAuditMixin, S2DraftBackend):
     def __init__(self, config, *, worker=None):
         super().__init__(config, worker=worker)
         self.fixed_proposals = []

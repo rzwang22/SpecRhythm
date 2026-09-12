@@ -1,5 +1,12 @@
 # Serial-eager：A+B 后的启动关键路径
 
+最新 `465c2159b4b58d8c0e79fc3f66f38083e88368cb` 服务器证据已返回：原始
+Serial/eager 60.040693/45.305571 tok/s，原三项 PASS；原生 overlap 为
+4.436982–4.585746 ms。首 forward 前两次全池审计平均 81.696735 ms，五个 eager
+token step 内审计平均 269.218938 ms。当前工作是[显式审计分层](rolling-eager-audit-layers.md)，
+下一 gate 改为[同 SHA 四点 full/runtime](rolling-eager-audit-runbook.md)，不改批级等待。
+下面是 068c40a 的历史诊断记录；其原结果和当时的证据边界保持不变。
+
 本轮以 `068c40a8ead1138568b7f846af348d3f732c28d4` 的用户服务器运行作为有效基准。
 A 的批量 admission、B 的批量结算保持；不再维护或复测 A-only，不修改 PR #2/#3/#4。
 新 GPU overlap/performance 为 **PENDING**，CPU 复杂度证据不证明服务器加速。

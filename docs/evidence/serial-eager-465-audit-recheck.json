@@ -1,0 +1,746 @@
+{
+  "archive_sha256": "ec6129c4d7b971c1ee4b3f09b3635d4e74af6ddab042d403087e32a56f960823",
+  "old_export_reproduction": {
+    "eager_point_pretty_JSON_bytes": 72218619,
+    "interpretation": "offline reproduction exceeds output limit; archive alone lacks the original export exception",
+    "old_output_limit_bytes": 67108864,
+    "serial_point_pretty_JSON_bytes": 1908279
+  },
+  "original_results_unchanged": true,
+  "points": {
+    "serial": {
+      "committed_tokens": 1817,
+      "complete_step_wall_ms": {
+        "count": 38,
+        "max": 837.85998,
+        "mean": 794.6036199736842,
+        "p50": 795.7635825,
+        "p90": 811.84428,
+        "reason": null
+      },
+      "draft_device": {
+        "GPU_forward_ms": {
+          "count": 152,
+          "max": 20.9296875,
+          "mean": 19.80186060855263,
+          "p50": 19.8046875,
+          "p90": 20.21875,
+          "reason": null
+        },
+        "by_purpose": {
+          "commit": {
+            "B_histogram": {
+              "16": 38
+            },
+            "count": 38,
+            "gpu_event_sum_ms": 735.0234375
+          },
+          "proposal": {
+            "B_histogram": {
+              "15": 3,
+              "16": 111
+            },
+            "count": 114,
+            "gpu_event_sum_ms": 2274.859375
+          }
+        },
+        "forwards": 152,
+        "identity": {
+          "attention_backends": [
+            "FlashAttentionBackend"
+          ],
+          "dtype": "torch.bfloat16",
+          "global_rank": 0,
+          "gpu_uuid": "GPU-62765b0c-6c8e-2f0b-6416-4cb7d8d7ffb8",
+          "physical_gpu_id": 0,
+          "role": "draft"
+        },
+        "native_coverage": "COMPLETE",
+        "native_union": {
+          "lower_ms": 3001.132931,
+          "upper_ms": 3018.632691
+        },
+        "source_status": null
+      },
+      "eager_window": null,
+      "exclusive_process_threads": {
+        "lanes": [
+          {
+            "exclusive_ms": {
+              "control_json_read": 83.269461,
+              "draft_required_fence": 28.512707,
+              "prefix_hash_and_block_record": 3037.398717,
+              "resident_block_audit": 593.914383,
+              "unaccounted": 26519.71314
+            },
+            "pid": 6007,
+            "thread_id": 139729307793216,
+            "window_ms": 30262.808408
+          },
+          {
+            "exclusive_ms": {
+              "control_json_read": 17.395515,
+              "control_json_write": 25.435737,
+              "coordinator_checkpoint": 13.309358,
+              "output_commit": 5.902645,
+              "prefix_hash_and_block_record": 1438.696469,
+              "resident_block_audit": 268.471141,
+              "target_step": 28463.196874,
+              "unaccounted": 30.400669
+            },
+            "pid": 6129,
+            "thread_id": 140684002772800,
+            "window_ms": 30262.808408
+          },
+          {
+            "exclusive_ms": {
+              "control_json_read": 17.768732,
+              "ipc": 8690.069511,
+              "unaccounted": 21554.970165
+            },
+            "pid": 6174,
+            "thread_id": 140684002772800,
+            "window_ms": 30262.808408
+          }
+        ],
+        "missing_lane_rows": 0,
+        "precedence": [
+          "prefix_hash_and_block_record",
+          "resident_block_audit",
+          "runtime_resident_check",
+          "runtime_write_check",
+          "draft_required_fence",
+          "eligibility_snapshot",
+          "eligibility_provider",
+          "control_json_read",
+          "control_json_write",
+          "draft_pool_audit",
+          "physical_gpu_audit",
+          "parent_kv_materialize",
+          "eager_token_forward",
+          "normal_recovery_proposal",
+          "owner_batch_gate",
+          "owner_response_wait",
+          "owner_dispatch",
+          "ipc",
+          "output_commit",
+          "coordinator_checkpoint",
+          "target_step"
+        ],
+        "semantics": "mutually exclusive within each thread only; never sum thread budgets; parent residual is not recorder overhead or GIL evidence",
+        "status": "COMPLETE"
+      },
+      "first_forward_classes": {
+        "NOT_APPLICABLE": 38
+      },
+      "native_forward_overlap": {
+        "lower_ms": 0.0,
+        "upper_ms": 0.0
+      },
+      "normal_recovery": {
+        "mixed": {
+          "B_histogram": {},
+          "GPU_event_sum_ms": 0,
+          "GPU_forward_count": 0,
+          "host_union_ms": 0.0,
+          "status": "NOT_OBSERVED_OR_MISSING"
+        },
+        "normal": {
+          "B_histogram": {
+            "15": 3,
+            "16": 111
+          },
+          "GPU_event_sum_ms": 2274.859375,
+          "GPU_forward_count": 114,
+          "host_union_ms": 0.0,
+          "status": "OBSERVED"
+        },
+        "recovery": {
+          "B_histogram": {},
+          "GPU_event_sum_ms": 0,
+          "GPU_forward_count": 0,
+          "host_union_ms": 0.0,
+          "status": "NOT_OBSERVED_OR_MISSING"
+        }
+      },
+      "original_qualification": {
+        "cleanup_status": "PASS",
+        "execution_status": "PASS",
+        "formal_comparison_eligible": true,
+        "measurement_status": "PASS"
+      },
+      "outside_complete_steps_ms": 67.870848999999,
+      "resident_pool_checks": 152,
+      "resident_pool_checks_per_step": 4.0,
+      "startup": {
+        "dequeue_to_first_GPU": {
+          "lower_ms": {
+            "count": 0,
+            "max": null,
+            "mean": null,
+            "p50": null,
+            "p90": null,
+            "reason": "no eligible samples"
+          },
+          "upper_ms": {
+            "count": 0,
+            "max": null,
+            "mean": null,
+            "p50": null,
+            "p90": null,
+            "reason": "no eligible samples"
+          }
+        },
+        "expected_cycles": 0,
+        "observed_cycles": 0,
+        "submit_to_dequeue_ms": {
+          "count": 0,
+          "max": null,
+          "mean": null,
+          "p50": null,
+          "p90": null,
+          "reason": "no eligible samples"
+        }
+      },
+      "steps": 38,
+      "target_TP_union": {
+        "lower_ms": 3185.644744,
+        "upper_ms": 3192.926532
+      },
+      "target_ranks": {
+        "0": {
+          "GPU_forward_ms": {
+            "count": 38,
+            "max": 87.625,
+            "mean": 83.48715049342105,
+            "p50": 85.08203125,
+            "p90": 86.125,
+            "reason": null
+          },
+          "by_purpose": {
+            "null": {
+              "B_histogram": {
+                "16": 38
+              },
+              "count": 38,
+              "gpu_event_sum_ms": 3172.51171875
+            }
+          },
+          "forwards": 38,
+          "identity": {
+            "attention_backends": [
+              "FLASH_ATTN"
+            ],
+            "dtype": "torch.bfloat16",
+            "global_rank": 0,
+            "gpu_uuid": "GPU-bb99d552-aa52-af89-a1e3-78dc854d5ebe",
+            "local_rank": 0,
+            "physical_gpu_id": 1,
+            "role": "target"
+          },
+          "native_coverage": "COMPLETE",
+          "native_union": {
+            "lower_ms": 3169.010206,
+            "upper_ms": 3176.013226
+          },
+          "source_status": null
+        },
+        "1": {
+          "GPU_forward_ms": {
+            "count": 38,
+            "max": 87.6640625,
+            "mean": 83.55458470394737,
+            "p50": 85.13671875,
+            "p90": 86.1953125,
+            "reason": null
+          },
+          "by_purpose": {
+            "null": {
+              "B_histogram": {
+                "16": 38
+              },
+              "count": 38,
+              "gpu_event_sum_ms": 3175.07421875
+            }
+          },
+          "forwards": 38,
+          "identity": {
+            "attention_backends": [
+              "FLASH_ATTN"
+            ],
+            "dtype": "torch.bfloat16",
+            "global_rank": 1,
+            "gpu_uuid": "GPU-8e6b3fd1-eac5-d16f-2ece-187e3354aa03",
+            "local_rank": 1,
+            "physical_gpu_id": 2,
+            "role": "target"
+          },
+          "native_coverage": "COMPLETE",
+          "native_union": {
+            "lower_ms": 3171.293942,
+            "upper_ms": 3178.854498
+          },
+          "source_status": null
+        }
+      },
+      "throughput_tok_s": 60.04069336538093,
+      "tokens_per_step": 47.81578947368421,
+      "trace_coverage": {
+        "coordinator": {
+          "clock": "host monotonic_ns; same machine, separate PID/thread lanes",
+          "dropped_rows": 0,
+          "mode": "light",
+          "row_limit": 20000,
+          "schema_version": "specrhythm.eager-causal-host.v1",
+          "semantics": "inclusive nested host spans; no GPU timing or GIL inference",
+          "status": "COMPLETE"
+        },
+        "draft": {
+          "clock": "host monotonic_ns; same machine, separate PID/thread lanes",
+          "dropped_rows": 0,
+          "mode": "light",
+          "row_limit": 20000,
+          "schema_version": "specrhythm.eager-causal-host.v1",
+          "semantics": "inclusive nested host spans; no GPU timing or GIL inference",
+          "status": "COMPLETE"
+        },
+        "target-rank-0": {
+          "clock": "host monotonic_ns; same machine, separate PID/thread lanes",
+          "dropped_rows": 0,
+          "mode": "light",
+          "row_limit": 20000,
+          "schema_version": "specrhythm.eager-causal-host.v1",
+          "semantics": "inclusive nested host spans; no GPU timing or GIL inference",
+          "status": "COMPLETE"
+        },
+        "target-rank-1": {
+          "clock": "host monotonic_ns; same machine, separate PID/thread lanes",
+          "dropped_rows": 0,
+          "mode": "light",
+          "row_limit": 20000,
+          "schema_version": "specrhythm.eager-causal-host.v1",
+          "semantics": "inclusive nested host spans; no GPU timing or GIL inference",
+          "status": "COMPLETE"
+        }
+      },
+      "window_ms": 30262.808408
+    },
+    "serial-eager": {
+      "committed_tokens": 1363,
+      "complete_step_wall_ms": {
+        "count": 29,
+        "max": 1090.984842,
+        "mean": 1035.0979783793105,
+        "p50": 1035.514955,
+        "p90": 1073.071211,
+        "reason": null
+      },
+      "draft_device": {
+        "GPU_forward_ms": {
+          "count": 261,
+          "max": 24.2890625,
+          "mean": 20.121647509578544,
+          "p50": 20.0546875,
+          "p90": 20.6953125,
+          "reason": null
+        },
+        "by_purpose": {
+          "commit": {
+            "B_histogram": {
+              "10": 2,
+              "11": 5,
+              "12": 4,
+              "13": 10,
+              "14": 3,
+              "15": 2,
+              "7": 1,
+              "8": 1,
+              "9": 1
+            },
+            "count": 29,
+            "gpu_event_sum_ms": 578.0390625
+          },
+          "eager": {
+            "B_histogram": {
+              "1": 2,
+              "10": 2,
+              "11": 2,
+              "16": 85,
+              "2": 3,
+              "3": 14,
+              "4": 14,
+              "5": 4,
+              "6": 12,
+              "7": 4,
+              "9": 3
+            },
+            "count": 145,
+            "gpu_event_sum_ms": 2949.4921875
+          },
+          "proposal": {
+            "B_histogram": {
+              "10": 6,
+              "11": 15,
+              "12": 12,
+              "13": 30,
+              "14": 9,
+              "15": 6,
+              "7": 3,
+              "8": 3,
+              "9": 3
+            },
+            "count": 87,
+            "gpu_event_sum_ms": 1724.21875
+          }
+        },
+        "forwards": 261,
+        "identity": {
+          "attention_backends": [
+            "FlashAttentionBackend"
+          ],
+          "dtype": "torch.bfloat16",
+          "global_rank": 0,
+          "gpu_uuid": "GPU-62765b0c-6c8e-2f0b-6416-4cb7d8d7ffb8",
+          "physical_gpu_id": 0,
+          "role": "draft"
+        },
+        "native_coverage": "COMPLETE",
+        "native_union": {
+          "lower_ms": 5237.136337,
+          "upper_ms": 5266.363639
+        },
+        "source_status": null
+      },
+      "eager_window": {
+        "accepted_promoted_candidates": 276,
+        "admissions": 464,
+        "bonus_tokens": 142,
+        "bridge_generated_tokens": 464,
+        "bridge_matches": 115,
+        "bridge_mismatches": 27,
+        "committed_tokens": 1363,
+        "completed": 142,
+        "correction_tokens": 322,
+        "discarded_early_tokens": 1080,
+        "draft_materialized_tokens": 3051,
+        "early_generated_tokens": 1655,
+        "normal_generated_tokens": 1396,
+        "parent_accepted_tokens": 899,
+        "parent_full_accepts": 142,
+        "parent_rejections": 322,
+        "promotions": 115,
+        "recovery_generated_tokens": 1396,
+        "recovery_jobs": 349,
+        "reused_bridge_tokens": 115,
+        "reused_candidate_tokens": 460,
+        "started": 464,
+        "unhidden_wait_ns": 6434135892,
+        "verified_promoted_candidates": 456
+      },
+      "exclusive_process_threads": {
+        "lanes": [
+          {
+            "exclusive_ms": {
+              "control_json_read": 222.603783,
+              "draft_required_fence": 35.592765,
+              "eager_token_forward": 3245.782284,
+              "eligibility_provider": 5.899886,
+              "eligibility_snapshot": 2.241007,
+              "normal_recovery_proposal": 2618.144384,
+              "owner_batch_gate": 83.063747,
+              "owner_dispatch": 720.524678,
+              "parent_kv_materialize": 627.467224,
+              "physical_gpu_audit": 684.768492,
+              "prefix_hash_and_block_record": 9176.744257,
+              "resident_block_audit": 2016.167183,
+              "unaccounted": 10645.600507
+            },
+            "pid": 7087,
+            "thread_id": 140284430644800,
+            "window_ms": 30084.600197
+          },
+          {
+            "exclusive_ms": {
+              "owner_response_wait": 13092.060702,
+              "unaccounted": 16992.539495
+            },
+            "pid": 7087,
+            "thread_id": 140288007223104,
+            "window_ms": 30084.600197
+          },
+          {
+            "exclusive_ms": {
+              "control_json_read": 13.139719,
+              "control_json_write": 19.934715,
+              "coordinator_checkpoint": 9.367558,
+              "ipc": 14.232463,
+              "output_commit": 4.419385,
+              "prefix_hash_and_block_record": 1130.486664,
+              "resident_block_audit": 204.254689,
+              "target_step": 28664.549435,
+              "unaccounted": 24.215569
+            },
+            "pid": 7198,
+            "thread_id": 140573612644160,
+            "window_ms": 30084.600197
+          },
+          {
+            "exclusive_ms": {
+              "control_json_read": 13.890981,
+              "ipc": 13664.649487,
+              "unaccounted": 16406.059729
+            },
+            "pid": 7267,
+            "thread_id": 140573612644160,
+            "window_ms": 30084.600197
+          }
+        ],
+        "missing_lane_rows": 0,
+        "precedence": [
+          "prefix_hash_and_block_record",
+          "resident_block_audit",
+          "runtime_resident_check",
+          "runtime_write_check",
+          "draft_required_fence",
+          "eligibility_snapshot",
+          "eligibility_provider",
+          "control_json_read",
+          "control_json_write",
+          "draft_pool_audit",
+          "physical_gpu_audit",
+          "parent_kv_materialize",
+          "eager_token_forward",
+          "normal_recovery_proposal",
+          "owner_batch_gate",
+          "owner_response_wait",
+          "owner_dispatch",
+          "ipc",
+          "output_commit",
+          "coordinator_checkpoint",
+          "target_step"
+        ],
+        "semantics": "mutually exclusive within each thread only; never sum thread budgets; parent residual is not recorder overhead or GIL evidence",
+        "status": "COMPLETE"
+      },
+      "first_forward_classes": {
+        "LATE_AFTER_TARGET": 28,
+        "RECORDED_OVERLAP": 1
+      },
+      "native_forward_overlap": {
+        "lower_ms": 4.436982,
+        "upper_ms": 4.585746
+      },
+      "normal_recovery": {
+        "mixed": {
+          "B_histogram": {},
+          "GPU_event_sum_ms": 0,
+          "GPU_forward_count": 0,
+          "host_union_ms": 0.0,
+          "status": "NOT_OBSERVED_OR_MISSING"
+        },
+        "normal": {
+          "B_histogram": {},
+          "GPU_event_sum_ms": 0,
+          "GPU_forward_count": 0,
+          "host_union_ms": 0.0,
+          "status": "NOT_OBSERVED_OR_MISSING"
+        },
+        "recovery": {
+          "B_histogram": {
+            "10": 6,
+            "11": 15,
+            "12": 12,
+            "13": 30,
+            "14": 9,
+            "15": 6,
+            "7": 3,
+            "8": 3,
+            "9": 3
+          },
+          "GPU_event_sum_ms": 1724.21875,
+          "GPU_forward_count": 87,
+          "host_union_ms": 3991.447083,
+          "status": "OBSERVED"
+        }
+      },
+      "original_qualification": {
+        "cleanup_status": "PASS",
+        "execution_status": "PASS",
+        "formal_comparison_eligible": true,
+        "measurement_status": "PASS"
+      },
+      "outside_complete_steps_ms": 66.75882400000046,
+      "resident_pool_checks": 435,
+      "resident_pool_checks_per_step": 15.0,
+      "startup": {
+        "dequeue_to_first_GPU": {
+          "lower_ms": {
+            "count": 29,
+            "max": 141.10454,
+            "mean": 102.52380772413792,
+            "p50": 97.358227,
+            "p90": 121.752346,
+            "reason": null
+          },
+          "upper_ms": {
+            "count": 29,
+            "max": 141.160531,
+            "mean": 102.57979872413793,
+            "p50": 97.414218,
+            "p90": 121.808337,
+            "reason": null
+          }
+        },
+        "expected_cycles": 29,
+        "observed_cycles": 29,
+        "submit_to_dequeue_ms": {
+          "count": 29,
+          "max": 0.23406,
+          "mean": 0.17259662068965517,
+          "p50": 0.183516,
+          "p90": 0.212583,
+          "reason": null
+        }
+      },
+      "steps": 29,
+      "target_TP_union": {
+        "lower_ms": 2437.415429,
+        "upper_ms": 2442.813083
+      },
+      "target_ranks": {
+        "0": {
+          "GPU_forward_ms": {
+            "count": 29,
+            "max": 87.8046875,
+            "mean": 83.73195043103448,
+            "p50": 85.8515625,
+            "p90": 87.4765625,
+            "reason": null
+          },
+          "by_purpose": {
+            "null": {
+              "B_histogram": {
+                "16": 29
+              },
+              "count": 29,
+              "gpu_event_sum_ms": 2428.2265625
+            }
+          },
+          "forwards": 29,
+          "identity": {
+            "attention_backends": [
+              "FLASH_ATTN"
+            ],
+            "dtype": "torch.bfloat16",
+            "global_rank": 0,
+            "gpu_uuid": "GPU-bb99d552-aa52-af89-a1e3-78dc854d5ebe",
+            "local_rank": 0,
+            "physical_gpu_id": 1,
+            "role": "target"
+          },
+          "native_coverage": "COMPLETE",
+          "native_union": {
+            "lower_ms": 2425.536149,
+            "upper_ms": 2430.916983
+          },
+          "source_status": null
+        },
+        "1": {
+          "GPU_forward_ms": {
+            "count": 29,
+            "max": 87.8359375,
+            "mean": 83.74919181034483,
+            "p50": 85.8515625,
+            "p90": 87.4921875,
+            "reason": null
+          },
+          "by_purpose": {
+            "null": {
+              "B_histogram": {
+                "16": 29
+              },
+              "count": 29,
+              "gpu_event_sum_ms": 2428.7265625
+            }
+          },
+          "forwards": 29,
+          "identity": {
+            "attention_backends": [
+              "FLASH_ATTN"
+            ],
+            "dtype": "torch.bfloat16",
+            "global_rank": 1,
+            "gpu_uuid": "GPU-8e6b3fd1-eac5-d16f-2ece-187e3354aa03",
+            "local_rank": 1,
+            "physical_gpu_id": 2,
+            "role": "target"
+          },
+          "native_coverage": "COMPLETE",
+          "native_union": {
+            "lower_ms": 2426.019325,
+            "upper_ms": 2431.433799
+          },
+          "source_status": null
+        }
+      },
+      "throughput_tok_s": 45.30557132469112,
+      "tokens_per_step": 47.0,
+      "trace_coverage": {
+        "coordinator": {
+          "clock": "host monotonic_ns; same machine, separate PID/thread lanes",
+          "dropped_rows": 0,
+          "mode": "light",
+          "row_limit": 20000,
+          "schema_version": "specrhythm.eager-causal-host.v1",
+          "semantics": "inclusive nested host spans; no GPU timing or GIL inference",
+          "status": "COMPLETE"
+        },
+        "draft": {
+          "clock": "host monotonic_ns; same machine, separate PID/thread lanes",
+          "dropped_rows": 0,
+          "mode": "light",
+          "row_limit": 20000,
+          "schema_version": "specrhythm.eager-causal-host.v1",
+          "semantics": "inclusive nested host spans; no GPU timing or GIL inference",
+          "status": "COMPLETE"
+        },
+        "target-rank-0": {
+          "clock": "host monotonic_ns; same machine, separate PID/thread lanes",
+          "dropped_rows": 0,
+          "mode": "light",
+          "row_limit": 20000,
+          "schema_version": "specrhythm.eager-causal-host.v1",
+          "semantics": "inclusive nested host spans; no GPU timing or GIL inference",
+          "status": "COMPLETE"
+        },
+        "target-rank-1": {
+          "clock": "host monotonic_ns; same machine, separate PID/thread lanes",
+          "dropped_rows": 0,
+          "mode": "light",
+          "row_limit": 20000,
+          "schema_version": "specrhythm.eager-causal-host.v1",
+          "semantics": "inclusive nested host spans; no GPU timing or GIL inference",
+          "status": "COMPLETE"
+        }
+      },
+      "verified_nested_timings_ms_per_step": {
+        "eager_GPU_forward_sum": 101.70662715517241,
+        "first_forward_prefix_visits": 720,
+        "machine_step_union": 388.6229997241379,
+        "physical_audit_before_first_forward_union": 81.69673513793104,
+        "physical_audit_inside_machine_step_union": 269.21893762068964
+      },
+      "window_ms": 30084.600197
+    }
+  },
+  "raw_events_embedded": false,
+  "schema_version": "specrhythm.audit-layer-input-recheck.v1",
+  "semantics": [
+    "window-only counters and native events; no adjusted throughput",
+    "per-thread exclusive lanes have separate budgets; never add across lanes",
+    "nested audit, machine_step, RPC and GPU times overlap",
+    "new full/runtime GPU correctness, overlap, performance PENDING"
+  ],
+  "source_archive": "serial-latency-B16-465c2159b4b5-20260912T172326Z-1628-failure-evidence.tar.gz",
+  "source_commit": "465c2159b4b58d8c0e79fc3f66f38083e88368cb"
+}

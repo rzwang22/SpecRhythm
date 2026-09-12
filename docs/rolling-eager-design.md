@@ -1,5 +1,32 @@
 # Fixed-length Rolling Eager Continuation: shared protocol and Serial GPU adapter
 
+## Current gate: explicit Draft audit layers
+
+The returned `465c2159b4b58d8c0e79fc3f66f38083e88368cb` B16 pair remains valid
+PASS: Serial/eager 60.040693/45.305571 tok/s; native forward overlap
+4.436982–4.585746 ms. The [audit-layer diagnosis](rolling-eager-audit-layers.md)
+rechecks both native TP ranks and the actual windows, and separates necessary
+execution, runtime checks, full experiment audits and observation. This supersedes
+the historical three-point next gate below.
+
+`draft_audit=full` remains the default. Explicit `runtime` scopes repeated Draft
+token/admission/settlement checks to affected requests, while a sole-owner allocator
+guard maintains inverse block ownership at every allocation/free. Fresh control,
+immutable prefix/version evidence, frontier/capacity and all existing protocol
+checks remain synchronous. Setup, initial freeze, terminal receipts, final release
+and shutdown retain full checks; incremental state reconciles at full boundaries.
+Detailed side effects and invalidation rules are in the diagnosis. Target audits
+are unchanged in both modes; baseline S1/S2 and PingPong algorithms are untouched.
+
+A+B batching, eligibility view, K4, feedback priority, batch WAITING_DRAFT, repair
+and refill policy are unchanged. The [four-point runbook](rolling-eager-audit-runbook.md)
+uses one final SHA and four independent roots: Serial/eager × full/runtime, with
+matched observation and physical correctness before each performance point.
+CPU equivalence/negative tests are not GPU qualification. New physical correctness,
+overlap and performance remain PENDING until operator evidence returns.
+
+## Historical startup and batch repair record
+
 The [A+B startup-latency diagnosis](rolling-eager-critical-path.md) supersedes the
 next gate below: A-only is historical; the returned A+B B16 result is valid PASS
 with 61.064 versus 38.163 tok/s and native overlap ZERO. The current observation
