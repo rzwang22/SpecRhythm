@@ -13,6 +13,7 @@ import threading
 import time
 from types import SimpleNamespace
 
+from specrhythm.continuation.trace import TRACE, references
 from specrhythm.serving.fixed_settle import remaining
 
 
@@ -55,26 +56,39 @@ class EagerOwner:
                     command = None
                 while command is not None:
                     operation, payload, response = command
+                    causal = payload.pop("_causal", {})
+                    TRACE.event("owner_dequeue", operation=operation, **causal)
+                    if TRACE.enabled:
+                        payload["_causal_context"] = causal
                     try:
-                        if operation == "eager_enqueue":
-                            machine.verify_start(payload["requests"])
-                            value = {"enqueued": True}
-                        elif operation == "synchronize_and_batch_propose":
-                            started = payload.pop("_owner_enqueue_ns")
-                            machine.prepare_synchronizations(payload.get("synchronizations", ()))
-                            pending = [
-                                w.work_id
-                                for rid, w in machine.works.items()
-                                if machine.core._state(rid).continuations[w.work_id].status
-                                == "waiting_draft"
-                            ]
-                            waiting.append((payload, response, started, pending))
-                            response = None
-                            value = None
-                        else:
-                            value = self._dispatch(operation, payload)
-                        if response is not None:
-                            response.put((True, value))
+                        with TRACE.span("owner_dispatch", operation=operation, **causal):
+                            if operation == "eager_enqueue":
+                                machine.verify_start(payload["requests"])
+                                value = {"enqueued": True}
+                            elif operation == "synchronize_and_batch_propose":
+                                started = payload.pop("_owner_enqueue_ns")
+                                machine.prepare_synchronizations(
+                                    payload.get("synchronizations", ()))
+                                pending = [
+                                    w.work_id
+                                    for rid, w in machine.works.items()
+                                    if machine.core._state(rid).continuations[w.work_id].status
+                                    == "waiting_draft"
+                                ]
+                                if TRACE.enabled:
+                                    payload["_causal_wait_start"] = time.monotonic_ns()
+                                    blocked_ids = {rid for rid, w in machine.works.items()
+                                                   if w.work_id in pending}
+                                    payload["_causal_ready_ids"] = [r["request_id"]
+                                        for r in payload.get("synchronizations", ())
+                                        if r["request_id"] not in blocked_ids]
+                                waiting.append((payload, response, started, pending))
+                                response = None
+                                value = None
+                            else:
+                                value = self._dispatch(operation, payload)
+                            if response is not None:
+                                response.put((True, value))
                     except Exception as error:
                         if response is None:
                             raise
@@ -92,10 +106,17 @@ class EagerOwner:
                 for item in list(waiting):
                     payload, response, started, pending = item
                     try:
+                        gate_end = time.monotonic_ns()
                         sync = machine.finish_synchronizations(payload.get("synchronizations", ()))
                         if sync is None:
                             continue
                         ended = time.monotonic_ns()
+                        if TRACE.enabled and pending:
+                            TRACE.event("owner_batch_gate",
+                                        start_ns=payload["_causal_wait_start"],
+                                        end_ns=gate_end, dependency_work_ids=pending,
+                                        ready_request_ids=payload.get("_causal_ready_ids", []),
+                                        batch_gate=True, **payload.get("_causal_context", {}))
                         proposals = machine.batch_propose(payload.get("proposals", ()))
                         if pending:
                             wait_end = max(machine.work_times[wid][1] for wid in pending)
@@ -106,6 +127,8 @@ class EagerOwner:
                                 end_ns=wait_end,
                                 unhidden_wait_ns=wait_end - started,
                             )
+                        TRACE.event("owner_candidates_return",
+                                    **payload.get("_causal_context", {}))
                         response.put(
                             (
                                 True,
@@ -193,11 +216,21 @@ class EagerOwner:
             raise RuntimeError(f"eager owner failed: {self.failure}")
         if self.closed:
             raise RuntimeError("eager owner is closed")
-        frozen = copy.deepcopy(payload)
+        rows = payload.get("requests", payload.get("synchronizations", ()))
+        refs = references(rows) if TRACE.enabled else []
+        with TRACE.span("owner_payload_copy", operation=operation, requests=refs):
+            frozen = copy.deepcopy(payload)
+        if TRACE.enabled:
+            frozen["_causal"] = {"queue_submit_ns": time.monotonic_ns(), "requests": refs,
+                                 "batch_id": frozen.pop("_causal_batch_id", None)}
+        TRACE.event("owner_queue_submit", operation=operation, requests=refs,
+                    queue_submit_ns=frozen.get("_causal", {}).get("queue_submit_ns"))
         if operation == "eager_enqueue":
             # Confirm task registration in the mailbox only. In particular, do
             # not wait for the owner thread, model forward, sampling or a fence.
-            self.commands.put((operation, frozen, None))
+            with TRACE.span("owner_queue_put", operation=operation, requests=refs):
+                self.commands.put((operation, frozen, None))
+            TRACE.event("owner_enqueue_ack", operation=operation, requests=refs)
             return {
                 "enqueued": True,
                 "enqueue_ns": time.monotonic_ns(),
@@ -206,12 +239,14 @@ class EagerOwner:
         response = queue.Queue(maxsize=1)
         if operation == "synchronize_and_batch_propose":
             frozen["_owner_enqueue_ns"] = time.monotonic_ns()
-        self.commands.put((operation, frozen, response))
+        with TRACE.span("owner_queue_put", operation=operation, requests=refs):
+            self.commands.put((operation, frozen, response))
         timeout = (
             remaining(payload["deadline_ns"]) if "deadline_ns" in payload else self.timeout_seconds
         )
         try:
-            ok, value = response.get(timeout=timeout)
+            with TRACE.span("owner_response_wait", operation=operation, requests=refs):
+                ok, value = response.get(timeout=timeout)
         except queue.Empty as error:
             raise TimeoutError(
                 "eager owner response deadline expired; physical work retained"

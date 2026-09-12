@@ -24,6 +24,7 @@ from specrhythm.serving.eager_evidence_export import (
     require,
     touching,
 )
+from specrhythm.serving.eager_latency import latency_analysis
 
 MAX_FILE_BYTES = 512 * 1024 * 1024
 MAX_TOTAL_BYTES = 1024 * 1024 * 1024
@@ -119,22 +120,25 @@ def analyze(runtime, backend, service, light):
         'uncovered_by_draft_host_or_any_recorded_gpu_outer_ms': max(0, (end-start)/1e6-joint),
         'coverage_semantics': 'overlapping/nested coverage; uncovered is not inferred idle time',
         'cycles': cycles,
+        'critical_path': latency_analysis(runtime, backend, steps, start, end),
     }
 
 
-def report(root, output, expected_commit):
+def report(root, output, expected_commit, modes=('serial', 'serial-eager')):
     root, output = Path(root).resolve(), Path(output)
     require(re.fullmatch(r'[0-9a-f]{40}', expected_commit), 'expected full SHA required')
     require(not output.is_symlink() and not output.exists(), 'output collision')
     output = output.resolve()
     require(not output.is_relative_to(root), 'output must be outside the existing result root')
+    require(modes and set(modes) <= {'serial', 'serial-eager'} and len(set(modes)) == len(modes),
+            'invalid report modes')
     reader = Reader(root, MAX_FILE_BYTES, MAX_TOTAL_BYTES, 100000)
     config = reader.read(root / 'scan-config.json', required=True)
     require(config['execution']['git_commit'] == expected_commit, 'scan commit mismatch')
     points = {}
     for path in sorted((root / 'runs').glob('*/point.json')):
         point = reader.read(path, required=True)
-        if point.get('probe') or point.get('mode') not in ('serial', 'serial-eager'):
+        if point.get('probe') or point.get('mode') not in modes:
             continue
         mode, directory = point['mode'], path.parent
         require(point['batch'] == 16 and point['kind'] == 'decode-scan'
@@ -154,8 +158,8 @@ def report(root, output, expected_commit):
         points[mode] = analyze(runtime, backend, service, light)
         # Release raw trees before reading the next point; retain small inventory.
         reader.cache.clear()
-    require(set(points) == {'serial', 'serial-eager'}, 'need both ended B16 points')
-    value = {'schema_version': 'specrhythm.eager-b16-retest.v1',
+    require(set(points) == set(modes), 'need all requested ended B16 points')
+    value = {'schema_version': 'specrhythm.eager-b16-retest.v2',
              'source_commit': expected_commit, 'workload_sha256': config['workload_sha256'],
              'points': points, 'inventory': list(reader.inventory.values()),
              'reporter_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
@@ -175,9 +179,11 @@ def main(argv=None):
     parser.add_argument('--root', required=True, type=Path)
     parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--expected-commit', required=True)
+    parser.add_argument('--modes', nargs='+', choices=['serial', 'serial-eager'],
+                        default=['serial', 'serial-eager'])
     args = parser.parse_args(argv)
     try:
-        print(json.dumps(report(args.root, args.output, args.expected_commit)))
+        print(json.dumps(report(args.root, args.output, args.expected_commit, args.modes)))
     except (OSError, ValueError, KeyError, TypeError) as error:
         parser.exit(1, str(error)+'\n')
 

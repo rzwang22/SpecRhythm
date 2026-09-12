@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from typing import Optional, Tuple
 
 from specrhythm.continuation.core import DraftCompletion, DraftWork
+from specrhythm.continuation.trace import TRACE
 from specrhythm.phase4.draft_batch import (
     DraftCommitPlan,
     DraftMaterialization,
@@ -73,6 +74,7 @@ same owner to process invalidation/termination ahead of the next token step.
         if self._gpu_writing:
             raise RuntimeError("GPU KV mutation attempted before the active write fence")
 
+    @TRACE.observe("physical_gpu_audit")
     def _gpu_audit(self, request_ids=(), *, admitting=False, settling=False):
         audit = getattr(self, "_audit", None)
         if audit is not None:
@@ -97,6 +99,7 @@ same owner to process invalidation/termination ahead of the next token step.
     def begin_gpu_continuation(self, work: DraftWork):
         return self.begin_gpu_continuations((work,))[work.work_id]
 
+    @TRACE.observe("physical_begin_gpu_continuations")
     def begin_gpu_continuations(self, works):
         """Validate the whole owner-local batch before publishing any enrollment.
 
@@ -128,6 +131,7 @@ same owner to process invalidation/termination ahead of the next token step.
             self.metrics.counters["eager_enrolled"] += len(pending)
         return {w.work_id: self.gpu_continuation_snapshot(w) for w in works}
 
+    @TRACE.observe("physical_validate_gpu_admission")
     def _validate_gpu_admission(self, work):
         if work.work_id in self._gpu_retired:
             raise ValueError("retired GPU continuation cannot restart")
@@ -175,7 +179,13 @@ same owner to process invalidation/termination ahead of the next token step.
             rows.append(DraftMaterialization(state.internal_id, context, state.materialized))
         try:
             self._gpu_writing = True
-            logits = self.worker.materialize(rows, "eager")
+            with TRACE.span("eager_token_forward", bindings=[{
+                "request_id": j.work.request_id, "round_id": j.work.prefix_version,
+                "proposal_id": j.work.parent_proposal_id, "continuation_id": j.work.work_id,
+                "token_step": len(j.generated),
+                "token_role": "bridge" if not j.generated else "candidate",
+            } for j in active], B=len(active)):
+                logits = self.worker.materialize(rows, "eager")
             sampled = self.worker.greedy([logits[row.request_id] for row in rows])
             if len(sampled) != len(active):
                 raise RuntimeError("GPU continuation sampler row count mismatch")
@@ -329,6 +339,7 @@ same owner to process invalidation/termination ahead of the next token step.
             row = DraftMaterialization(state.internal_id, plan.final_prefix, frontier)
         return row, valid, False
 
+    @TRACE.observe("physical_rebase_gpu_parents")
     def rebase_gpu_parents(self, settlements):
         """Validate together, materialize compatible repair rows once, then publish.
 
@@ -384,7 +395,9 @@ same owner to process invalidation/termination ahead of the next token step.
                 for plan, _, _, row, *_ in prepared:
                     if row is not None:
                         self.states[plan.request_id].next_logits = None
-                logits = self.worker.materialize(rows, "commit")
+                with TRACE.span("parent_kv_materialize", B=len(rows),
+                                request_ids=[r.request_id for r in rows]):
+                    logits = self.worker.materialize(rows, "commit")
                 self.worker.fence("eager_rebase_complete")
                 self._gpu_writing = False
             for plan, work, tokens, row, valid, refresh, _ in prepared:

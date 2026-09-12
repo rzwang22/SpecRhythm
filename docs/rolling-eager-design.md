@@ -1,5 +1,13 @@
 # Fixed-length Rolling Eager Continuation: shared protocol and Serial GPU adapter
 
+The [A+B startup-latency diagnosis](rolling-eager-critical-path.md) supersedes the
+next gate below: A-only is historical; the returned A+B B16 result is valid PASS
+with 61.064 versus 38.163 tok/s and native overlap ZERO. The current observation
+revision preserves A+B algorithms and adds bounded causal CPU lanes plus retained
+native TP intervals. A separate immutable provider-view change targets repeated
+history deepcopy only; no batch-gate, audit, feedback priority or fence is removed.
+See the [three-point repository runbook](rolling-eager-latency-runbook.md).
+
 The [B16 repair record](rolling-eager-repairs.md) incorporates the returned raw
 Draft timeline and describes the separately testable A-only and A+B changes.
 Batch enrollment now validates all work before one stable-state pool audit and

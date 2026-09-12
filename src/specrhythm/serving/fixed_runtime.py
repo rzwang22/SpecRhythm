@@ -6,6 +6,7 @@ import copy
 import os
 import time
 
+from specrhythm.continuation.trace import TRACE
 from specrhythm.phase4.stock_vllm import validate_worker_ranks
 from specrhythm.serving.common import read_json, require
 from specrhythm.serving.fixed_artifacts import checkpoint, record_error
@@ -363,6 +364,7 @@ def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5, 
                 phases.append(phase_row)
             before = len(scheduler.s2_steps)
             start = time.monotonic_ns()
+            TRACE.event("coordinator_step_start", step_index=len(steps))
             if scan and window.time_expired(start):
                 break
             try:
@@ -405,6 +407,8 @@ def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5, 
                 committed = True
             finally:
                 end = time.monotonic_ns()
+                TRACE.event("coordinator_output_committed", step_index=len(steps),
+                            committed=committed, start_ns=end, end_ns=end)
                 # Preserve a completed engine step even if output/drain RPC fails.
                 steps.append(
                     {

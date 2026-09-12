@@ -1,6 +1,6 @@
 # SpecRhythm project status
 
-Last updated: 2026-09-12
+Last updated: 2026-09-13
 
 Maintenance rule: every code-changing PR updates this file with its scope, status, evidence,
 known limitations, and next gate before that PR is considered complete.
@@ -36,6 +36,41 @@ claims.
 | [#3 gpu-integration-v0.1](https://github.com/rzwang22/SpecRhythm/pull/3) | draft; Phase 3B.1 and corrected-20 Phase 3C.2 complete; Phase 3C.3 corrected-100 awaiting server run | hardened multi-rank primitives, corrected R3-real traces, common-prefix replay, request-bootstrap statistics, 2x shell decomposition and diagnostic learned ranker | user-run 3×A800 correctness artifacts plus Mac CPU tests; no packed-tree/serving engine, Dual-Batch, SLO, calibrated latency or speedup claim |
 | [#4 vllm-serving-v0.1](https://github.com/rzwang22/SpecRhythm/pull/4) | Draft/Open/unmerged; S0 CLOSED/PASS; S1-P G0–G3 PASS at `5a00049`; S2 G1 at `24b31a9` reported zero process exits/clean cleanup but rejected terminal-tail overlap; S2-only contract refinement awaiting retest | independent prefilled-KV resident pool, dynamic Poisson arrival/admission, Target/Serial/PingPong and engineering SLO/goodput | CPU/source contracts are not GPU qualification; finite-trace ideal PD-delivery boundary only |
 | [#5 rolling-eager-v0.1](https://github.com/rzwang22/SpecRhythm/pull/5) | Draft/Open/unmerged; A-only CI 8/8 SUCCESS; A+B local gates PASS, GPU retest pending | shared continuation protocol, Serial-eager physical backend; separate batch-admission and batch-parent-repair commits, bounded attribution report | original B16 execution/measurement/cleanup PASS and valid negative result remain: native overlap ZERO, throughput 62.0773 → 18.6409 tok/s; new CPU results do not establish GPU benefit |
+
+## Serial-eager startup latency after the returned A+B run
+
+Operator evidence at `068c40a8ead1138568b7f846af348d3f732c28d4` retains all
+execution/measurement/cleanup PASS: Serial 61.064037 tok/s versus eager 38.162742,
+39/25 full B16 steps, 1869/1162 tokens, native overlap lower/upper ZERO. Mean
+complete host step is 783.000/1215.756 ms; only 70.206/54.646 ms of the respective
+windows lies outside complete steps. These step durations are not Target GPU time.
+A+B batching is physically supported by 15 audits/step and one batched parent
+repair per step (~19.918 ms event sum); eager GPU work remains ~101.355 ms/step.
+
+The next revision adds bounded default-off causal host spans and a v2 exporter
+that retains both Target ranks' native bounds, explicit request/parent/work joins,
+snapshot history counts, queue/feedback/batch-gate boundaries, and a disjoint
+coordinator wall-time partition. The returned v1 package omitted raw Target
+intervals although its server reporter used them; the ZERO summary stays valid,
+but exact local Target timelines remain unavailable. No missing span is invented.
+
+Source and a 32-round real-core CPU regression establish that provider evaluation
+deepcopies growing unrelated history four times per successful rolling round;
+its declared provider contract needs only request_id. A separate subsequent
+performance commit will use an isolated immutable identity view, preserving
+decision versions and all A+B checks. No further audit, fence, feedback-priority
+or batch-recovery change is bundled with it. A-only is now historical, not a
+new retest target. [Latency diagnosis](rolling-eager-critical-path.md) and the
+[repository runbook](rolling-eager-latency-runbook.md) specify exactly three user-run
+B16 points across observation/fix roots, with bounded failure export and an
+interactive parent shell. New GPU performance/overlap remain PENDING.
+Observation local gates: **2099 passed, 3 existing skips** on Python 3.11
+(245.067s); Python 3.9 related suite **248 passed** plus **60 passed** in two
+additional existing source-contract files. Ruff, both-version compileall,
+287-file Python 3.9 grammar, 12 Bash scripts, eight Rolling Eager runbook blocks
+and diff checks pass. The two initial shell-test failures were missing `python`
+on PATH after creating a private test venv; the complete suite passes with the
+correct PATH and unchanged assertions. GPU execution remains operator-only.
 
 ## Serial-eager B16 repairs awaiting operator GPU retest
 

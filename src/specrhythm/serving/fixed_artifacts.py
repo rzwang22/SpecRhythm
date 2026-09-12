@@ -6,6 +6,7 @@ import time
 import traceback
 from collections import Counter
 
+from specrhythm.continuation.trace import TRACE
 from specrhythm.serving.common import read_json
 from specrhythm.serving.s2_pool import publish
 
@@ -38,6 +39,7 @@ def record_error(directory, error, phase):
         print(f"[diagnostic secondary] cannot retain {phase} error: {save_error}", flush=True)
 
 
+@TRACE.observe("coordinator_checkpoint")
 def checkpoint(
     directory,
     manifest,

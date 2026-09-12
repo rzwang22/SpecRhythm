@@ -19,6 +19,7 @@ from specrhythm.continuation.policy import (
     EagerEligibilityProvider,
     EagerStepContext,
 )
+from specrhythm.continuation.trace import TRACE
 from specrhythm.phase4.draft_batch import token_tuple
 from specrhythm.phase4.dual_commit import dual_greedy_acceptance
 from specrhythm.phase4.serial import token_prefix_hash
@@ -235,6 +236,7 @@ class RollingContinuation:
             raise
         return self.state(request_id)
 
+    @TRACE.observe("core_state")
     def state(self, request_id) -> RequestState:
         return copy.deepcopy(self._state(request_id))
 
@@ -246,9 +248,19 @@ class RollingContinuation:
 
     def evaluate_eager_eligibility(self, request_id, step_context=None):
         state = self._state(request_id)
-        decision = self.provider.evaluate(
-            copy.deepcopy(state), EagerStepContext() if step_context is None else step_context
-        )
+        with TRACE.span("eligibility_snapshot", request_id=request_id,
+                        round_id=state.committed_prefix_version,
+                        proposal_id=state.current_proposal_id,
+                        history_proposals=len(state.proposals),
+                        history_continuations=len(state.continuations),
+                        copied_history_objects=len(state.proposals)+len(state.continuations),
+                        prefix_tokens=len(state.committed_prefix), snapshot_kind="deepcopy"):
+            snapshot = copy.deepcopy(state)
+        with TRACE.span("eligibility_provider", request_id=request_id,
+                        round_id=state.committed_prefix_version):
+            decision = self.provider.evaluate(
+                snapshot, EagerStepContext() if step_context is None else step_context
+            )
         if not isinstance(decision, EagerDecision):
             raise ValueError("provider must return a validated EagerDecision")
         previous = state.eager_decision
@@ -354,6 +366,7 @@ class RollingContinuation:
         self._normal_results[work.work_id] = proposal.proposal_id
         return copy.deepcopy(proposal)
 
+    @TRACE.observe("core_start_verification")
     def start_verification(self, request_id, proposal_id, *, eager=False) -> Proposal:
         state = self._state(request_id)
         decision = self.evaluate_eager_eligibility(request_id)
@@ -374,6 +387,7 @@ class RollingContinuation:
             )
         return copy.deepcopy(proposal)
 
+    @TRACE.observe("core_begin_continuation")
     def begin_continuation(self, request_id, *, admitted=True) -> Optional[DraftWork]:
         state = self._state(request_id)
         decision = self.evaluate_eager_eligibility(request_id)
@@ -475,6 +489,7 @@ class RollingContinuation:
         self._count_discard(state, continuation)
         return continuation.status
 
+    @TRACE.observe("core_resolve_parent_verification")
     def resolve_parent_verification(self, receipt: ParentVerification) -> bool:
         state = self._state(receipt.request_id)
         if receipt.owner_id != self.owner_id:
@@ -570,6 +585,7 @@ class RollingContinuation:
         else:
             continuation.status = ContinuationStatus.PROMOTABLE
 
+    @TRACE.observe("core_promote_continuation")
     def promote_continuation(self, request_id, continuation_id) -> Proposal:
         state = self._state(request_id)
         decision = self.evaluate_eager_eligibility(request_id)

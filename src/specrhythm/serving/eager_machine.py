@@ -18,6 +18,7 @@ from specrhythm.continuation.core import (
     RollingContinuation,
 )
 from specrhythm.continuation.policy import StaticEagerEligibility
+from specrhythm.continuation.trace import TRACE
 from specrhythm.phase4.draft_batch import DraftCommitPlan, unique_ids
 from specrhythm.phase4.dual_commit import dual_greedy_acceptance
 from specrhythm.phase4.serial import PROTOCOL_VERSION, Proposal, token_prefix_hash
@@ -42,7 +43,8 @@ class EagerSerialMachine(DiagnosticSerialMachine):
         self.accounted = Counter()
         self.owner_stopped = False
 
-    def _event(self, phase, *, request_ids=(), start_ns=None, end_ns=None, **counts):
+    def _event(self, phase, *, request_ids=(), start_ns=None, end_ns=None,
+               causal_bindings=None, **counts):
         now = time.monotonic_ns() if end_ns is None else end_ns
         delta = Counter(counts)
         for rid in request_ids:
@@ -53,6 +55,21 @@ class EagerSerialMachine(DiagnosticSerialMachine):
                 if change:
                     delta[name] += change
                 self.accounted[key] = value
+        if TRACE.enabled:
+            bindings = [] if causal_bindings is None else causal_bindings
+            for rid in request_ids if causal_bindings is None else ():
+                state = self.core._state(rid)
+                work = self.works.get(rid)
+                bindings.append(dict(request_id=rid, round_id=(work.prefix_version if work else
+                                                                state.committed_prefix_version),
+                                     proposal_id=(work.parent_proposal_id if work else
+                                                  state.current_proposal_id),
+                                     continuation_id=work.work_id if work else None,
+                                     continuation_status=(state.continuations[work.work_id].status
+                                                          if work else None)))
+            TRACE.event("protocol_"+phase, bindings=bindings,
+                        counter_delta=dict(delta), start_ns=now if start_ns is None else start_ns,
+                        end_ns=now)
         self.counters.update(delta)
         self.events.append(
             {
@@ -90,6 +107,7 @@ class EagerSerialMachine(DiagnosticSerialMachine):
             )
             self.registered.add(rid)
 
+    @TRACE.observe("machine_batch_propose")
     def batch_propose(self, rows):
         unique_ids([r["request_id"] for r in rows])
         normal, reused, works = [], [], {}
@@ -112,7 +130,11 @@ class EagerSerialMachine(DiagnosticSerialMachine):
             else:
                 works[rid] = self.core.schedule_normal_recovery(rid)
                 normal.append(row)
-        result = super().batch_propose(normal)
+        kinds = {rid: work.kind for rid, work in works.items()}
+        with TRACE.span("normal_recovery_proposal", request_kinds=kinds,
+                        requests=[{"request_id": r["request_id"], "round_id": r["round_id"]}
+                                  for r in normal]):
+            result = super().batch_propose(normal)
         for value in result["proposals"]:
             rid = value["request_id"]
             work = works.pop(rid)
@@ -145,6 +167,7 @@ class EagerSerialMachine(DiagnosticSerialMachine):
         result["proposals"].extend(reused)
         return result
 
+    @TRACE.observe("machine_verify_start")
     def verify_start(self, rows):
         unique_ids([r["request_id"] for r in rows])
         for row in rows:
@@ -189,6 +212,7 @@ class EagerSerialMachine(DiagnosticSerialMachine):
             self._event("eager_admission", request_ids=(work.request_id,), admissions=1)
         return {"accepted": True}
 
+    @TRACE.observe("machine_step")
     def step(self):
         works = [
             w
@@ -214,6 +238,7 @@ class EagerSerialMachine(DiagnosticSerialMachine):
                 )
         return True
 
+    @TRACE.observe("machine_abort")
     def _abort(self, rid, reason):
         work = self.works.get(rid)
         if work is None:
@@ -236,6 +261,7 @@ class EagerSerialMachine(DiagnosticSerialMachine):
         )
         self._event("eager_abort", request_ids=(rid,))
 
+    @TRACE.observe("machine_prepare_synchronizations")
     def prepare_synchronizations(self, rows, *, draining=False):
         for row in rows:
             rid = row["request_id"]
@@ -285,6 +311,9 @@ class EagerSerialMachine(DiagnosticSerialMachine):
             self._event(
                 "parent_result",
                 request_ids=(rid,),
+                causal_bindings=[dict(request_id=rid, round_id=proposal.prefix_version,
+                    proposal_id=proposal.proposal_id,
+                    continuation_id=self.works[rid].work_id if rid in self.works else None)],
                 parent_full_accepts=int(not decision.rejected_draft_token_ids),
                 parent_rejections=int(bool(decision.rejected_draft_token_ids)),
                 accepted_promoted_candidates=(
@@ -306,6 +335,7 @@ class EagerSerialMachine(DiagnosticSerialMachine):
                 ):
                     self._abort(rid, "drain" if draining else "parent_invalid")
 
+    @TRACE.observe("machine_finish_synchronizations")
     def finish_synchronizations(self, rows):
         for row in rows:
             rid = row["request_id"]
@@ -376,6 +406,11 @@ class EagerSerialMachine(DiagnosticSerialMachine):
             self._event(
                 "parent_settled",
                 request_ids=(rid,),
+                causal_bindings=[dict(request_id=rid, round_id=plan.round_id,
+                    proposal_id=(work.parent_proposal_id if work else
+                                 self.verify_bindings.get(key, {}).get("proposal_id")),
+                    continuation_id=work.work_id if work else None,
+                    promoted_proposal_id=state.current_proposal_id if tokens else None)],
                 promotions=int(tokens is not None),
                 bridge_matches=int(tokens is not None),
                 bridge_mismatches=int(c is not None and c.reason == "bridge_mismatch"),
