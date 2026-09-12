@@ -11,6 +11,7 @@ from pathlib import Path
 from specrhythm.serving.common import DataError, require
 from specrhythm.serving.decode_scan_plan import (
     BATCHES,
+    EXPLICIT_MODES,
     MODES,
     load,
     options,
@@ -50,6 +51,15 @@ COLUMNS = (
     "diagnostic_cancelled_requests",
     "effective_exit_code",
     "artifact",
+    "eager_started",
+    "eager_completed",
+    "eager_promotions",
+    "eager_verified_candidates",
+    "eager_accepted_candidates",
+    "eager_recovery_jobs",
+    "eager_unhidden_wait_ms",
+    "eager_gpu_overlap_status",
+    "eager_cleanup_status",
 )
 
 
@@ -109,9 +119,12 @@ def run(root, *, batch=None, mode=None, remaining=False, probe=False, single_poi
                 ),
                 "first finish all three B16 modes before the remaining scan",
             )
+        available = config["points"] + (
+            config.get("optional_points", []) if mode == "serial-eager" else []
+        )
         points = [
             p
-            for p in config["points"]
+            for p in available
             if (remaining or p["batch"] == batch) and (mode is None or p["mode"] == mode)
         ]
         require(not single_point or len(points) == 1,
@@ -154,7 +167,10 @@ def summary(root):
     indexed = {key(r["point"]): r for r in reports if is_probe(r) and not r.get("valid")}
     indexed.update({key(r["point"]): r for r in reports if not is_probe(r)})
     rows = []
-    for p in config["points"]:
+    displayed = config["points"] + [
+        p for p in config.get("optional_points", []) if key(p) in indexed
+    ]
+    for p in displayed:
         r = indexed.get(key(p), {})
         row = {k: r.get(k) for k in COLUMNS}
         row.update(
@@ -184,6 +200,10 @@ def summary(root):
         row["actual_target_batch"] = r.get("actual_target_batch")
         row["prepared_pool"] = r.get("prepared_pool")
         row["primary_error"] = r.get("primary_error")
+        if "rolling_eager" in r:
+            row["rolling_eager"] = r["rolling_eager"]
+        if "rolling_eager_retained" in r:
+            row["rolling_eager_retained"] = r["rolling_eager_retained"]
         rows.append(row)
     result = {
         "schema_version": "specrhythm.decode-scan-summary.v1",
@@ -259,6 +279,9 @@ def bundle(root, output):
     files += list(root.glob("scan-summary-*.json"))
     files += list(root.glob("scan-summary-*.csv"))
     files += list(root.glob("inputs/execution-B*.json"))
+    files += [p for name in ("result.json", "state.json", "diagnostic-primary-error.json",
+                            "diagnostic-secondary-errors.json")
+              if (p := root / "rolling-eager-gpu-check" / name).is_file()]
     require(not output.exists(), "scan bundle already exists")
     total, hashes = 0, []
     with tarfile.open(output, "x:gz") as tar:
@@ -312,7 +335,7 @@ def main(argv=None):
     p.add_argument("--s1", type=Path)
     p.add_argument("--s0", type=Path)
     p.add_argument("--batch", type=int, choices=BATCHES, default=16)
-    p.add_argument("--mode", choices=MODES)
+    p.add_argument("--mode", choices=EXPLICIT_MODES)
     p.add_argument("--remaining", action="store_true")
     p.add_argument("--single-point", action="store_true",
                    help="explicit one-point diagnostic: waive only the B16 order prerequisite")

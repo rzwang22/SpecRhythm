@@ -427,6 +427,54 @@ class RollingContinuation:
             continuation.status = ContinuationStatus.WAITING_PARENT
         return continuation.status
 
+    def record_continuation_abort(self, work, generated_tokens, materialized_kv_frontier):
+        """Retire partial GPU work after its owner has fenced and invalidated it.
+
+        This receipt never creates completed reusable candidate data. It records
+        actual work stopped at a token boundary, including a zero-work admission.
+        """
+        state = self._state(work.request_id)
+        if work.owner_id != self.owner_id or (
+            self._work_digests.get(work.work_id) != _fingerprint(work)
+        ):
+            raise ValueError("unknown or foreign aborted continuation")
+        continuation = state.continuations[work.work_id]
+        if continuation.status not in (
+            ContinuationStatus.INVALIDATED, ContinuationStatus.CANCELLED,
+            ContinuationStatus.RELEASED,
+        ):
+            raise ValueError("partial work must be invalidated before retirement")
+        tokens = token_tuple(generated_tokens)
+        maximum = len(work.dependency_prefix) + max(len(tokens) - 1, 0)
+        if (len(tokens) > work.candidate_length + 1
+                or type(materialized_kv_frontier) is not int
+                or not len(work.base_kv_prefix) <= materialized_kv_frontier <= maximum
+                or (tokens and materialized_kv_frontier != maximum)):
+            raise ValueError("invalid partial GPU generation/frontier evidence")
+        abort_digest = _fingerprint(("aborted", tokens, materialized_kv_frontier))
+        if continuation.completed:
+            # Repeated retirement must preserve exact physical evidence, whether
+            # the first receipt was a completed branch or a partial abort.
+            completion_digest = _fingerprint(
+                DraftCompletion(work.work_id, tokens, materialized_kv_frontier)
+            )
+            if self._completion_digests.get(work.work_id) not in (
+                abort_digest, completion_digest,
+            ):
+                raise ValueError("conflicting already completed GPU retirement")
+            return continuation.status
+        self._completion_digests[work.work_id] = abort_digest
+        self._works.pop(work.work_id, None)
+        continuation.completed = True
+        continuation.generated_count = len(tokens)
+        state.accounting.early_generated_tokens += len(tokens)
+        state.accounting.bridge_generated_tokens += int(bool(tokens))
+        state.accounting.draft_materialized_tokens += (
+            materialized_kv_frontier - len(work.base_kv_prefix)
+        )
+        self._count_discard(state, continuation)
+        return continuation.status
+
     def resolve_parent_verification(self, receipt: ParentVerification) -> bool:
         state = self._state(receipt.request_id)
         if receipt.owner_id != self.owner_id:

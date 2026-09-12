@@ -1,15 +1,19 @@
-# Fixed-length Rolling Eager Continuation, stage 1
+# Fixed-length Rolling Eager Continuation: shared protocol and Serial GPU adapter
 
-This stage adds a reusable CPU continuation protocol for later `serial-eager`
-and `pingpong-eager` adapters. It does not enable an execution mode in production,
-change the Target sampler, connect to AutoDL, run a GPU, or report performance.
-The existing Target, Serial, PingPong and simulator policy defaults remain intact.
+Stage 1 delivered the reusable CPU protocol at
+`e4076628b10ccb5fef712dabae645f712c32cb51`. Stage 2 connects that same protocol to
+the real Draft worker and an explicitly selected `serial-eager` fixed diagnostic
+mode. GPU correctness, overlap and performance remain **PENDING**: server execution
+belongs to the operator, and no AutoDL connection or GPU run was performed during
+implementation. Existing Target, Serial, PingPong and simulator defaults remain
+intact. PingPong GPU mixed admission is still deferred.
 
-The feature branch is `codex/rolling-eager-v0.1`, created from verified commit
+The feature branch remains `codex/rolling-eager-v0.1`, created from verified commit
 `5a16d00fd10778189db3addbff558a2260944b32`. Its dependent Draft PR uses PR #4's
 head branch, `codex/vllm-serving-v0.1`, as its base; the base SHA inspected for
 this stage was also `5a16d00fd10778189db3addbff558a2260944b32`. PR #4 remains
 unmerged and its branch is unchanged; PR #2 and PR #3 are outside this change.
+Continuation work is delivered through dependent Draft PR #5 without merging it.
 
 ## Audited existing execution contracts
 
@@ -69,8 +73,8 @@ verification of that new proposal may start the next dependent continuation.
 
 ## Implemented CPU modules and API
 
-The new [`continuation`](../src/specrhythm/continuation) package has no production
-mode registration or automatic scheduler installation. Its modules are:
+The reusable CPU modules in [`continuation`](../src/specrhythm/continuation) have
+no automatic scheduler installation. Their responsibilities remain:
 
 | Module | Implemented responsibility |
 | --- | --- |
@@ -94,6 +98,7 @@ operates only on its immutable `DraftWork`. The `state`, `proposal` and
 | `start_verification(request_id, proposal_id, eager=False)` | Consume one current legal ready proposal for Target. Eager admission additionally requires an enabled eligible decision and a promoted source. |
 | `begin_continuation(request_id, admitted=True)` | Start at most one dependent future for the verifying parent. A denied capacity admission, ineligibility, EOS parent or insufficient remaining candidate budget creates no work. |
 | `record_continuation_completion(work, completion)` | Validate and account generated branch evidence. Wait for the parent, make a confirmed matching continuation promotable, or retire a late invalid/cancelled/released result without reactivation. |
+| `record_continuation_abort(work, generated_tokens, frontier)` | Account physically completed partial work after its adapter has stopped and fenced it; require the existing cancelled/invalidated/released dependency and prevent reactivation. |
 | `resolve_parent_verification(ParentVerification(...))` | Apply one authoritative, validated Target delta, advance prefix version once, classify accepted/correction/bonus tokens using `dual_greedy_acceptance`, and resolve or discard the dependent continuation. |
 | `promote_continuation(request_id, continuation_id)` | Install the confirmed branch as a new legal proposal whose candidates exclude the bridge. Promotion cannot be repeated. |
 | `discard_continuation(request_id, continuation_id, reason)` | Preserve the discard reason, clear speculative payload and require normal recovery when needed. A promoted proposal has its own lifecycle and cannot be discarded through this API. |
@@ -172,7 +177,7 @@ from the retained prefix before generating a new candidate. On a bridge mismatch
 after full parent acceptance, at most `C + P` is reusable; the predicted bridge
 and everything after it must be invalidated and the actual bonus materialized.
 Tail/terminal trimming keeps only canonical output. Termination releases the
-request's Draft resources on their owner in the future GPU adapter.
+request's Draft resources on their owner in the GPU adapter described below.
 
 The current CPU core conservatively retains the common prefix of its **installed**
 `materialized_kv_prefix` and the Target's committed prefix. Continuation completion
@@ -184,7 +189,7 @@ only operation that installs the matching continuation branch. This distinction
 allows a delayed completion to be validated after normal recovery without
 overwriting the recovered proposal or its frontier.
 
-The CPU core expresses frontier validity and suffix work; it does not allocate
+The CPU core itself expresses frontier validity and suffix work; it does not allocate
 paged KV, execute a model, or prove GPU block reuse. `cpu.generate` completes a
 private immutable branch model. A production GPU owner must serialize the real
 Draft operations, fence or cancel pending writes before rollback/recovery/release,
@@ -303,9 +308,150 @@ matrix executes Python 3.9 and 3.12; the existing Python 3.11 contract and pinne
 vLLM source jobs remain separate. Delivery reports the actual local and CI status;
 this design document does not substitute CPU protocol evidence for GPU qualification.
 
-## Subsequent GPU adapter work
+## Stage 2 connected execution path
 
-The next stage needs explicit opt-in integration at these existing boundaries:
+`serial-eager` is an explicit optional fixed/decode-scan mode. Preparing a new
+resident360 root seals optional eager points, while the default scan still selects
+only its original baseline points. Explicit `--mode serial-eager --batch 16`
+routes through `decode_scan_cli` / `fixed_cli` and `s2_cli` into the existing fixed
+runtime. No policy in the simulator or existing Target/Serial/PingPong mode changes
+its default. The [operator runbook](rolling-eager-gpu-runbook.md) selects only B16.
+
+The connected call chain is:
+
+1. [`serving/fixed_draft.py`](../src/specrhythm/serving/fixed_draft.py) selects
+   [`eager_draft.py`](../src/specrhythm/serving/eager_draft.py) only for the eager
+   mode. Its `EagerOwner` constructs one `EagerSerialMachine` and one
+   `EagerFixedDraftBackend` on the existing Draft owner thread. The backend combines
+   `GPUContinuationBackendMixin` with the existing observed `FixedDraftBackend`;
+   it retains the same model, private allocation and device identity.
+2. The existing pinned worker patch invokes `on_target_verify_start` before
+   `_model_forward`. The audited insertion at original runner line 4334 follows
+   input preparation and precedes the ordinary forward-context/model call.
+   [`EagerSerialProposer`](../src/specrhythm/serving/eager_proposer.py) first uses
+   `S2SerialProposer` to install the initial admission-created proposal and validate
+   existing TP identity. Target rank zero then freezes and sends request/proposal
+   IDs, round, full candidate tokens, parent length and hash. Other TP ranks never
+   submit duplicate Draft work. A TP barrier covers enqueue acknowledgment before
+   any rank enters the Target forward; it does not await Draft completion.
+3. `EagerOwner.call("eager_enqueue", ...)` deep-copies the payload into its mailbox
+   and returns immediately. The socket thread neither changes the shared protocol
+   nor touches GPU KV. The owner validates the frozen proposal and calls the shared
+   core's `start_verification` / `begin_continuation`, then enrolls dependent work.
+4. [`eager_owner.py`](../src/specrhythm/serving/eager_owner.py) drains queued feedback
+   and control messages before its next bounded token step. Each
+   `step_gpu_continuations` issues one actual batched materialization/sample/fence
+   across active requests. A launched write reaches its fence before the owner can
+   roll back or release any affected KV. This allows queued rejection, cancellation
+   and switch-off to stop remaining speculative steps safely.
+5. Target's inherited authoritative result/proposer boundary sends immutable
+   synchronization rows. [`eager_machine.py`](../src/specrhythm/serving/eager_machine.py)
+   uses `RollingContinuation` to resolve them once, including true EOS/length
+   trimming. Matching complete continuation is promoted; rejection or bridge
+   mismatch selects normal recovery from the actual prefix. An accepted parent
+   whose continuation is incomplete may wait for the remaining bounded steps.
+   Its actual unhidden wait interval is recorded and included in decode time.
+6. The machine returns a mixture of promoted, normally recovered, ordinary and
+   legal tail results. Only current legal proposal evidence can reach the next
+   corresponding verification. Verification-start repeats the same procedure,
+   including after recovery. The Target remains the sole committed-output authority.
+
+The eager proposer uses an explicit timeline type because its next Draft start
+can precede parent verification completion. It preserves actual phase intervals
+and readiness checks instead of forcing them into the original Serial
+non-overlap ordering. Target sampling and the existing worker patch stack remain
+unchanged.
+
+### Physical continuation, repair and cached logits
+
+[`gpu_backend.py`](../src/specrhythm/continuation/gpu_backend.py) provides an opt-in
+`GPUContinuationBackendMixin` and standalone `RollingVllmDraftBackend`. It does not
+weaken ordinary `commit_frontier`. `begin_gpu_continuation` validates parent,
+version, candidate budget, current last-token gap and model capacity but launches
+no model work. `step_gpu_continuations` materializes the missing parent-last-token
+position, then bridge/candidate inputs in successive steps, using the existing
+`VllmDraftWorker.materialize`, `greedy` and `fence`. Completion tokens/frontiers
+therefore come from real worker operations, not the CPU executor.
+Backend `eager_enrolled` and runtime `admissions` count registration only;
+`eager_started` / runtime `started` increment after the first physically fenced
+forward/greedy step. A branch cancelled before its first step has no start count.
+
+Unlike the stage-1 independent branch model, real continuation extends the same
+private request allocation. The committed prefix and parent proposal fields stay
+frozen while its physical frontier advances. The GPU adapter's per-work progress
+records are the authority for that extended frontier. On promotion,
+`rebase_gpu_parent` requires complete work, full parent acceptance, exact bridge,
+complete parent dependency and exact promoted tokens. It retains the existing
+allocation, frontier and cached logits, and installs the new prefix/proposal.
+The cached logits still describe the position immediately before the final
+promoted candidate, matching the ordinary sampled-last-token convention.
+
+On rejection or bridge mismatch, the owner first fences/aborts the branch. Repair
+retains only the safe accepted parent prefix, clears invalid deeper cached logits,
+and materializes the missing correction or actual bonus suffix to rebuild logits
+before normal drafting. If no tail supplied fresh logits at a shortened boundary,
+the boundary input must be recomputed. Full-prefix prefill is not used for the
+live request's recovery. Physical blocks above a shorter logical frontier remain
+private high-water capacity: the existing streaming rebase overwrites invalid
+positions before reuse. Request release fences the worker and frees its entire
+allocation, including high-water blocks. Logical truncation is not falsely
+reported as immediate physical block reclamation.
+
+`record_continuation_abort` accounts an interrupted branch's actually generated
+tokens/frontier without requiring a complete K4 result. Started GPU writes must
+have crossed the worker fence before this evidence is returned. Duplicate work,
+completion and settlement are identified by bound IDs/digests; old completion
+cannot replace a recovered proposal or its physical prefix. The physical adapter
+binds the core prefix version to its existing round counter when attaching a
+request; it does not confuse that counter with bootstrap output length.
+
+### Drain and reporting
+
+Fixed runtime preserves the original setup, warmup, decode window and drain
+boundaries. The eager server passes the coordinator's single absolute drain
+deadline through settlement, shutdown, owner join and buffered log finalization.
+Its diagnostic settlement first resolves pending authoritative deltas and safely
+aborts outstanding continuation before delegating final private-KV release.
+Normal completion and refill still require physical resource-release receipts;
+replacements use their own stable identity. Ledger removal follows physical
+settlement. An owner thread or worker that misses the deadline remains a failure,
+even if the outer supervisor subsequently kills its owned processes.
+
+[`eager_results.py`](../src/specrhythm/serving/eager_results.py) joins retained
+counter deltas into lifetime and measured-window reports. It separately reports
+admission, actual start/completion, full accepts/rejections, bridge outcomes,
+promotion, promoted candidates actually verified, promoted candidates accepted,
+early discard, normal recovery, bridge/materialization work and committed
+accepted/correction/bonus counts. Promotion is never substituted for output.
+Window event counters use completion/update timestamps; unhidden wait uses the
+actual interval clipped to the measured window. Throughput retains the existing
+coordinator's measured committed tokens and actual elapsed window.
+
+Actual eager Draft device intervals are recorded by the same `FixedDraftBackend`
+device timeline as existing work, then correlated with Target device intervals.
+Only a positive lower bound from native CUDA clock bounds is reported as observed
+GPU overlap. Host enqueue or call overlap by itself remains `UNKNOWN`. Missing
+natural promotion, consumption, accepted tokens, rejection or bridge mismatch is
+`NOT_OBSERVED`; no automatic scan expansion manufactures those events.
+
+[`gpu_check.py`](../src/specrhythm/continuation/gpu_check.py) is the additional
+operator-only physical Draft regression. It runs the real backend/shared-core
+path, compares generated/promoted/recovered candidates with independent ordinary
+Draft reference KV, checks the existing physical page-table/frontier metadata and
+requires complete resource release. Its controlled receipts are explicitly
+`INJECTED_DIAGNOSTIC`, distinct from natural Target outcomes. Real EOS can prevent
+a bounded construction, which is then `NOT_OBSERVED`. Only diagnostic reference
+allocations replay prefixes, outside throughput measurement. The CLI supervisor
+owns one child process tree by PID/start identity, offers same-root status/errors/
+controlled stop, and retains the first failure. Read-only commands initialize no
+GPU. CPU harness tests exercise the same new backend coordination with substituted
+device operations; they are not a GPU qualification result.
+
+## Integration boundaries and remaining PingPong work
+
+The stage-1 integration map remains the boundary checklist below. Stage 2 connects
+the Serial/fixed subset through the modules above. The PingPong mixed Target batch,
+cross-cohort GPU admission and associated fairness/capacity policy remain deferred:
 
 | Modules | Required integration |
 | --- | --- |
@@ -317,5 +463,8 @@ The next stage needs explicit opt-in integration at these existing boundaries:
 | `serving/fixed_settle.py`, `serving/s2_runtime.py`, `serving/fixed_runtime.py` | Drain both request roles and outstanding owner work before releasing slots or recording completion; bind refills to their own stable identities. |
 
 Target sampling, EOS/length behavior, TP identity checks, stock Target budgets and
-KV ownership remain their existing authorities. GPU correctness qualification is
-a separate next gate. This stage provides no GPU performance result.
+KV ownership remain their existing authorities. The shared core, immutable
+owner messages, incremental physical backend, safe repair and versioned eligibility
+interfaces are reusable by the next PingPong stage. Dynamic urgency, per-request
+budget adaptation and Shaping remain outside scope. GPU correctness, overlap and
+performance are PENDING until the operator returns server evidence.

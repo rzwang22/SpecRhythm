@@ -16,6 +16,10 @@ from specrhythm.serving.s2_draft import S2DraftBackend
 
 def serve(config, directory, socket_path, mode, *, backend_class=None):
     """Only the fixed diagnostic service opts into the explicit stop protocol."""
+    if mode == "serial-eager":
+        from specrhythm.serving.eager_draft import serve as serve_eager
+
+        return serve_eager(config, directory, socket_path, backend_class=backend_class)
     from specrhythm.phase4.dual_service import DualDraftUnixServer
     from specrhythm.phase4.transport import CheckpointJsonl
     from specrhythm.serving.fixed_artifacts import record_error

@@ -35,6 +35,68 @@ claims.
 | [#2 simulator-semantics-v0.2](https://github.com/rzwang22/SpecRhythm/pull/2) | frozen draft; Phase 2 complete, not merged | proposal lifecycle, deterministic tree oracle, tree-aware allocators, base-preserving residual controls, Phase-2 nested search pools and common-snapshot oracle replay, path-aware eager and accounting | pure-Python proxy and oracle upper bounds only; no deployable oracle, measured search cost, GPU integration, or performance claim |
 | [#3 gpu-integration-v0.1](https://github.com/rzwang22/SpecRhythm/pull/3) | draft; Phase 3B.1 and corrected-20 Phase 3C.2 complete; Phase 3C.3 corrected-100 awaiting server run | hardened multi-rank primitives, corrected R3-real traces, common-prefix replay, request-bootstrap statistics, 2x shell decomposition and diagnostic learned ranker | user-run 3×A800 correctness artifacts plus Mac CPU tests; no packed-tree/serving engine, Dual-Batch, SLO, calibrated latency or speedup claim |
 | [#4 vllm-serving-v0.1](https://github.com/rzwang22/SpecRhythm/pull/4) | Draft/Open/unmerged; S0 CLOSED/PASS; S1-P G0–G3 PASS at `5a00049`; S2 G1 at `24b31a9` reported zero process exits/clean cleanup but rejected terminal-tail overlap; S2-only contract refinement awaiting retest | independent prefilled-KV resident pool, dynamic Poisson arrival/admission, Target/Serial/PingPong and engineering SLO/goodput | CPU/source contracts are not GPU qualification; finite-trace ideal PD-delivery boundary only |
+| [#5 rolling-eager-v0.1](https://github.com/rzwang22/SpecRhythm/pull/5) | Draft/Open/unmerged; stage 1 CI PASS; stage 2 implemented, operator GPU retest PENDING | shared fixed-length continuation protocol, one physical Draft owner, explicit Serial-eager fixed/decode-scan route, CPU integration and GPU regression entry | GPU correctness, overlap and performance PENDING; no PingPong GPU mixing or scheduler-policy change |
+
+## Rolling Eager Continuation stage 2 (implemented; operator GPU retest PENDING)
+
+The existing branch and Draft PR #5 now connect the shared stage-1 authority to
+the real paged-KV Draft backend. Only Target TP rank 0 enqueues an immutable
+continuation before the pinned vLLM model-forward hook. All Target ranks wait for
+that enqueue acknowledgement. The existing Draft model runs on one owner thread;
+mailbox feedback is processed between fenced batched token steps. Enrollment does
+not wait for Draft execution and is counted separately from physical start.
+
+The GPU backend fills the unmaterialized fourth parent candidate, then generates
+the bridge and four eager candidates. Full acceptance plus an exact bridge and
+dependency match retains KV and promotes the four candidates. Rejection or bridge
+mismatch crops the logical frontier, invalidates cached logits and physically
+repairs only the missing correction/bonus suffix. Private allocated blocks may
+remain at their high-water capacity until fenced release; no per-round full
+prefix replay or weakened baseline `commit_frontier` is used. Static eligibility
+survives recovery, and the provider switch remains reusable for next-stage
+PingPong scheduling without enabling GPU mixing in this revision.
+
+`serial-eager` is an explicit fixed-diagnostic/decode-scan selection with K=4 and
+an extra five-token Draft speculative reservation. Existing default modes and
+scan points remain unchanged. The runtime passes authoritative terminal prefixes,
+allows promoted/recovered/tail requests in the same batch, and extends the common
+drain deadline through owner join, physical release and log flush. Summary,
+status, errors, stop and bundle retain the eager evidence. Generated, promoted,
+verified and accepted candidates are distinct; only Target commits are output.
+Wait intervals are clipped to the existing decode window. GPU overlap requires
+native CUDA clock bounds; host concurrency alone is `UNKNOWN`.
+
+CPU integration covers the real adapter/owner/socket/backend code with substituted
+device operations, including both feedback orders, repeated promotion → rejection
+→ recovery → promotion, partial cancellation, TP submission order, tail/refill,
+bounded shutdown and producer-to-summary accounting. The operator-only
+`python -m specrhythm.continuation.gpu_check` entry compares real physical KV
+continuations and recovery against separate ordinary Draft reference allocations.
+Its deliberately constructed parent receipts are labelled `INJECTED_DIAGNOSTIC`;
+natural Target event observations come from the actual Serial-eager B16 run.
+
+Validation on the delivered stage-2 tree: **2028 passed, 3 pre-existing skips**
+in the final Python 3.11.15 full pytest run (225.216 seconds), including **76 new
+stage-2 cases**. Python 3.9.6 passes all 178 Rolling Eager cases plus 17 pinned
+vLLM source cases (**195 passed, zero skips**). Ruff, both-version compileall,
+Python 3.9 grammar for all 271 source/test files, 11 repository Bash scripts,
+the runbook Bash blocks and Git diff checks pass. An initial full-suite run hit
+the unchanged five-second process-cleanup test timeout; two isolated unchanged
+reruns and subsequent full suites passed. No timeout, skip or assertion was
+relaxed. The three final skips remain the opt-in CUDA test and two Linux-only
+process-lifecycle cases. Stage-1 commit
+`e4076628b10ccb5fef712dabae645f712c32cb51` was confirmed **8/8 CI checks SUCCESS**
+before stage 2; stage-2 CI is reported for the actual pushed commit on Draft PR #5.
+
+The [GPU runbook](rolling-eager-gpu-runbook.md) freezes resident360, the existing
+S1/models/topology, two warmup rotations, a 30-second window, one repeat,
+`samples=None`, setup 900 seconds, drain 60 seconds, buffered-live observation
+and bound-prefix identity. Its child Bash stops at the first failure and retains
+evidence. The delivery includes a copy filled with the actual final commit SHA.
+No AutoDL connection or GPU execution is performed in this implementation task.
+GPU correctness / overlap / performance remain **PENDING**; the next gate is the
+user-run capacity and physical correctness checks, then Serial B16 and only after
+its qualification Serial-eager B16.
 
 ## Rolling Eager Continuation stage 1 (CPU implementation; GPU integration PENDING)
 

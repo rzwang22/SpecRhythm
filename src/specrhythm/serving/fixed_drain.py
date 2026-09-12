@@ -51,7 +51,7 @@ def settle(
     # including blocked worker calls and final engine shutdown after this returns.
     try:
         update("wait_owner")
-        if runtime_mode == "pingpong":
+        if runtime_mode in ("pingpong", "serial-eager"):
             wait_draft(client, remaining(deadline), deadline_ns=deadline)
         llm.collective_rpc(target_fence, timeout=update("target_fence"))
         devices = llm.collective_rpc(target_report, timeout=update("target_evidence"))
@@ -105,7 +105,9 @@ def settle(
                 clock.released([rid], time.monotonic_ns())
         publish_control()
         update("draft_shutdown")
-        draft_shutdown = client.call("shutdown", {})
+        draft_shutdown = client.call(
+            "shutdown", {"deadline_ns": deadline} if runtime_mode == "serial-eager" else {}
+        )
         require(draft_shutdown.get("shutdown") is True, "Draft shutdown incomplete")
         final = llm.collective_rpc(target_snapshot, timeout=update("target_final_evidence"))
         from specrhythm.serving.fixed_logging import buffered, finalize_drain

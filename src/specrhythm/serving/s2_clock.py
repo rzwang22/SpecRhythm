@@ -16,7 +16,7 @@ class ServingClock:
         per_cohort_capacity=None, fixed_assignment=None
     ):
         check_seal(trace)
-        require(mode in ("target", "serial", "pingpong"), "unknown S2 mode")
+        require(mode in ("target", "serial", "pingpong", "serial-eager"), "unknown S2 mode")
         require(type(active_limit) is int and 0 < active_limit <= 128, "invalid active limit")
         self.definitions = {r.request_id: r for r in definitions}
         ids = [r["request_id"] for r in trace["rows"]]
