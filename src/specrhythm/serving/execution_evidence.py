@@ -166,12 +166,22 @@ def execution_path(runtime, backend, start, end):
             for r in host.get("intervals", [])
             if r["category"] == "log_fsync" and touching(r, start, end)
         ]
-        for name in sorted({r.get("log_name") or "MISSING_FILENAME" for r in rows}):
-            selected = [r for r in rows if (r.get("log_name") or "MISSING_FILENAME") == name]
+        def attribution(row):
+            return (
+                row.get("log_name") or "MISSING_FILENAME",
+                row.get("log_path"), row.get("physical_path"), row.get("write_kind"),
+            )
+
+        for key in sorted({attribution(r) for r in rows}, key=repr):
+            name, target_path, physical_path, write_kind = key
+            selected = [r for r in rows if attribution(r) == key]
             logs.append(
                 dict(
                     role=role,
                     log_name=name,
+                    log_path=target_path,
+                    physical_path=physical_path,
+                    write_kind=write_kind,
                     count=len(selected),
                     union_ms=duration(
                         [(max(start, r["start_ns"]), min(end, r["end_ns"])) for r in selected]
@@ -256,14 +266,20 @@ def qualify(report):
         for c in cycles
     ):
         errors.append("per-cycle owner feedback landmarks incomplete")
-    if any(r.get("log_name") == "MISSING_FILENAME" for r in path.get("fsync_by_file", [])):
+    missing_fsync = [
+        r for r in path.get("fsync_by_file", [])
+        if not r.get("log_name") or r["log_name"] == "MISSING_FILENAME"
+    ]
+    if missing_fsync:
         errors.append("fsync file attribution incomplete")
     return dict(
         schema_version="specrhythm.execution-evidence-status.v1",
         original_qualification=report.get("original_qualification"),
+        original_run_details=report.get("original_run_details"),
         diagnostic_integrity="FAILED" if errors else "COMPLETE",
         failure_layer="diagnostic_evidence" if errors else None,
         errors=errors,
+        missing_fsync_attribution=missing_fsync,
         trace_coverage=traces,
         GPU_correctness="see separate physical correctness result",
         performance_conclusion="PENDING; no speedup threshold",
@@ -343,6 +359,13 @@ def main(argv=None):
         result = compare(args.reports, args.commits or [])
     print(json.dumps(write(result, args.output)))
     if result.get("diagnostic_integrity") == "FAILED":
+        print(json.dumps({
+            k: result[k] for k in (
+                "failure_layer", "original_qualification", "diagnostic_integrity",
+                "missing_fsync_attribution", "performance_conclusion",
+            )
+        }, sort_keys=True))
+        print("evidence_status=" + str(args.output))
         raise SystemExit("diagnostic_evidence FAILED: " + "; ".join(result["errors"]))
 
 

@@ -329,6 +329,9 @@ def analyze(runtime, backend, light):
                 "formal_comparison_eligible",
             )
         },
+        "original_run_details": {
+            k: light.get(k) for k in ("capacity_status", "effective_exit_code", "errors")
+        },
         "window_ms": light["measured_window_ms"],
         "steps": len(steps),
         "committed_tokens": light["committed_window_tokens"],

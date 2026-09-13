@@ -29,12 +29,22 @@ claims.
 
 ## Pull request progress
 
+### PR #5 — 原子 JSON fsync 归因修复（2026-09-13）
+
+- 已保留 68c30b1 及此前提交，分支保持 Draft；不改 PR #2/#3/#4。
+- c816 控制版 Serial/runtime 45 steps、2164 tokens、30642.241426 ms、70.62146564003774 tok/s；capacity/correctness/execution/measurement/cleanup PASS，所有 causal trace 无丢行。唯一失败为 Target rank0 45次 / 123.609629ms 的 fsync 缺文件名，属于 diagnostic_evidence；后续三点未启动。
+- [归因修复及证据说明](rolling-eager-fsync-attribution.md)：真实 `_write_report` imported alias→atomic JSON→fsync 链缺少上下文；共享底层线程上下文覆盖所有 phase4 sync 写入点，区分目标/临时路径及类别。保持全部同步次数、顺序、原子发布和异常传播，不改 buffer 策略及 eager 调度。
+- 优化路径全量CPU回归2182 passed / 3既有skips；Python3.9相关回归53 passed，Ruff、compileall、Python3.9 AST303文件及15个已跟踪Bash脚本语法、diff检查通过。
+- 控制路径全量CPU回归2173 passed / 3既有skips；Python3.9相关回归53 passed，Ruff、compileall、AST302文件及同样15个Bash脚本检查通过。
+- 控制、优化版本同时修复；未知事件仍严格失败。首错明细先打印，导出次生错误与原退出码分离。新版本 GPU correctness/overlap/performance **PENDING**；[四点复验 runbook](rolling-eager-execution-runbook.md)。
+
 ### PR #5 — 987ef3 四点复核及执行控制（2026-09-13）
 
 - 分支 `codex/rolling-eager-v0.1` 保持 Draft；不修改 PR #2/#3/#4。
 - 只读确认四点 execution/measurement/cleanup PASS，eager/runtime 66.909556 vs Serial/runtime 69.200389 tok/s；42轮原生重叠仍没有吞吐收益。最后一包是Draft host trace20k截断7897行导致诊断完整性失败，原负性能结果保持有效。
 - [实际PEARL源码对照及因果报告](rolling-eager-pearl-comparison.md)：参考完整SHA固定；449 admitted父拒绝、36 bridge mismatch、185 promotion；每轮恢复仍3 forward。公共admission日志每轮约360次fsync发生在Target forward前，约4.8秒窗口成本。
 - 第一项独立提交只修证据：阶段预算、准确完整性层次、文件/反馈/Target诊断打点、compact报告及runtime配对脚本。执行优化单独提交；控制版本全量CPU pytest 2150 passed / 3既有平台或GPU skips，Ruff、compileall、Python3.9 AST301文件及14个Bash语法检查通过。GPU正确性/重叠/性能等待用户复测。
+- 控制提交 `c8165ccb93cc07d81f684cb48f270da837d6e75b` 已普通推送。执行优化提交 `2f436a14e1284164f04aa892cca5cdfb8c048301` 接入schema/consumer受限的admission有界落盘；生产scheduler链20880条记录完整保留，original-live同步策略不变。两版本脚本各含Serial/runtime及eager/runtime。优化版本全量CPU pytest 2166 passed / 3既有skips，Python3.9相关回归123 passed，Ruff、compileall、303文件Python3.9语法及15个Bash检查通过。
 - [服务器运行说明](rolling-eager-execution-runbook.md)。本轮不接入PingPong-eager、不改批级恢复调度、不维护A-only。
 
 | PR | Status | Scope | Evidence / boundary |

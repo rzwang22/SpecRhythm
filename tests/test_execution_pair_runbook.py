@@ -17,6 +17,8 @@ POINTS = ["serial:runtime", "serial-eager:runtime"]
     "failure,point",
     [
         ("capacity", POINTS[0]),
+        ("evidence", POINTS[0]),
+        ("evidence+exports", POINTS[0]),
         ("correctness", POINTS[0]),
         ("correctness_gate", POINTS[1]),
         ("measurement", POINTS[1]),
@@ -46,6 +48,7 @@ if [[ "$1" == prepare ]]; then mkdir -p "$SR_FIXED_ROOT"; fi
 if [[ "$1" == capacity && "$FAIL_STAGE" == capacity && "$FAIL_POINT" == "$point" ]]; then
   exit 23
 fi
+if [[ "$1" == bundle && "$FAIL_EXPORTS" == yes ]]; then exit 31; fi
 if [[ "$1" == bundle ]]; then printf '{}' > "$3"; fi
 """,
     )
@@ -55,7 +58,7 @@ if [[ "$1" == bundle ]]; then printf '{}' > "$3"; fi
         "#!"
         + sys.executable
         + "\n"
-        + """import os, pathlib, sys
+        + """import json, os, pathlib, sys
 args=sys.argv[1:]
 body=sys.stdin.read() if args and args[0]=='-' else ''
 point=os.environ.get('SR_AUDIT_SERVING_MODE','')+':'+os.environ.get('SR_AUDIT_MODE','')
@@ -66,7 +69,21 @@ kind=('correctness' if args[:3]==['-m','specrhythm.continuation.gpu_check','run'
  'measurement' if "formal_comparison_eligible" in body else
  'evidence' if "trace_coverage" in body else 'python')
 with open(os.environ['CALLS'],'a') as f: f.write(point+' '+kind+' '+str(args)+'\\n')
-if kind==os.environ['FAIL_STAGE'] and point==os.environ['FAIL_POINT']: sys.exit(23)
+if args[:2]==['-m','specrhythm.serving.execution_failure']:
+ sys.path.insert(0, os.environ['REAL_SOURCE'])
+ from specrhythm.serving.execution_failure import main
+ main(args[2:]);sys.exit(0)
+if kind==os.environ['FAIL_STAGE'] and point==os.environ['FAIL_POINT']:
+ if kind=='evidence':
+  pathlib.Path(args[args.index('--output')+1]).write_text(json.dumps(dict(
+   diagnostic_integrity='FAILED', failure_layer='diagnostic_evidence',
+   original_qualification=dict(execution_status='PASS',measurement_status='PASS',cleanup_status='PASS'),
+   missing_fsync_attribution=[dict(role='target-0',count=45,union_ms=123.609629,log_name='MISSING_FILENAME')],
+   errors=['fsync file attribution incomplete'])))
+ sys.exit(23)
+if (args[:2]==['-m','specrhythm.serving.eager_latency_bundle']
+    and os.environ['FAIL_EXPORTS']=='yes'):
+ sys.exit(37)
 if '--output' in args: pathlib.Path(args[args.index('--output')+1]).write_text('{}')
 """,
     )
@@ -85,7 +102,9 @@ if '--output' in args: pathlib.Path(args[args.index('--output')+1]).write_text('
         **os.environ,
         "PATH": str(binary) + os.pathsep + os.environ["PATH"],
         "CALLS": str(log),
-        "FAIL_STAGE": failure,
+        "FAIL_STAGE": failure.split("+")[0],
+        "FAIL_EXPORTS": "yes" if failure.endswith("+exports") else "no",
+        "REAL_SOURCE": str(Path("src").resolve()),
         "FAIL_POINT": point,
     }
     result = subprocess.run(
@@ -101,7 +120,17 @@ if '--output' in args: pathlib.Path(args[args.index('--output')+1]).write_text('
     else:
         assert "Stopped rc=23" in result.stdout
         assert prepared == POINTS[: POINTS.index(point) + 1]
-        assert len(list(results.glob("*-failure-evidence.tar.gz"))) == 1
+        assert len(list(results.glob("*-failure-evidence.tar.gz"))) == (
+            0 if failure.endswith("+exports") else 1)
+        if failure.startswith("evidence"):
+            for detail in ("diagnostic_evidence", "target-0", "123.609629", "PASS",
+                           "evidence-status.json", "failure-evidence.tar.gz"):
+                assert detail in result.stdout
+            assert not any("cli status" in r or "cli errors" in r for r in rows)
+        if failure.endswith("+exports"):
+            status = next(results.glob("*-failure-export-status.txt")).read_text()
+            assert "first_rc=23" in status and "small_export_rc=31" in status
+            assert "evidence_export_rc=37" in status
         assert not list(results.glob("execution-runtime-pair-*.json"))
     for row in rows:
         if "cli prepare " in row:

@@ -540,3 +540,10 @@ document; PingPong integration and any performance repair remain future work.
 参考固定 nano-PEARL `7d020b6ce70d965c85d1bc08248c8af9c22e81cd`，实际源码和987ef3四点复核见 [对照报告](rolling-eager-pearl-comparison.md)。不移植pre/post提交协议，不改bonus/bridge、K4、反馈优先或批级WAITING_DRAFT。
 
 新证据控制提交显式采用phase独立预算，setup/warmup不再耗尽measurement保留量。通过已有control观察阶段，丢失区间跨窗口时仍失败；全历史和窗口完整性分别记录。新增feedback与per-file fsync归因，完整Target诊断inclusive span及实际Graph配置。执行控制版本保持逐条admission fsync。后续单独提交仅评估共享admission证据的既有有界buffer接入，保持准入决策在内存即时完成。验收及服务器边界见 [runbook](rolling-eager-execution-runbook.md)。
+
+执行优化只扩大固定诊断的buffer范围到schema和consumer均匹配的resident admission审计。same-file异类native记录到达时先flush旧批次，避免倒序；混合流的部分digest不冒充全流digest。默认original-live、非Serial consumer及控制/停止发布保持原行为。现有58轮resident360/B16 CPU实际scheduler链验证事件/调度数量守恒；GPU改善仍待配对复测。
+
+
+## 原子写入归因边界（2026-09-13）
+
+fsync 的观测上下文属于实际 writer：共享 `specrhythm.io_context` 标明最终路径、物理路径和写入类别，`manifest.atomic_write_json` 在既有同步处建立上下文，既有 imported alias 无需重新绑定。线程/嵌套/异常恢复不使用全局锁或 fd 查询。JSONL 与原子 JSON 的同步政策均保持；原子 JSON 仍先 fsync 临时文件、关闭，再 replace。未知 fsync 继续拒绝诊断完整性资格，原运行资格独立保留。控制/优化版本必须包含相同修复，仅此前 admission buffer 执行差异参与对照。详见 [修复说明](rolling-eager-fsync-attribution.md)。

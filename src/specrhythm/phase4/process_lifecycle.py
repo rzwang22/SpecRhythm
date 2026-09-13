@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
 
+from specrhythm.io_context import file_context
 from specrhythm.phase4.owned_processes import (
     OwnedProcesses,
     set_subreaper,
@@ -500,7 +501,8 @@ def _atomic_json(path: Path, value: Mapping[str, Any]) -> None:
             json.dump(value, handle, indent=2, sort_keys=True)
             handle.write("\n")
             handle.flush()
-            os.fsync(handle.fileno())
+            with file_context(path, physical_path=temporary, write_kind="atomic_json"):
+                os.fsync(handle.fileno())
         os.replace(temporary, path)
     except Exception:
         Path(temporary).unlink(missing_ok=True)
