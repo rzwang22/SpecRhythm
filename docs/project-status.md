@@ -38,6 +38,7 @@ claims.
 - 真实factory/scheduler/adapter/owner/backend、固定vLLM bookkeeping+独立oracle完整输出、full/runtime allocator，以及报告生产→序列化→qualify→总包重读回归覆盖。仍严格拒绝缺probe、错误阶段/设备/native关联。比较JSON、拒绝恢复时序和native交并集纳入唯一总包。
 - 全量pytest2414 passed / 3既有skip；Python3.9相关148、Python3.12相关136通过。Ruff、compileall、354文件3.9语法、20个Bash及diff检查通过；候选生命周期守恒与重复结算回归通过。既有CI的5秒旧drain失败单独保留调查结论，新CI状态交付时查询，不以本地通过覆盖旧失败。
 - [设计](k3-design.md)、[验证](k3-validation.md)、[服务器runbook](k3-runbook.md)：容量3点→Target-only+3模式联合correctness→固定runtime3点，首错停止、原始码与导出码分开，只上传一个新总包。未连接AutoDL；新GPU correctness、pipeline/overlap、performance **PENDING**。
+- 执行SHA `b2a2d29210d68357590a567d4819f3552175d179`；后续交付只增加固定入口、文档/入口回归及CI检查。入口14项通过（3项新增在Python3.9亦通过），21个Bash、355文件3.9语法通过；普通推送后仍保持Draft，等待服务器唯一总包。
 
 ### PR #5 — 非 scan correctness 报告与联合首错修复（2026-09-13）
 

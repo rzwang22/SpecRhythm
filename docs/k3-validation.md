@@ -65,3 +65,11 @@ real scheduler/service routing and allocator audit transitions.354 src/test Pyth
 files parse with Python3.9 grammar; compileall passes on3.9 and3.11. Ruff passes;
 all20 current repository Bash files pass syntax validation. The pinned entry is
 validated again after its execution SHA is fixed.
+
+Execution commit: `b2a2d29210d68357590a567d4819f3552175d179`. The subsequent delivery
+adds the pinned child launcher, its three failure/success regressions and docs only
+(plus CI syntax coverage); no src change. Launcher+foreground14 tests pass on3.11,
+the three new launcher tests pass on3.9, all21 Bash files and355 Python grammar
+checks pass. The explicit pinned vLLM CI source job includes the new Target test;
+its full local98-test selection passed. Remote CI is checked after ordinary push;
+no pending check is labelled PASS.

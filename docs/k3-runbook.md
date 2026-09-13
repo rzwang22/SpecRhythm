@@ -63,8 +63,29 @@ stable speedup; a later authorized repeat can use a fresh SR_PING_RUN_TAG.
 
 ## Foreground command
 
-The execution SHA and copyable command are pinned after local verification. The parent
-shell uses `if bash ...; then ...; else ...; fi`; never source a strict runner into the
-interactive shell. Default repository is `/root/autodl-tmp/src/SpecRhythm`, Python is
+Execution SHA: `b2a2d29210d68357590a567d4819f3552175d179`. The delivery commit adds
+`scripts/run_k3_b16_pinned.sh` and this command; it does not change execution source.
+Never source a strict runner into the interactive shell. Default repository is
+`/root/autodl-tmp/src/SpecRhythm`, Python is
 `/root/autodl-tmp/envs/specrhythm-phase4-vllm-0.25.1/bin/python3.11`, S1 is
 `/root/autodl-tmp/SpecRhythm-data/results/phase-s1/s1p-5a00049-20260909T144802Z-1469`.
+
+```bash
+if bash <<'SR_K3_CHILD'
+set -Eeuo pipefail
+FINAL_SHA=b2a2d29210d68357590a567d4819f3552175d179
+REPO=/root/autodl-tmp/src/SpecRhythm
+git -C "$REPO" fetch origin codex/rolling-eager-v0.1
+git -C "$REPO" cat-file -e "${FINAL_SHA}^{commit}"
+RUN_TREE="${REPO}-k3-${FINAL_SHA:0:12}-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+git -C "$REPO" worktree add --detach "$RUN_TREE" "$FINAL_SHA"
+export SR_EXEC_REPO="$RUN_TREE"
+bash "$RUN_TREE/scripts/run_k3_b16.sh" "$FINAL_SHA"
+SR_K3_CHILD
+then
+  printf 'K3 completed; upload only the archive printed as UPLOAD ONLY.\n'
+else
+  rc=$?
+  printf 'K3 stopped, original rc=%s; later points stopped; terminal remains open.\n' "$rc"
+fi
+```
