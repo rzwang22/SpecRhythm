@@ -18,8 +18,8 @@ from specrhythm.serving.fixed_settle import remaining
 
 
 class EagerOwner:
-    def __init__(self, factory, *, timeout_seconds=900):
-        self.commands = queue.Queue()
+    def __init__(self, factory, *, timeout_seconds=900, queue_capacity=0):
+        self.commands = queue.Queue(maxsize=queue_capacity)
         self.ready = queue.Queue(maxsize=1)
         self.timeout_seconds = timeout_seconds
         self.failure = None
@@ -211,6 +211,12 @@ class EagerOwner:
             return result
         raise ValueError(f"unsupported eager operation: {operation}")
 
+    def _put_command(self, command):
+        if self.commands.maxsize:
+            self.commands.put(command, timeout=self.timeout_seconds)
+        else:
+            self.commands.put(command)  # Preserve the original unbounded Serial path.
+
     def call(self, operation, payload):
         if self.failure is not None:
             raise RuntimeError(f"eager owner failed: {self.failure}")
@@ -229,7 +235,7 @@ class EagerOwner:
             # Confirm task registration in the mailbox only. In particular, do
             # not wait for the owner thread, model forward, sampling or a fence.
             with TRACE.span("owner_queue_put", operation=operation, requests=refs):
-                self.commands.put((operation, frozen, None))
+                self._put_command((operation, frozen, None))
             TRACE.event("owner_enqueue_ack", operation=operation, requests=refs)
             return {
                 "enqueued": True,
@@ -240,7 +246,7 @@ class EagerOwner:
         if operation == "synchronize_and_batch_propose":
             frozen["_owner_enqueue_ns"] = time.monotonic_ns()
         with TRACE.span("owner_queue_put", operation=operation, requests=refs):
-            self.commands.put((operation, frozen, response))
+            self._put_command((operation, frozen, response))
         timeout = (
             remaining(payload["deadline_ns"]) if "deadline_ns" in payload else self.timeout_seconds
         )

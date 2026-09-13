@@ -235,7 +235,8 @@ def target_startup(worker):
     from specrhythm.serving.fixed_identity import install
 
     install(runner.drafter, "identity")
-    if os.environ["SR_S2_MODE"] in ("serial-prepost3", "serial-eager-prepost3"):
+    if os.environ["SR_S2_MODE"] in ("serial-prepost3", "serial-eager-prepost3",
+                          "pingpong-prepost3", "pingpong-eager-prepost3"):
         from specrhythm.serving.prepost_target import install as install_prepost
 
         install_prepost(runner)

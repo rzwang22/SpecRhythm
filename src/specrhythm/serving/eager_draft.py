@@ -72,6 +72,8 @@ class EagerSerialServer(DraftUnixServer):
 
 
 def serve(config, directory, socket_path, *, backend_class=None, prepost_mode=None):
+    from specrhythm.serving.ping_prepost import MODES as PING_MODES
+
     report = directory / "draft-backend-report.json"
     cls = backend_class or EagerFixedDraftBackend
     if not issubclass(cls, GPUContinuationBackendMixin):
@@ -81,8 +83,12 @@ def serve(config, directory, socket_path, *, backend_class=None, prepost_mode=No
         from specrhythm.continuation.prepost import MODES
         from specrhythm.continuation.prepost_backend import PrePostBackendMixin
 
-        if prepost_mode not in MODES:
+        if prepost_mode not in (*MODES, *PING_MODES):
             raise ValueError("unknown explicit prepost mode")
+        if prepost_mode in PING_MODES:
+            from specrhythm.continuation.ping_prepost_backend import PingPrePostBackendMixin
+
+            PrePostBackendMixin = PingPrePostBackendMixin
         cls = type("PrePostFixedDraftBackend", (PrePostBackendMixin,
                    backend_class or FixedDraftBackend), {})
 
@@ -92,14 +98,24 @@ def serve(config, directory, socket_path, *, backend_class=None, prepost_mode=No
         if prepost_mode is not None:
             from specrhythm.serving.prepost_machine import PrePostMachine
 
+            if prepost_mode in PING_MODES:
+                from specrhythm.serving.ping_prepost_machine import PingPrePostMachine
+
+                PrePostMachine = PingPrePostMachine
             return PrePostMachine(backend, request_ids=tuple(control()["requests"]),
-                                  eager=prepost_mode == "serial-eager-prepost3",
+                                  eager=prepost_mode in (
+                                      "serial-eager-prepost3", "pingpong-eager-prepost3"),
                                   report_path=report)
         return EagerSerialMachine(
             backend, request_ids=tuple(control()["requests"]), report_path=report
         )
 
-    owner = EagerOwner(factory)
+    if prepost_mode in PING_MODES:
+        from specrhythm.serving.ping_prepost_owner import PingPrePostOwner
+
+        owner = PingPrePostOwner(factory)
+    else:
+        owner = EagerOwner(factory)
     server = EagerSerialServer(
         socket_path, owner, event_log=CheckpointJsonl(directory / "draft-work-events.jsonl")
     )

@@ -21,6 +21,7 @@ from specrhythm.serving.fixed_results import (
     rounds_by_prefix,
     stats,
 )
+from specrhythm.serving.ping_prepost import MODES as PING_MODES
 from specrhythm.serving.runtime_profile import load_s2
 from specrhythm.serving.s1_workload import write_once
 
@@ -96,6 +97,8 @@ def full_load_fraction(rows, start, end, batch):
 
 def rotations(steps, expected, mode):
     """Pair opposite cohorts using actual disjoint request sets; retain partial rotations."""
+    if mode in PING_MODES:
+        return len(steps)//2, len(steps)%2
     complete, partial, pending = 0, 0, None
     for s in steps:
         if s["B"] != expected:
@@ -113,7 +116,12 @@ def warmup_boundary(runtime, point, opts):
     retained = scan.get("warmup_boundary")
     require(isinstance(retained, dict), "scan mandatory warmup boundary evidence missing",
             field="decode_scan.warmup_boundary", artifact="runtime.json")
-    replay = ScanWindow(opts, point["batch"], point["mode"] == "pingpong")
+    if point["mode"] in PING_MODES:
+        from specrhythm.serving.ping_prepost_window import PingPrePostWindow
+
+        replay = PingPrePostWindow(opts, point["batch"], True)
+    else:
+        replay = ScanWindow(opts, point["batch"], point["mode"] == "pingpong")
     previous_end = runtime["start_ns"]
     for row in runtime["target_steps"]:
         if row["window"] or not row["B"]:
@@ -136,7 +144,7 @@ def warmup_boundary(runtime, point, opts):
                   and (r.get("completion_ns") is None or start < r["completion_ns"])}
         require(set(population["request_ids"]) == set(active),
                 "scan initial active identities differ from request lifecycle")
-        if point["mode"] == "pingpong":
+        if point["mode"] == "pingpong" or point["mode"] in PING_MODES:
             require(all(set(population["cohorts"][c]) ==
                         {rid for rid, r in active.items() if r["cohort"] == c}
                         for c in ("A", "B")), "scan initial cohort identities differ")
@@ -152,7 +160,8 @@ def timing(runtime, backend, point, opts):
     all_steps = runtime["target_steps"]
     measured = [s for s in all_steps if s["window"]]
     nonempty = [s for s in measured if s["B"]]
-    expected = point["batch"] // 2 if point["mode"] == "pingpong" else point["batch"]
+    expected = (point["batch"] // 2 if point["mode"] in ("pingpong", *PING_MODES)
+                else point["batch"])
     devices = runtime["target_devices"]
     require(
         len(devices) == 2 and {d["device"]["identity"]["global_rank"] for d in devices} == {0, 1},
@@ -199,7 +208,7 @@ def timing(runtime, backend, point, opts):
         )
         require(s["output_commit_complete"], "scan Target output commit incomplete")
         require(s["population"]["held_slots"] <= point["batch"], "scan held capacity exceeded")
-        if point["mode"] == "pingpong":
+        if point["mode"] == "pingpong" or point["mode"] in PING_MODES:
             require(
                 all(n <= expected for n in s["population"]["cohort_held"].values()),
                 "scan cohort capacity exceeded",
@@ -289,12 +298,12 @@ def timing(runtime, backend, point, opts):
         reason == "time_budget"
         and wall is not None
         and wall >= opts["window_seconds"] * 1000
-        and full
+        and (full or (point["mode"] in PING_MODES and bool(nonempty)))
         and scan["warmup_rotations"] == opts["warmup_steps"]
     )
     if qualified:
         require(tokens > 0 and math.isfinite(wall) and wall > 0, "scan throughput nonpositive")
-    if not full and nonempty:
+    if not full and nonempty and point["mode"] not in PING_MODES:
         reason = "unexpected_partial_batch"
     admissions = [e for e in runtime["events"] if e["event"] == "admitted"]
     return {
@@ -359,8 +368,11 @@ def summarize(manifest_path, directory, point, *, probe=False):
         "workload_sha256": m["workload_sha256"],
         "pool_size": POOL_SIZE,
         "batch": point["batch"],
-        "sub_batch": point["batch"] // 2 if point["mode"] == "pingpong" else None,
-        "boundary": BOUNDARY,
+        "sub_batch": (point["batch"] // 2 if point["mode"] in ("pingpong", *PING_MODES)
+                      else None),
+        "boundary": ("resident360, active16, Target ceiling8; two actual admissions per "
+                     "warmup rotation; repeated IDs and mixed homes are legal"
+                     if point["mode"] in PING_MODES else BOUNDARY),
         "artifact": str(directory),
         "effective_exit_code": 0,
         "formal_comparison_eligible": False,
@@ -384,7 +396,7 @@ def summarize(manifest_path, directory, point, *, probe=False):
         base["prepared_pool"] = prepared_checks(m, r, directory, point)
         base["diagnostic_logging"] = logging_checks(directory, opts["observation"])
         base["identity_matching"] = identity_checks(r, opts["identity_matching"])
-        if point["mode"] == "pingpong":
+        if point["mode"] == "pingpong" or point["mode"] in PING_MODES:
             verifications = sum(
                 any(row["candidate_positions"] for row in s["rows"]) for s in r["target_steps"]
             )

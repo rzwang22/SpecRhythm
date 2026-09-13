@@ -23,9 +23,9 @@ from specrhythm.serving.s1_workload import write_once
 from specrhythm.serving.s2_plan import sealed
 
 
-def prepare(source, root, mode):
+def prepare(source, root, mode, *, modes=MODES):
     require(
-        mode in ("target", *MODES) and not root.exists(), "new joint correctness root required"
+        mode in ("target", *modes) and not root.exists(), "new joint correctness root required"
     )
     base = read_json(source / "inputs/execution-B16.json")
     raw = [
@@ -83,8 +83,8 @@ def prepare(source, root, mode):
     return path
 
 
-def compare_outputs(runtimes):
-    require(set(runtimes) == {"target", *MODES}, "joint check lacks a mode/reference")
+def compare_outputs(runtimes, *, modes=MODES):
+    require(set(runtimes) == {"target", *modes}, "joint check lacks a mode/reference")
     values = {}
     for mode, runtime in runtimes.items():
         require(
@@ -104,7 +104,7 @@ def compare_outputs(runtimes):
             target_tokens=tokens,
             actual_tokens=values[mode].get(rid),
         )
-        for mode in MODES
+        for mode in modes
         for rid, tokens in values["target"].items()
     ]
     require(
@@ -114,7 +114,7 @@ def compare_outputs(runtimes):
     )
     mixed = [
         s
-        for s in runtimes[MODES[1]]["target_steps"]
+        for s in runtimes[modes[1]]["target_steps"]
         if {r["candidate_positions"] for r in s.get("rows", [])} >= {1, 4}
     ]
     require(mixed, "joint correctness coverage missing actual mixed 1/4 Target forward")

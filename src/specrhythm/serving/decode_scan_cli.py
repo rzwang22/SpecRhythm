@@ -102,7 +102,8 @@ def successful(root, config):
 def run(root, *, batch=None, mode=None, remaining=False, probe=False, single_point=False):
     config = load(root)
     require(config["options"].get("draft_audit", "full") == "full"
-            or (mode in ("serial", "serial-eager", "serial-prepost3", "serial-eager-prepost3")
+            or (mode in ("serial", "serial-eager", "serial-prepost3", "serial-eager-prepost3",
+                          "pingpong-prepost3", "pingpong-eager-prepost3")
                 and single_point),
             "runtime Draft audit requires an explicit Serial/Serial-eager single point")
     require(not single_point or (mode is not None and batch in BATCHES and not remaining),
@@ -125,7 +126,8 @@ def run(root, *, batch=None, mode=None, remaining=False, probe=False, single_poi
             )
         available = config["points"] + (
             config.get("optional_points", [])
-            if mode in ("serial-eager", "serial-prepost3", "serial-eager-prepost3") else []
+            if mode in ("serial-eager", "serial-prepost3", "serial-eager-prepost3",
+                          "pingpong-prepost3", "pingpong-eager-prepost3") else []
         )
         points = [
             p
@@ -182,7 +184,8 @@ def summary(root):
             mode=p["mode"],
             batch=p["batch"],
             repeat=p["repeat"],
-            sub_batch=p["batch"] // 2 if p["mode"] == "pingpong" else None,
+            sub_batch=p["batch"] // 2 if p["mode"] in (
+                "pingpong", "pingpong-prepost3", "pingpong-eager-prepost3") else None,
             pool_size=config["pool_size"],
             workload_sha256=config["workload_sha256"],
             git_commit=config["execution"]["git_commit"],

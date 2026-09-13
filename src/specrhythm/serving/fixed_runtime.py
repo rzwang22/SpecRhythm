@@ -45,6 +45,10 @@ for _mode in ("serial-prepost3", "serial-eager-prepost3"):
                       "specrhythm.serving.prepost_proposer.PrePostProposer")
 
 
+for _mode in ("pingpong-prepost3", "pingpong-eager-prepost3"):
+    CLASSES[_mode] = ("specrhythm.serving.ping_prepost_scheduler.PingPrePostScheduler",
+                      "specrhythm.serving.ping_prepost_proposer.PingPrePostProposer")
+
 
 def population(clock, inflight=()):
     held = [
@@ -150,7 +154,8 @@ def commit_outputs(clock, outputs, packet, client, runtime_mode):
                 )
             if output.finished and runtime_mode != "pingpong":
                 payload = {"request_id": rid}
-                if runtime_mode in ("serial-eager", "serial-prepost3", "serial-eager-prepost3"):
+                if runtime_mode in ("serial-eager", "serial-prepost3", "serial-eager-prepost3",
+                                    "pingpong-prepost3", "pingpong-eager-prepost3"):
                     from specrhythm.phase4.serial import token_prefix_hash
 
                     final = (*clock.definitions[rid].prompt_token_ids, *tokens)
@@ -187,8 +192,13 @@ def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5, 
                 "scan pre-forward stop requires synchronous allocator without deferred frees")
     active = manifest["active_limit"] if scan or point.get("prepost_correctness") else (
         point["batch"] if initial and runtime_mode != "pingpong" else 64)
-    grouped = runtime_mode == "pingpong"
-    cohort_capacity = active // 2 if scan else 32
+    ping_prepost = runtime_mode in ("pingpong-prepost3", "pingpong-eager-prepost3")
+    grouped = runtime_mode == "pingpong" or ping_prepost
+    if ping_prepost:
+        from specrhythm.serving.ping_prepost_controller import PingPrePostController
+
+        ping_controller = PingPrePostController()
+    cohort_capacity = active // 2 if scan or ping_prepost else 32
     maximum_batch = cohort_capacity if grouped else active
     trace = copy.deepcopy(manifest["trace"])
     if initial and point["half"] == "B":
@@ -218,7 +228,7 @@ def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5, 
     if scan:
         clock.observe(clock.barrier_ns)
     window_options = dict(options)
-    if grouped and not initial and not scan:
+    if grouped and not initial and not scan and not ping_prepost:
         # A requested sample unit is one 64-request rotation (two Target steps).
         # Actual partial/cohort-incomplete rotations remain separately labelled.
         window_options["samples"] *= 2
@@ -227,7 +237,12 @@ def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5, 
         from specrhythm.serving.decode_scan_readiness import ReadinessEvidence, ScanBatchWait
         from specrhythm.serving.decode_scan_window import ScanShapeStop, ScanWindow
 
-        window = ScanWindow(window_options, active, grouped)
+        if ping_prepost:
+            from specrhythm.serving.ping_prepost_window import PingPrePostWindow
+
+            window = PingPrePostWindow(window_options, active, True)
+        else:
+            window = ScanWindow(window_options, active, grouped)
         window.readiness = ReadinessEvidence()
     else:
         window = Window(window_options, initial_state=initial)
@@ -244,7 +259,7 @@ def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5, 
             **clock.control(),
             **packet,
             "max_requests_per_target_forward": maximum_batch,
-            **({"decode_scan_full_batch": maximum_batch,
+            **({"decode_scan_full_batch": None if ping_prepost else maximum_batch,
                 "decode_scan_deadline_ns": (window.start_ns + int(
                     options["window_seconds"] * 1e9)) if window.start_ns is not None else None
                 } if scan else {}),
@@ -296,7 +311,8 @@ def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5, 
                 break
             with TIMERS.span("refill"):
                 admitted = clock.admit(
-                    time.monotonic_ns(), busy_cohorts={clock.rows[r]["cohort"] for r in inflight}
+                    time.monotonic_ns(), busy_cohorts=() if ping_prepost else
+                    {clock.rows[r]["cohort"] for r in inflight}
                 )
             publish_control(inflight)
             if scan:
@@ -368,6 +384,15 @@ def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5, 
                                             for k, v in phase_row.items()
                                             if k != "timestamp_ns"):
                 phases.append(phase_row)
+            if ping_prepost:
+                packet["pp_admission"] = ping_controller.select(clock, client)
+                publish_control(inflight)
+                if not packet["pp_admission"]["claims"]:
+                    if window.time_expired(time.monotonic_ns()):
+                        break
+                    with TIMERS.span("wait_ready", reason="no legal ready PingPong proposal"):
+                        time.sleep(0.0005)
+                    continue
             before = len(scheduler.s2_steps)
             start = time.monotonic_ns()
             TRACE.event("coordinator_step_start", step_index=len(steps))
@@ -596,7 +621,8 @@ def run(root, manifest_path, directory, point, *, probe=False):
         checks = [capacity_for(
             definitions, r, active_limit=active,
             speculative_tokens=(9 if mode == "serial-eager" else 7)
-            if mode in ("serial-eager", "serial-eager-prepost3") and r["role"] == "draft" else 4,
+            if mode in ("serial-eager", "serial-eager-prepost3", "pingpong-eager-prepost3")
+            and r["role"] == "draft" else 4,
         ) for r in capacity]
         for check in checks:
             check["block_deficit"] = max(0, check["required_blocks"] - check["num_gpu_blocks"])

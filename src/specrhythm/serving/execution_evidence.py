@@ -16,7 +16,9 @@ def delta(a, b):
     return (b - a) / 1e6 if a is not None and b is not None else None
 
 
-def execution_path(runtime, backend, start, end):
+def execution_path(
+    runtime, backend, start, end, *, feedback_operation="synchronize_and_batch_propose"
+):
     targets = runtime.get("target_devices", [])
     target_rows = [r for t in targets for r in t.get("rounds", [])]
     target_trace = [r for t in targets for r in trace_rows(t.get("host", {}), start, end)["rows"]]
@@ -42,7 +44,7 @@ def execution_path(runtime, backend, start, end):
             r
             for r in tr
             if r["category"] == "transport_exchange"
-            and r.get("operation") == "synchronize_and_batch_propose"
+            and r.get("operation") == feedback_operation
         ]
         rpc = exchanges[0] if len(exchanges) == 1 else {}
         sampled = unique(tr, "target_sampled_results_received") or {}
@@ -51,7 +53,7 @@ def execution_path(runtime, backend, start, end):
             r
             for r in dt
             if r["category"] == "owner_dequeue"
-            and r.get("operation") == "synchronize_and_batch_propose"
+            and r.get("operation") == feedback_operation
         ]
         dequeue = dequeues[0] if len(dequeues) == 1 else {}
         ev = [r for r in (protocol or []) if a <= r["end_ns"] <= b]
@@ -274,6 +276,13 @@ def qualify(report):
         if prepost.get("status") != "COMPLETE":
             errors.append("prepost protocol/forward evidence incomplete: "
                           + str(prepost.get("errors")))
+    if report.get("mode") in ("pingpong-prepost3", "pingpong-eager-prepost3"):
+        ping = report.get("pingpong", {})
+        if ping.get("status") != "COMPLETE":
+            errors.append("PingPong protocol evidence incomplete: " + str(ping.get("errors")))
+        if any(c.get("latencies_ms", {}).get("service_receive_to_owner_dequeue") is None
+               for c in cycles):
+            errors.append("per-cycle PingPong owner feedback landmarks incomplete")
     missing_fsync = [
         r for r in path.get("fsync_by_file", [])
         if not r.get("log_name") or r["log_name"] == "MISSING_FILENAME"

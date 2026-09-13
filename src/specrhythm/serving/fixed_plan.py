@@ -22,7 +22,8 @@ from specrhythm.serving.s1_workload import load_execution, write_once
 from specrhythm.serving.s2_plan import sealed
 
 MODES = ("target", "serial", "serial-split", "pingpong")
-EXPLICIT_MODES = (*MODES, "serial-eager", "serial-prepost3", "serial-eager-prepost3")
+EXPLICIT_MODES = (*MODES, "serial-eager", "serial-prepost3", "serial-eager-prepost3",
+                          "pingpong-prepost3", "pingpong-eager-prepost3")
 SCENARIO = "prefill-complete, all requests ready; fixed-concurrency finite supply"
 POLICY = {
     f"cross_run_{key}_equality": "NOT_REQUIRED" for key in ("token", "length", "EOS", "round")
@@ -80,7 +81,7 @@ def settings(
 def capacity_metadata(mode, resident_count=None, *, active_limit=64, resident_requirement=100,
                       target_sequence_limit=128):
     require(mode in EXPLICIT_MODES, "unknown fixed diagnostic mode", actual=mode)
-    grouped = mode in ("serial-split", "pingpong")
+    grouped = mode in ("serial-split", "pingpong", "pingpong-prepost3", "pingpong-eager-prepost3")
     return {
         "resident_request_requirement": resident_requirement,
         "resident_request_count": resident_count,
@@ -99,9 +100,17 @@ def capacity_metadata(mode, resident_count=None, *, active_limit=64, resident_re
             "draft_speculative_capacity_tokens": 9,
             "draft_extra_speculative_tokens": 5} if mode == "serial-eager" else {}),
         **({"prepost_protocol": "specrhythm.serial-prepost3.v1",
-            "draft_speculative_capacity_tokens": 7 if mode == "serial-eager-prepost3" else 4,
+            "draft_speculative_capacity_tokens": 7 if mode in (
+                "serial-eager-prepost3", "pingpong-eager-prepost3") else 4,
             "eager_lookahead_steps": 3, "post_verify_batch_steps": 1}
-           if mode in ("serial-prepost3", "serial-eager-prepost3") else {}),
+           if mode in ("serial-prepost3", "serial-eager-prepost3",
+                          "pingpong-prepost3", "pingpong-eager-prepost3") else {}),
+        **({"pingpong_protocol": "specrhythm.pingpong-prepost3.v1",
+            "admission_policy": "legal promoted priority, stable home fill, atomic claim",
+            "warmup_rotation": "two actual admissions; request IDs may repeat",
+            "readiness_policy": "independent parent settlement, no whole-cohort idle gate",
+            "home_cohort_immutable": True} if mode in (
+                "pingpong-prepost3", "pingpong-eager-prepost3") else {}),
         "actual_KV_limits": "model-loaded per-rank actual-capacity.json; never guessed",
     }
 

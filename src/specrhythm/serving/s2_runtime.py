@@ -38,6 +38,10 @@ for _mode in ("serial-prepost3", "serial-eager-prepost3"):
                       "specrhythm.serving.prepost_proposer.PrePostProposer")
 
 
+for _mode in ("pingpong-prepost3", "pingpong-eager-prepost3"):
+    CLASSES[_mode] = ("specrhythm.serving.ping_prepost_scheduler.PingPrePostScheduler",
+                      "specrhythm.serving.ping_prepost_proposer.PingPrePostProposer")
+
 
 def configure(root, manifest_path, directory, mode):
     manifest, definitions = load_s2(str(manifest_path))
@@ -99,7 +103,8 @@ def configure(root, manifest_path, directory, mode):
         SR_PHASE4_RESIDENT_SETUP="1",
         SR_PHASE4_DECODE_READY_MODE="1",
         SR_PHASE4_RESIDENT_CONSUMER="serial"
-        if mode in ("serial", "serial-eager", "serial-prepost3", "serial-eager-prepost3")
+        if mode in ("serial", "serial-eager", "serial-prepost3", "serial-eager-prepost3",
+                          "pingpong-prepost3", "pingpong-eager-prepost3")
         else "target-only",
         SR_PHASE4_DUAL_BATCH="1" if mode == "pingpong" else "0",
         SR_PHASE4_DUAL_RESIDENT="1" if mode == "pingpong" else "0",
@@ -108,6 +113,7 @@ def configure(root, manifest_path, directory, mode):
     )
     consumer = {"target": "target-only", "serial": "serial", "serial-eager": "serial",
                 "serial-prepost3": "serial", "serial-eager-prepost3": "serial",
+                "pingpong-prepost3": "serial", "pingpong-eager-prepost3": "serial",
                 "pingpong": "dual-batch"}[mode]
     write_once(
         directory / "setup-control.json",
@@ -217,6 +223,17 @@ def client_for(mode):
 def initial_work(mode, admitted, clock, warm, client, packet):
     definitions = clock.definitions
     if mode == "target":
+        return
+    if mode in ("pingpong-prepost3", "pingpong-eager-prepost3"):
+        from specrhythm.phase4.serial import token_prefix_hash
+
+        rows = [dict(request_id=rid, home_cohort=clock.rows[rid]["cohort"], round_id=0,
+                     committed_prefix_len=len(warm[rid].logical_committed_prefix_token_ids),
+                     committed_prefix_hash=token_prefix_hash(warm[rid].logical_committed_prefix_token_ids),
+                     remaining_output_budget=definitions[rid].maximum_new_tokens-1,
+                     eos_token_ids=packet["eos_token_ids"]) for rid in admitted]
+        if rows:
+            client.call("pp_register", {"requests":rows})
         return
     if mode in ("serial", "serial-eager", "serial-prepost3", "serial-eager-prepost3"):
         rows = [
@@ -477,7 +494,8 @@ def prepare_resident(llm, definitions, directory, mode, eos, timeout=14400, logp
         for rid, b in bootstrap.items():
             if b["terminal"]:
                 payload = {"request_id": rid}
-                if mode in ("serial-eager", "serial-prepost3", "serial-eager-prepost3"):
+                if mode in ("serial-eager", "serial-prepost3", "serial-eager-prepost3",
+                          "pingpong-prepost3", "pingpong-eager-prepost3"):
                     payload.update(
                         committed_prefix=list(warm[rid].logical_committed_prefix_token_ids),
                         committed_prefix_hash=warm[rid].logical_committed_prefix_sha256,

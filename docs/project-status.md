@@ -29,6 +29,16 @@ claims.
 
 ## Pull request progress
 
+### PR #5 — 显式 PingPong prepost3 与跨 A/B rolling（2026-09-13）
+
+- 保留 `f01e8d037007540209999179357c3dd2ff2335a7` 实现及 `71f062c2a5fcef9298300904164a5abbde962a2f` 交付；只修改 Draft PR #5，不修改 PR #2/#3/#4 或历史结果。
+- 用户返回上一轮同协议 Serial / Serial-eager 约 **87.98 / 100.59 tok/s**，单次窗口约 **+14.34%**。记为已有 Serial 结果，不外推为 PingPong 收益，不覆盖此前有效负性能记录。
+- 新模式 `pingpong-prepost3` / `pingpong-eager-prepost3`：真实 resident Target adapter/scheduler + 单 Draft owner；原子 ready claim/consume、独立父轮结算、兼容普通/lookahead/common 行混合单物理 forward；跨 home A→B→A，拒绝恢复 P1 后继续 eager。
+- 沿用 no-bonus、K4、最多3步 lookahead、一次公共成功扩展/拒绝恢复、版本/KV/fence/释放检查；默认旧模式不变。新实验固定 resident360、总 active16、home8/8、Target ceiling8、同一 TP2 Target。预热两轮按4次真实 admission，允许相邻请求重复。
+- 新联合 correctness 与 Target-only 比完整输出，要求真实混合长度、跨批接续和拒绝后恢复覆盖。脚本固定两点 runtime；不连接 AutoDL，不扩大 grid。GPU correctness、原生 overlap、performance **PENDING**。
+- [设计与源码映射](pingpong-prepost3-design.md)；[服务器单包 runbook](pingpong-prepost3-runbook.md)。成功或失败只返回一个 `pingpong-prepost3-delivery-<tag>.tar.gz`，共享内容按 hash 去重；保留原始退出码、运行资格与诊断/导出错误的区别。
+- CPU全库 **2263 passed / 3既有skip**，Python3.9相关 **64 passed**；Ruff、两版本compileall、337文件Python3.9语法、18个仓库Bash及diff检查通过。首次失败与修复见[验证记录](pingpong-prepost3-validation.md)。执行与固定入口分开提交，等待用户上传GPU总包，不自动继续调优。
+
 ### PR #5 — 显式 Serial pre/post3 协议（2026-09-13）
 
 - 保留优化基准 `c02ee7dec30ceff21e95eea8f3a42b4909d37202` 和后续 `bd38ae1ba3f2c6acb1de30fa98196f68da8c3ec6`，不改旧模式或 PR #2/#3/#4；PR #5 继续 Draft。
