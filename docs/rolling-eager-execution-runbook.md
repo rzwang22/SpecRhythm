@@ -35,17 +35,17 @@ CPU结构回归用真实 FixedSerialScheduler/S2/Resident 调用链（仅stock�
 
 `run_eager_execution_b16.sh CONTROL_SHA OPTIMIZED_SHA` 为两个提交分别创建全新detached worktree，不移动原checkout、不reset任何分支。每个版本调用其自身pair脚本，四点依次执行并各自导出。失败即停止版本循环。`SR_EXEC_VERSION_ORDER=optimized-first` 是后续手动交错入口；默认control-first，不自动重复。
 
-## 可直接复制的首次四点命令
+## fsync 归因修复后的四点命令
 
-证据控制：`c8165ccb93cc07d81f684cb48f270da837d6e75b`；执行优化：`2f436a14e1284164f04aa892cca5cdfb8c048301`。此后的交付文档提交不参与GPU执行比较。命令保持原checkout，在两个提交的独立worktree各运行Serial/runtime及Serial-eager/runtime。共四点，不自动扩展。
+新证据控制（旧 c8165cc 加相同观测修复，辅助 ref `codex/rolling-eager-fsync-control`）：`298578b9eb7942d7faca807728b03a3784ac4235`；新执行优化（旧2f436a1/68c30b1加修复，主PR分支）：`c02ee7dec30ceff21e95eea8f3a42b4909d37202`。此后的交付文档提交不参与GPU执行比较。命令保持原checkout，在两个提交的独立worktree各运行Serial/runtime及Serial-eager/runtime。共四点，不自动扩展。
 
 ```bash
 if bash <<'SR_EXECUTION'
 set -Eeuo pipefail
 cd /root/autodl-tmp/src/SpecRhythm
-git fetch origin codex/rolling-eager-v0.1
-CONTROL_SHA=c8165ccb93cc07d81f684cb48f270da837d6e75b
-OPTIMIZED_SHA=2f436a14e1284164f04aa892cca5cdfb8c048301
+git fetch origin codex/rolling-eager-v0.1 codex/rolling-eager-fsync-control
+CONTROL_SHA=298578b9eb7942d7faca807728b03a3784ac4235
+OPTIMIZED_SHA=c02ee7dec30ceff21e95eea8f3a42b4909d37202
 SR_EXEC_RUNNER_FILE=$(mktemp /tmp/specrhythm-execution-runner.XXXXXX)
 trap 'rm -f "$SR_EXEC_RUNNER_FILE"' EXIT
 git show "$OPTIMIZED_SHA:scripts/run_eager_execution_b16.sh" > "$SR_EXEC_RUNNER_FILE"
@@ -60,4 +60,15 @@ fi
 
 每点的root/包路径由脚本打印；默认结果父目录 `/root/autodl-tmp/SpecRhythm-data/results/rolling-eager`，文件前缀 `serial-execution-B16-`。需要后续交错时，仅在用户明确指示后给命令设置新的 `SR_AUDIT_RUN_TAG` 和 `SR_EXEC_VERSION_ORDER=optimized-first`，仍不自动循环重复。
 
-CPU交付验收：控制版本2150 passed/3既有skips，Python3.9相关107 passed；优化版本2166 passed/3既有skips，Python3.9相关123 passed；Ruff、compileall、Python3.9语法及全部15个Bash文件通过。CPU中的设备/stock替身不证明GPU overlap或性能收益。
+上一轮 c8165cc / 2f436a1 的CPU历史验收：控制版本2150 passed/3既有skips，Python3.9相关107 passed；优化版本2166 passed/3既有skips，Python3.9相关123 passed；Ruff、compileall、Python3.9语法及全部15个Bash文件通过。CPU中的设备/stock替身不证明GPU overlap或性能收益。
+
+
+## 本轮归因修复的验收与返回文件
+
+两个待测提交的 `src/` 差异只有 `fixed_logging.py` 中旧 admission buffer 优化的原始增删行；其余源文件逐字相同，两个执行脚本也相同。控制辅助分支与主分支有共同祖先，runner 支持 sibling refs；不 reset、rebase 或 force push。命令 fetch 两个明确 refs，四点均使用各自提交下的独立 worktree 和新 root。旧 c8165cc 的已完成 Serial/runtime 结果不重写，也不作为本轮配对结果复用。
+
+顺序固定为新控制 Serial/runtime → 新控制 Serial-eager/runtime → 新优化 Serial/runtime → 新优化 Serial-eager/runtime。每点 capacity 和 GPU correctness 通过后才测性能；第一点的 diagnostic_integrity 通过后才会启动第二点，任何失败都停止整个版本循环。
+
+正常请返回四个 `ROOT-complete-evidence.tar.gz`（各自包含 small 包、compact audit report、evidence-status 和一次原生数据），以及 `execution-two-version-TAG.json`。每个版本还保留 `execution-runtime-pair-SHA-TAG.json` 与两个报告路径列表。失败请返回 `ROOT-failure-evidence.tar.gz`、`ROOT-failure-summary.json`、`ROOT-failure-export-status.txt`；若导出失败，再附两个 `ROOT-failure-*-export.log` 和仍成功生成的小包。raw 导出最终退出码在包关闭后写到外部 status，包内该记录只包含导出前已完成部分。不存在/截断/导出失败不能按成功处理。
+
+本轮本地 CPU 验证：控制2173 passed、优化2182 passed，均3个既有平台/GPU skips；两版 Python3.9 针对性回归各53 passed。Ruff、compileall、3.9语法、15个相关Bash脚本与 diff 检查通过。未连接AutoDL、未运行GPU。新版本 GPU correctness、诊断采集完整性、overlap、performance 均待服务器复验；单窗口不声称稳定加速。

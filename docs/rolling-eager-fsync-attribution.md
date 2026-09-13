@@ -52,8 +52,8 @@ pair 脚本保存第一退出码与 stage，先输出首错；不再跟随容易
 
 ## 对照版本与验证
 
-两个新版本都包含本次相同观测修复；控制辅助 ref 从 c8165ccb93cc07d81f684cb48f270da837d6e75b 派生，主分支保留 2f436a14e1284164f04aa892cca5cdfb8c048301 与 68c30b1340e1e4dda6ba017dbba29f4f214c6595。二者 `src/` 差异应仅为旧 2f436a1 的 Serial admission schema/consumer 有界 buffer 变更，不引入其他执行差异。使用 sibling refs，不重写任何历史；runner 接受有共同祖先的两个明确提交。最终完整 SHA 及四点命令见 [runbook](rolling-eager-execution-runbook.md)。
+两个新版本都包含本次相同观测修复；控制辅助 ref 从 c8165ccb93cc07d81f684cb48f270da837d6e75b 派生，主分支保留 2f436a14e1284164f04aa892cca5cdfb8c048301 与 68c30b1340e1e4dda6ba017dbba29f4f214c6595。二者 `src/` 差异应仅为旧 2f436a1 的 Serial admission schema/consumer 有界 buffer 变更，不引入其他执行差异。使用 sibling refs，不重写任何历史；runner 接受有共同祖先的两个明确提交。新控制 SHA `298578b9eb7942d7faca807728b03a3784ac4235`，新优化 SHA `c02ee7dec30ceff21e95eea8f3a42b4909d37202`。提交间逐字核对确认仅上述 `fixed_logging.py` 原始优化增删行；执行脚本完全相同。四点命令见 [runbook](rolling-eager-execution-runbook.md)。
 
 CPU 覆盖真实 writer→observer→raw report→qualify、旧缺口复现、未知 fsync 拒绝、JSONL 两种落盘方式、嵌套/异常/线程隔离、重复安装、write/fsync/replace 失败不发布新快照、原子内容和 flush/fsync/close/replace 顺序一致。shell 回归覆盖首点诊断失败停止，以及 small/raw 同时导出失败仍保留第一退出码和父 shell。
 
-优化路径 CPU 全量 pytest 2182 passed / 3既有平台或GPU skips；Python3.9 针对性回归53 passed，Ruff、compileall、Python3.9 AST303文件及19个仓库Bash脚本语法、git diff --check 通过。控制路径全量结果及新CI在交付时更新。既有 CI 失败单独记录，不由本轮归因修复解释。旧 c816 控制 push CI 的 refill/owner deadline 失败、2f436a1 push CI 的同一 refill 断言失败，与本次服务器 diagnostic_evidence 失败属于不同证据。68c30b1 的 push/PR CI 已通过，也不等于旧失败根因已确定。
+优化路径 CPU 全量 pytest 2182 passed / 3既有平台或GPU skips；Python3.9 针对性回归53 passed，Ruff、compileall、Python3.9 AST303文件及15个已跟踪Bash脚本语法、git diff --check 通过。控制路径全量 pytest 2173 passed / 3既有skips；Python3.9相关回归53 passed、AST302文件及同样15个Bash脚本通过。新CI状态在最终交付更新。既有 CI 失败单独记录，不由本轮归因修复解释。旧 c816 控制 push CI 的 refill/owner deadline 失败、2f436a1 push CI 的同一 refill 断言失败，与本次服务器 diagnostic_evidence 失败属于不同证据。68c30b1 的 push/PR CI 已通过，也不等于旧失败根因已确定。
