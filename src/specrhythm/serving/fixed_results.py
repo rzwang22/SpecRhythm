@@ -321,6 +321,13 @@ def summarize(manifest_path, directory, point, *, probe=False):
             runtime, manifest["fixed_diagnostic"]["options"].get("identity_matching", "linear")
         )
         base.update(draft_backend_checks=checks, execution_status="PASS")
+        if point.get("prepost_correctness"):
+            require(runtime["stop_reason"] == "all_naturally_completed"
+                    and all(r["state"] == "FINISHED" for r in runtime["requests"]),
+                    "joint correctness did not complete every output")
+            return {**base, "valid": True, "errors": [],
+                    "measurement_status": "NOT_APPLICABLE", "performance_conclusion": "NOT_TESTED",
+                    "joint_reference_comparison": "PENDING"}
         if probe:
             return {
                 **base,
@@ -541,6 +548,10 @@ def measurements(manifest, runtime, backend, point):
     ]
     purposes = ("proposal", "commit", "eager") if point["mode"] == "serial-eager" else (
         "proposal", "commit")
+    if point["mode"] in ("serial-prepost3", "serial-eager-prepost3"):
+        from specrhythm.continuation.prepost import PURPOSES
+
+        purposes = ("proposal", "commit", *PURPOSES)
     draft_forwards = [r for r in backend["fixed_device"]["forwards"]
                       if r["purpose"] in purposes]
     for p in backend["fixed_proposals"]:
@@ -561,7 +572,9 @@ def measurements(manifest, runtime, backend, point):
         cumulative.append(cumulative[-1] + f["gpu_event_ms"])
     for p in backend["fixed_proposals"]:
         a, b = bisect.bisect_left(starts, p["start_ns"]), bisect.bisect_right(starts, p["end_ns"])
-        p["gpu_event_ms"] = cumulative[b] - cumulative[a]
+        # New pre/post rows describe request participation, not an isolated GPU batch.
+        p["gpu_event_ms"] = (None if p.get("batch_participation_only")
+                             else cumulative[b] - cumulative[a])
     overlap = overlap_metrics(devices, backend["fixed_device"], start, end, purposes=purposes)
     if point["mode"] == "serial-split":
         require(

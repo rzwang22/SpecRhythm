@@ -23,7 +23,7 @@ from specrhythm.serving.s2_plan import MODES, RATIO, check_seal, sealed, selecti
 from specrhythm.serving.schema import load_requests
 
 BATCHES = (16, 32, 64, 128)
-EXPLICIT_MODES = (*MODES, "serial-eager")
+EXPLICIT_MODES = (*MODES, "serial-eager", "serial-prepost3", "serial-eager-prepost3")
 POOL_SIZE = 360
 SCHEMA = "specrhythm.decode-scan.v1"
 BOUNDARY = "prefilled resident pool; post-warmup full-batch decode; actual stop before drain"
@@ -201,9 +201,10 @@ def prepare(root, s1, opts, *, seed=1666, s0=None):
                 for m in MODES
             ],
             "optional_points": [
-                selected_point("serial-eager", b, r)
+                selected_point(m, b, r)
                 for r in range(opts["repeats"])
                 for b in BATCHES
+                for m in ("serial-eager", "serial-prepost3", "serial-eager-prepost3")
             ],
             "boundary": BOUNDARY,
             "capacity": "PENDING per fresh point before decode",

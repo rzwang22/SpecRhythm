@@ -71,15 +71,30 @@ class EagerSerialServer(DraftUnixServer):
         self.socket_path.unlink(missing_ok=True)
 
 
-def serve(config, directory, socket_path, *, backend_class=None):
+def serve(config, directory, socket_path, *, backend_class=None, prepost_mode=None):
     report = directory / "draft-backend-report.json"
     cls = backend_class or EagerFixedDraftBackend
     if not issubclass(cls, GPUContinuationBackendMixin):
         cls = type("OptInEagerDraftBackend", (GPUContinuationBackendMixin, cls), {})
 
+    if prepost_mode is not None:
+        from specrhythm.continuation.prepost import MODES
+        from specrhythm.continuation.prepost_backend import PrePostBackendMixin
+
+        if prepost_mode not in MODES:
+            raise ValueError("unknown explicit prepost mode")
+        cls = type("PrePostFixedDraftBackend", (PrePostBackendMixin,
+                   backend_class or FixedDraftBackend), {})
+
     def factory():
         backend = cls(config)
         write_once(directory / "draft-startup.json", backend.provenance)
+        if prepost_mode is not None:
+            from specrhythm.serving.prepost_machine import PrePostMachine
+
+            return PrePostMachine(backend, request_ids=tuple(control()["requests"]),
+                                  eager=prepost_mode == "serial-eager-prepost3",
+                                  report_path=report)
         return EagerSerialMachine(
             backend, request_ids=tuple(control()["requests"]), report_path=report
         )
@@ -112,6 +127,7 @@ def serve(config, directory, socket_path, *, backend_class=None):
                     report,
                     {
                         **owner.machine.backend.report(),
-                        "rolling_eager": owner.machine.eager_report(),
+                        ("prepost" if prepost_mode else "rolling_eager"):
+                            owner.machine.eager_report(),
                     },
                 )

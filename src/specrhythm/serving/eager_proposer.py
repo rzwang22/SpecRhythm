@@ -36,6 +36,8 @@ class EagerTimeline:
 
 
 class EagerSerialProposer(S2SerialProposer):
+    acceptance_rule = staticmethod(dual_greedy_acceptance)
+
     def _gpu_qualification_report(self):
         return {
             "gpu_correctness_result": False,
@@ -116,7 +118,7 @@ class EagerSerialProposer(S2SerialProposer):
             proposal is not None and state.verify_start_ns and state.verify_end_ns,
             "eager finalization lacks live verified proposal",
         )
-        decision = dual_greedy_acceptance(
+        decision = self.acceptance_rule(
             proposal.proposal_token_ids,
             logical_prefix[len(state.committed_token_ids) :],
             terminal=terminal,
@@ -162,6 +164,7 @@ class EagerSerialProposer(S2SerialProposer):
             "target_batch_request_ids": list(state.target_batch_request_ids),
             "vllm_dbo_microbatching": False,
             "rolling_eager": True,
+            **getattr(self, "protocol_metadata", {}),
             "source_continuation_id": proposal.runtime_provenance.get("source_continuation_id"),
         }
         self.round_log.append(row)

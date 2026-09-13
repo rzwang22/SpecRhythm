@@ -40,6 +40,10 @@ CLASSES["serial-eager"] = (
     "specrhythm.serving.fixed_scheduler.FixedSerialScheduler",
     "specrhythm.serving.eager_proposer.EagerSerialProposer",
 )
+for _mode in ("serial-prepost3", "serial-eager-prepost3"):
+    CLASSES[_mode] = ("specrhythm.serving.fixed_scheduler.FixedSerialScheduler",
+                      "specrhythm.serving.prepost_proposer.PrePostProposer")
+
 
 
 def population(clock, inflight=()):
@@ -146,7 +150,7 @@ def commit_outputs(clock, outputs, packet, client, runtime_mode):
                 )
             if output.finished and runtime_mode != "pingpong":
                 payload = {"request_id": rid}
-                if runtime_mode == "serial-eager":
+                if runtime_mode in ("serial-eager", "serial-prepost3", "serial-eager-prepost3"):
                     from specrhythm.phase4.serial import token_prefix_hash
 
                     final = (*clock.definitions[rid].prompt_token_ids, *tokens)
@@ -181,7 +185,7 @@ def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5, 
     if scan:
         require(not getattr(scheduler, "defer_block_free", False),
                 "scan pre-forward stop requires synchronous allocator without deferred frees")
-    active = manifest["active_limit"] if scan else (
+    active = manifest["active_limit"] if scan or point.get("prepost_correctness") else (
         point["batch"] if initial and runtime_mode != "pingpong" else 64)
     grouped = runtime_mode == "pingpong"
     cohort_capacity = active // 2 if scan else 32
@@ -270,7 +274,9 @@ def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5, 
             if window.time_expired(now):
                 break
             clock.observe(now)
-            status = client.call("status", {}) if grouped or mode == "serial-eager" else {}
+            status = (client.call("status", {})
+                      if grouped or mode in ("serial-eager", "serial-prepost3",
+                                             "serial-eager-prepost3") else {})
             require(
                 not status.get("failures"),
                 "diagnostic asynchronous Draft failed",
@@ -558,7 +564,8 @@ def run(root, manifest_path, directory, point, *, probe=False):
     require("fixed_diagnostic" in manifest, "missing explicit fixed diagnostic manifest")
     scan = point.get("scan", False)
     capacity_spec = (manifest["fixed_diagnostic"]["capacity"][point["mode"]]
-                     if scan else capacity_metadata(point["mode"]))
+                     if scan or point.get("prepost_correctness")
+                     else capacity_metadata(point["mode"]))
     active = capacity_spec["active_request_limit"]
     os.environ["SR_PHASE4_DUAL_MICROBATCH_SIZE"] = str(
         capacity_spec["max_requests_per_target_forward"] if scan else 32)
@@ -588,7 +595,8 @@ def run(root, manifest_path, directory, point, *, probe=False):
         capacity = [r["s2_capacity"] for r in ranks] + [draft["s2_capacity"]]
         checks = [capacity_for(
             definitions, r, active_limit=active,
-            speculative_tokens=9 if mode == "serial-eager" and r["role"] == "draft" else 4,
+            speculative_tokens=(9 if mode == "serial-eager" else 7)
+            if mode in ("serial-eager", "serial-eager-prepost3") and r["role"] == "draft" else 4,
         ) for r in capacity]
         for check in checks:
             check["block_deficit"] = max(0, check["required_blocks"] - check["num_gpu_blocks"])

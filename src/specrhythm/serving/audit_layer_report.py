@@ -183,24 +183,26 @@ def analyze(runtime, backend, light):
         "draft_audit",
         {"mode": "full", "schema_version": "legacy-full", "metadata_status": "NOT_RECORDED"},
     )
+    eager_purpose = "prepost_lookahead" if "prepost_physical" in backend else "eager"
     cycles = []
     for index, step in enumerate(steps):
         # Compute metrics, then discard repeated raw host/TP rows immediately.
-        causal = causal_cycle(step, targets, draft, all_trace)
+        causal = causal_cycle(step, targets, draft, all_trace, eager_purpose=eager_purpose)
         causal.pop("target_ranks", None)
         causal.pop("host_events", None)
         a, b = step["start_ns"], step["end_ns"]
         eager = [
             f
             for f in draft["forwards"]
-            if f.get("purpose") == "eager" and a <= f["host_start_ns"] <= b
+            if f.get("purpose") == eager_purpose and a <= f["host_start_ns"] <= b
         ]
         first = min((f["host_start_ns"] for f in eager), default=b)
         host = backend["fixed_host"]["intervals"]
         before = categories(host, a, first) if eager else {}
         if not eager:
             causal["classification"] = (
-                "NOT_APPLICABLE" if light["mode"] == "serial" else "NO_EAGER_FORWARD_IN_RECORD"
+                "NOT_APPLICABLE" if light["mode"] in ("serial", "serial-prepost3")
+                else "NO_EAGER_FORWARD_IN_RECORD"
             )
         own = categories(draft_trace, a, b)
         scan = [
@@ -241,7 +243,7 @@ def analyze(runtime, backend, light):
                 cycle[field] = None
         cycles.append(cycle)
     target_rows = [r for d in targets for r in d["forwards"]]
-    eager = [r for r in draft["forwards"] if r.get("purpose") == "eager"]
+    eager = [r for r in draft["forwards"] if r.get("purpose") == eager_purpose]
     overlap = {
         side: duration(
             intersect(bounds(target_rows, start, end, inner), bounds(eager, start, end, inner))
@@ -255,7 +257,7 @@ def analyze(runtime, backend, light):
         if touching(r, start, end)
     ]
     classified = Counter(c["causal"].get("classification", "MISSING") for c in cycles)
-    if light["mode"] == "serial":
+    if light["mode"] in ("serial", "serial-prepost3"):
         classified = Counter(NOT_APPLICABLE=len(steps))
     queue_rows = [c["causal"].get("owner_queue", {}) for c in cycles]
     queue_rows = [q for q in queue_rows if q.get("status") == "OBSERVED"]
@@ -283,7 +285,7 @@ def analyze(runtime, backend, light):
             for f in proposal_forwards
             if any(r["start_ns"] <= f["host_start_ns"] <= r["end_ns"] for r in spans)
         ]
-        if light["mode"] == "serial" and kind == "normal":
+        if light["mode"] in ("serial", "serial-prepost3") and kind == "normal":
             forwards = proposal_forwards
         normal_groups[kind] = dict(
             host_union_ms=duration(
@@ -302,7 +304,8 @@ def analyze(runtime, backend, light):
         "normal_recovery": normal_groups,
         "startup": dict(
             observed_cycles=len(queue_rows),
-            expected_cycles=len(steps) if light["mode"] == "serial-eager" else 0,
+            expected_cycles=len(steps)
+            if light["mode"] in ("serial-eager", "serial-eager-prepost3") else 0,
             submit_to_dequeue_ms=stats([q["submit_to_dequeue_ms"] for q in queue_rows]),
             dequeue_to_first_GPU={
                 side: stats([q["dequeue_to_first_gpu"][side] for q in queue_rows])
@@ -310,10 +313,14 @@ def analyze(runtime, backend, light):
             },
             admission_host_ms=stats(
                 [
-                    c["draft_causal_categories"]["physical_begin_gpu_continuations"]["union_ms"]
+                    c["draft_causal_categories"][
+                        "prepost_admission" if "prepost" in backend
+                        else "physical_begin_gpu_continuations"
+                    ]["union_ms"]
                     for c in cycles
                     if c["draft_causal_categories"]
-                    .get("physical_begin_gpu_continuations", {})
+                    .get("prepost_admission" if "prepost" in backend
+                         else "physical_begin_gpu_continuations", {})
                     .get("count")
                 ]
             ),
@@ -352,7 +359,7 @@ def analyze(runtime, backend, light):
         "overlap_denominator": "window and native Target TP union, not rank duration sum",
         "first_forward_classes": dict(classified),
         "definite_overlap_cycle_fraction": classified["RECORDED_OVERLAP"] / len(steps)
-        if light["mode"] == "serial-eager"
+        if light["mode"] in ("serial-eager", "serial-eager-prepost3")
         else None,
         "coordinator_exclusive": exclusive_main(
             runtime.get("host", {}).get("intervals", []), traces["coordinator"]["rows"], start, end
@@ -408,7 +415,8 @@ def report(root, output, expected_commit):
         if point.get("probe"):
             continue
         require(
-            point["mode"] in ("serial", "serial-eager") and point["batch"] == 16, "B16 pair only"
+            point["mode"] in ("serial", "serial-eager", "serial-prepost3", "serial-eager-prepost3")
+            and point["batch"] == 16, "B16 pair only"
         )
         found.append(p.parent)
     require(len(found) == 1, "audit point root must contain exactly one performance point")
@@ -427,6 +435,10 @@ def report(root, output, expected_commit):
     runtime = reader.read(directory / "runtime.json", required=True)
     backend = reader.read(directory / "draft-backend-report.json", required=True)
     value = analyze(runtime, backend, light)
+    if light["mode"] in ("serial-prepost3", "serial-eager-prepost3"):
+        from specrhythm.serving.prepost_evidence import analyze as prepost_analyze
+
+        value["prepost"] = prepost_analyze(runtime, backend)
     require(
         value["draft_audit"]["mode"] == config["options"].get("draft_audit", "full"),
         "backend audit mode differs from frozen metadata",

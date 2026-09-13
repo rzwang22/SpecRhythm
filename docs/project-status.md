@@ -29,6 +29,16 @@ claims.
 
 ## Pull request progress
 
+### PR #5 — 显式 Serial pre/post3 协议（2026-09-13）
+
+- 保留优化基准 `c02ee7dec30ceff21e95eea8f3a42b4909d37202` 和后续 `bd38ae1ba3f2c6acb1de30fa98196f68da8c3ec6`，不改旧模式或 PR #2/#3/#4；PR #5 继续 Draft。
+- 用户返回的优化版 Serial 86.64 / Serial-eager 83.39 tok/s 作为本轮动机，保留原负性能解释，不从旧窗口扣成本。本轮不重新运行或改写这些历史结果。
+- 新 opt-in `serial-prepost3` / `serial-eager-prepost3` 共用“不额外提交 full-accept bonus”的规则；旧 bridge 协议不变。真实 owner/backend 路径实现三步 lookahead + 一次混合公共 forward，失败请求生成 P1，成功请求生成 P4，静态资格在反复拒绝后保留。
+- Target 在同步 bookkeeping 的发布边界统一投影输出及 token/KV frontier；复用固定版本 vLLM 的真实 ragged B16 输入与采样索引。CPU 测试执行原版源码函数及 adapter→owner→backend 链，验证连续成功/拒绝/短恢复/再次成功；不把 CPU 替身当成 GPU 证明。
+- [设计与完整时序](serial-prepost3-design.md)；[服务器 runbook](prepost3-runbook.md)。新增完整输出 Target-only 联合 GPU correctness 门槛，独立记录16请求 fixture；性能仍 resident360/B16/两轮预热/30秒、runtime/buffered-live，两点新 root。严格 phased trace/归因/导出门槛保留。
+- 全量 pytest 2223 passed / 3 个既有平台或 GPU skips；Python3.9 新协议41项通过，报告最终调整后相关48项通过。Ruff、两版本compileall、src+tests共317文件Python3.9 AST、16个仓库Bash语法及diff检查通过。执行 SHA 由交付提交固定；GPU correctness、native overlap、performance **PENDING**。交付后等待服务器证据，不扩展 PingPong、动态资格、长度搜索或 CUDA Graph。
+
+
 ### PR #5 — 原子 JSON fsync 归因修复（2026-09-13）
 
 - 已保留 68c30b1 及此前提交，分支保持 Draft；不改 PR #2/#3/#4。

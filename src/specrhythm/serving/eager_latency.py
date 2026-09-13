@@ -82,12 +82,12 @@ def endpoint_delta(first, second, endpoint):
             'upper_ms': (first['start_upper_ns']-second[endpoint+'_lower_ns'])/1e6}
 
 
-def causal_cycle(step, target_devices, draft, traces):
+def causal_cycle(step, target_devices, draft, traces, *, eager_purpose="eager"):
     start, end = step['start_ns'], step['end_ns']
     targets = {str(d['identity']['global_rank']): native(d, start, end)
                for d in target_devices}
     target = [r for d in targets.values() for r in d.get('forwards', [])]
-    eager = [r for r in draft['forwards'] if r.get('purpose') == 'eager'
+    eager = [r for r in draft['forwards'] if r.get('purpose') == eager_purpose
              and start <= r['host_start_ns'] <= end]
     rows = [r for r in traces if touching(r, start, end)]
     result = {'target_ranks': targets, 'request_batch': len(step['request_ids']),

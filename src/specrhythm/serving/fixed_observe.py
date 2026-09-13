@@ -235,6 +235,10 @@ def target_startup(worker):
     from specrhythm.serving.fixed_identity import install
 
     install(runner.drafter, "identity")
+    if os.environ["SR_S2_MODE"] in ("serial-prepost3", "serial-eager-prepost3"):
+        from specrhythm.serving.prepost_target import install as install_prepost
+
+        install_prepost(runner)
     import torch
 
     def metadata():
@@ -274,6 +278,8 @@ def target_report(worker):
         "host": TIMERS.report(),
         "rounds": ROUNDS,
         "target_rows": TARGET_ROWS,
+        **({"prepost_samples": worker.model_runner.prepost_samples.report()}
+           if hasattr(worker.model_runner, "prepost_samples") else {}),
     }
 
 

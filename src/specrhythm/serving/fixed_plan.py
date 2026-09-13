@@ -22,7 +22,7 @@ from specrhythm.serving.s1_workload import load_execution, write_once
 from specrhythm.serving.s2_plan import sealed
 
 MODES = ("target", "serial", "serial-split", "pingpong")
-EXPLICIT_MODES = (*MODES, "serial-eager")
+EXPLICIT_MODES = (*MODES, "serial-eager", "serial-prepost3", "serial-eager-prepost3")
 SCENARIO = "prefill-complete, all requests ready; fixed-concurrency finite supply"
 POLICY = {
     f"cross_run_{key}_equality": "NOT_REQUIRED" for key in ("token", "length", "EOS", "round")
@@ -98,6 +98,10 @@ def capacity_metadata(mode, resident_count=None, *, active_limit=64, resident_re
         **({"eager_candidate_length": 4, "predicted_bridge_tokens": 1,
             "draft_speculative_capacity_tokens": 9,
             "draft_extra_speculative_tokens": 5} if mode == "serial-eager" else {}),
+        **({"prepost_protocol": "specrhythm.serial-prepost3.v1",
+            "draft_speculative_capacity_tokens": 7 if mode == "serial-eager-prepost3" else 4,
+            "eager_lookahead_steps": 3, "post_verify_batch_steps": 1}
+           if mode in ("serial-prepost3", "serial-eager-prepost3") else {}),
         "actual_KV_limits": "model-loaded per-rank actual-capacity.json; never guessed",
     }
 

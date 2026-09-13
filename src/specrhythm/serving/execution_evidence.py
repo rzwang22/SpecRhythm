@@ -23,7 +23,8 @@ def execution_path(runtime, backend, start, end):
     draft_trace = trace_rows(backend.get("fixed_host", {}), start, end)["rows"]
     forwards = backend.get("fixed_device", {}).get("forwards", [])
     native_target = [r for t in targets for r in t.get("device", {}).get("forwards", [])]
-    protocol = backend.get("rolling_eager", {}).get("events")
+    prepost = "prepost" in backend
+    protocol = backend.get("prepost" if prepost else "rolling_eager", {}).get("events")
     cycles = []
     outcomes = Counter()
     steps = [s for s in runtime.get("target_steps", []) if s.get("window")]
@@ -55,12 +56,14 @@ def execution_path(runtime, backend, start, end):
         dequeue = dequeues[0] if len(dequeues) == 1 else {}
         ev = [r for r in (protocol or []) if a <= r["end_ns"] <= b]
         parents = [r for r in ev if r["phase"] == "parent_result"]
-        settled = [r for r in ev if r["phase"] == "parent_settled"]
+        settled = [r for r in ev if r["phase"] == ("settled" if prepost else "parent_settled")]
         counts = Counter()
         for r in ev:
             counts.update(r["counter_delta"])
         admissions = {
-            rid for r in ev if r["phase"] == "eager_admission" for rid in r["request_ids"]
+            rid for r in ev
+            if r["phase"] == ("admission" if prepost else "eager_admission")
+            for rid in r["request_ids"]
         }
         cycle_outcomes = Counter()
         for rid in admissions:
@@ -261,11 +264,16 @@ def qualify(report):
             "target_GPU_end_upper_to_sampled_hook", "sampled_hook_to_payload_ready",
             "payload_ready_to_transport", "transport_to_service_receive")):
         errors.append("per-cycle Target feedback landmarks incomplete")
-    if report.get("mode") == "serial-eager" and any(
+    if report.get("mode") in ("serial-eager", "serial-prepost3", "serial-eager-prepost3") and any(
         c.get("latencies_ms", {}).get("service_receive_to_owner_dequeue") is None
         for c in cycles
     ):
         errors.append("per-cycle owner feedback landmarks incomplete")
+    if report.get("mode") in ("serial-prepost3", "serial-eager-prepost3"):
+        prepost = report.get("prepost", {})
+        if prepost.get("status") != "COMPLETE":
+            errors.append("prepost protocol/forward evidence incomplete: "
+                          + str(prepost.get("errors")))
     missing_fsync = [
         r for r in path.get("fsync_by_file", [])
         if not r.get("log_name") or r["log_name"] == "MISSING_FILENAME"
@@ -286,7 +294,7 @@ def qualify(report):
     )
 
 
-def compare(paths, commits):
+def compare(paths, commits, *, modes=("serial", "serial-eager")):
     import json
     from pathlib import Path
 
@@ -316,7 +324,7 @@ def compare(paths, commits):
         points[key] = row
     require(
         set(points)
-        == {sha + ":" + mode for sha in commits for mode in ("serial", "serial-eager")},
+        == {sha + ":" + mode for sha in commits for mode in modes},
         "incomplete paired versions",
     )
     rows = list(points.values())
@@ -349,6 +357,7 @@ def main(argv=None):
     group.add_argument("--qualify", type=Path)
     group.add_argument("--reports", nargs="+", type=Path)
     parser.add_argument("--commits", nargs="+")
+    parser.add_argument("--prepost", action="store_true")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
     if args.qualify:
@@ -356,7 +365,9 @@ def main(argv=None):
             raise ValueError("point report too large")
         result = qualify(json.loads(args.qualify.read_text()))
     else:
-        result = compare(args.reports, args.commits or [])
+        result = compare(args.reports, args.commits or [],
+                         modes=("serial-prepost3", "serial-eager-prepost3") if args.prepost
+                         else ("serial", "serial-eager"))
     print(json.dumps(write(result, args.output)))
     if result.get("diagnostic_integrity") == "FAILED":
         print(json.dumps({

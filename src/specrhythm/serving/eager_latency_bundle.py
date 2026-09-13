@@ -28,7 +28,8 @@ def bundle(root, output):
                 or point.stat().st_size > 65536):
             raise ValueError('invalid bounded point metadata')
         value = json.loads(point.read_text())
-        if value.get('probe') or value.get('mode') not in ('serial', 'serial-eager'):
+        if value.get('probe') or value.get('mode') not in ('serial', 'serial-eager',
+            'serial-prepost3', 'serial-eager-prepost3'):
             continue
         if value.get('batch') != 16:
             raise ValueError('latency evidence is B16 only')

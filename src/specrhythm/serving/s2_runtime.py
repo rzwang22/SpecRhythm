@@ -33,6 +33,10 @@ CLASSES["serial-eager"] = (
     "specrhythm.serving.s2_scheduler.S2SerialScheduler",
     "specrhythm.serving.eager_proposer.EagerSerialProposer",
 )
+for _mode in ("serial-prepost3", "serial-eager-prepost3"):
+    CLASSES[_mode] = ("specrhythm.serving.s2_scheduler.S2SerialScheduler",
+                      "specrhythm.serving.prepost_proposer.PrePostProposer")
+
 
 
 def configure(root, manifest_path, directory, mode):
@@ -94,7 +98,8 @@ def configure(root, manifest_path, directory, mode):
         SR_PHASE4_DUAL_DRAFT_SOCKET=os.environ["SR_S2_DRAFT_SOCKET"],
         SR_PHASE4_RESIDENT_SETUP="1",
         SR_PHASE4_DECODE_READY_MODE="1",
-        SR_PHASE4_RESIDENT_CONSUMER="serial" if mode in ("serial", "serial-eager")
+        SR_PHASE4_RESIDENT_CONSUMER="serial"
+        if mode in ("serial", "serial-eager", "serial-prepost3", "serial-eager-prepost3")
         else "target-only",
         SR_PHASE4_DUAL_BATCH="1" if mode == "pingpong" else "0",
         SR_PHASE4_DUAL_RESIDENT="1" if mode == "pingpong" else "0",
@@ -102,6 +107,7 @@ def configure(root, manifest_path, directory, mode):
         SR_PHASE4_DUAL_TEST_COORDINATION="none",
     )
     consumer = {"target": "target-only", "serial": "serial", "serial-eager": "serial",
+                "serial-prepost3": "serial", "serial-eager-prepost3": "serial",
                 "pingpong": "dual-batch"}[mode]
     write_once(
         directory / "setup-control.json",
@@ -212,7 +218,7 @@ def initial_work(mode, admitted, clock, warm, client, packet):
     definitions = clock.definitions
     if mode == "target":
         return
-    if mode in ("serial", "serial-eager"):
+    if mode in ("serial", "serial-eager", "serial-prepost3", "serial-eager-prepost3"):
         rows = [
             {
                 "request_id": rid,
@@ -223,7 +229,8 @@ def initial_work(mode, admitted, clock, warm, client, packet):
                 "eos_token_ids": packet["eos_token_ids"],
             }
             for rid in admitted
-            if definitions[rid].maximum_new_tokens > 2
+            if definitions[rid].maximum_new_tokens > (
+                1 if mode in ("serial-prepost3", "serial-eager-prepost3") else 2)
         ]
         if rows:
             reply = client.call(
@@ -470,7 +477,7 @@ def prepare_resident(llm, definitions, directory, mode, eos, timeout=14400, logp
         for rid, b in bootstrap.items():
             if b["terminal"]:
                 payload = {"request_id": rid}
-                if mode == "serial-eager":
+                if mode in ("serial-eager", "serial-prepost3", "serial-eager-prepost3"):
                     payload.update(
                         committed_prefix=list(warm[rid].logical_committed_prefix_token_ids),
                         committed_prefix_hash=warm[rid].logical_committed_prefix_sha256,

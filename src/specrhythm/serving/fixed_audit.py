@@ -27,7 +27,8 @@ class FixedAuditMixin:
         super().__init__(*args, **kwargs)
         if self.audit_mode == "runtime":
             require(
-                os.environ.get("SR_S2_MODE") in ("serial", "serial-eager"),
+                os.environ.get("SR_S2_MODE") in (
+                    "serial", "serial-eager", "serial-prepost3", "serial-eager-prepost3"),
                 "runtime Draft audit is limited to Serial/Serial-eager",
             )
             self.audit_guard = RuntimeKVGuard(self)

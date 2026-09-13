@@ -102,7 +102,8 @@ def successful(root, config):
 def run(root, *, batch=None, mode=None, remaining=False, probe=False, single_point=False):
     config = load(root)
     require(config["options"].get("draft_audit", "full") == "full"
-            or (mode in ("serial", "serial-eager") and single_point),
+            or (mode in ("serial", "serial-eager", "serial-prepost3", "serial-eager-prepost3")
+                and single_point),
             "runtime Draft audit requires an explicit Serial/Serial-eager single point")
     require(not single_point or (mode is not None and batch in BATCHES and not remaining),
             "single-point diagnostic requires explicit mode/batch and no --remaining")
@@ -123,7 +124,8 @@ def run(root, *, batch=None, mode=None, remaining=False, probe=False, single_poi
                 "first finish all three B16 modes before the remaining scan",
             )
         available = config["points"] + (
-            config.get("optional_points", []) if mode == "serial-eager" else []
+            config.get("optional_points", [])
+            if mode in ("serial-eager", "serial-prepost3", "serial-eager-prepost3") else []
         )
         points = [
             p
