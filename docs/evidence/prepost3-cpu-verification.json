@@ -25,16 +25,21 @@
     "3.9": "PASS"
   },
   "python39_ast": {
-    "files": 317,
+    "files": 318,
     "status": "PASS"
   },
   "bash": {
-    "files": 16,
+    "files": 17,
     "status": "PASS"
   },
   "diff_check": "PASS",
   "GPU_correctness": "PENDING",
   "native_GPU_overlap": "PENDING",
   "performance": "PENDING",
-  "scope": "CPU contracts only; physical CUDA numerical outputs/timings are not simulated evidence"
+  "scope": "CPU contracts only; physical CUDA numerical outputs/timings are not simulated evidence",
+  "execution_sha": "f01e8d037007540209999179357c3dd2ff2335a7",
+  "pinned_launcher_tests": {
+    "passed": 3,
+    "exit_code": 0
+  }
 }
