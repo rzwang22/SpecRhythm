@@ -11,9 +11,10 @@ import os
 import threading
 import time
 from collections import defaultdict
-from contextlib import contextmanager
 from pathlib import Path
 
+from specrhythm.io_context import IO_CONTEXT as IO_CONTEXT
+from specrhythm.io_context import file_context
 from specrhythm.phase4.resident_setup import ADMISSION_EVENT_SCHEMA
 from specrhythm.phase4.transport import canonical_json_bytes, payload_sha256
 from specrhythm.serving.common import read_json, require
@@ -41,18 +42,6 @@ POST_RUN_LOGS = frozenset(
     }
 )
 _CURRENT = None
-IO_CONTEXT = threading.local()
-
-
-@contextmanager
-def file_context(path):
-    """Filename attribution only; no fd lookup, filesystem operation or extra timer."""
-    previous = getattr(IO_CONTEXT, "name", None)
-    IO_CONTEXT.name = path.name
-    try:
-        yield
-    finally:
-        IO_CONTEXT.name = previous
 
 
 class DiagnosticLogs:
@@ -237,7 +226,7 @@ class DiagnosticLogs:
             for path, handle in handles.items():
                 self._budget()
                 handle.flush()
-                with file_context(path):
+                with file_context(path, write_kind="buffered_checkpoint_jsonl"):
                     self.fsync(handle.fileno())
                 self.fsyncs += 1
                 self._budget()
@@ -439,6 +428,8 @@ def install_checkpoint_logging(role, capture, timers):
 
     logs = current(role)
     append, read = CheckpointJsonl.append, CheckpointJsonl.read
+    if getattr(append, "_fixed_checkpoint_logging", False):
+        return logs
 
     def retain(log, row):
         with timers.span("checkpoint_log_write", log_name=log.path.name):
@@ -449,6 +440,7 @@ def install_checkpoint_logging(role, capture, timers):
         current().before_read(log)
         return read(log)
 
+    retain._fixed_checkpoint_logging = True
     CheckpointJsonl.append, CheckpointJsonl.read = retain, read_visible
     return logs
 

@@ -11,6 +11,7 @@ import time
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
+from specrhythm.io_context import file_context
 from specrhythm.phase4.serial import PROTOCOL_VERSION
 
 MAX_MESSAGE_BYTES = 64 * 1024 * 1024
@@ -71,7 +72,8 @@ class CheckpointJsonl:
         with self.path.open("ab") as handle:
             handle.write(line)
             handle.flush()
-            os.fsync(handle.fileno())
+            with file_context(self.path, write_kind="checkpoint_jsonl"):
+                os.fsync(handle.fileno())
 
     def read(self) -> list[dict[str, Any]]:
         if not self.path.exists():

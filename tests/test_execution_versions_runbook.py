@@ -91,7 +91,7 @@ printf 'PARENT_ALIVE\n'
 def test_only_detached_versions_no_reset_merge_or_grid():
     source = Path("scripts/run_eager_execution_b16.sh").read_text()
     assert "worktree add --detach" in source
-    assert "git merge-base --is-ancestor" in source
+    assert 'git merge-base "$CONTROL_SHA" "$OPTIMIZED_SHA"' in source
     assert "git reset" not in source and "git checkout" not in source
     assert "CONTROL_SHA" in source and "OPTIMIZED_SHA" in source
     assert "ORDER=(control optimized)" in source

@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
 
+from specrhythm.io_context import file_context
 from specrhythm.phase4.batch_invariant import (
     normalize_correctness_mode,
     require_matching_reference_mode,
@@ -39,7 +40,8 @@ def _exclusive_freeze(path: Path, value: Mapping[str, Any]) -> None:
             handle.write(json.dumps(value, indent=2, sort_keys=True).encode("utf-8"))
             handle.write(b"\n")
             handle.flush()
-            os.fsync(handle.fileno())
+            with file_context(path, write_kind="immutable_json"):
+                os.fsync(handle.fileno())
     except Exception:
         path.unlink(missing_ok=True)
         raise
@@ -571,7 +573,8 @@ def _exclusive_copy(source: Path, destination: Path) -> None:
             for chunk in iter(lambda: input_handle.read(1024 * 1024), b""):
                 output_handle.write(chunk)
             output_handle.flush()
-            os.fsync(output_handle.fileno())
+            with file_context(destination, write_kind="immutable_copy"):
+                os.fsync(output_handle.fileno())
     except Exception:
         destination.unlink(missing_ok=True)
         raise

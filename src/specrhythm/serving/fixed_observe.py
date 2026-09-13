@@ -56,9 +56,9 @@ def wrap(owner, name, category):
     @functools.wraps(original)
     def measured(*args, **kwargs):
         if category == "log_fsync":
-            from specrhythm.serving.fixed_logging import IO_CONTEXT
+            from specrhythm.io_context import sync_attribution
 
-            with TIMERS.span(category, log_name=getattr(IO_CONTEXT, "name", None)):
+            with TIMERS.span(category, **sync_attribution()):
                 return original(*args, **kwargs)
         if TRACE.enabled and category == "ipc":
             operation = args[1] if len(args) > 1 else kwargs["operation"]

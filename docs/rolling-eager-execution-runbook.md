@@ -19,7 +19,7 @@
 
 `ROOT-evidence-status.json` 单独写 `original_qualification`、`diagnostic_integrity`、`failure_layer`、各producer的drop/phase范围及缺失原因。原执行PASS但trace不完整时，这里FAILED并停止后续点；不回写原结果为执行失败。报告不以速度或overlap正值作为正确性门槛。
 
-失败 trap 保存第一退出码，有限status/errors后尝试导出小包及原生证据包；导出失败不会覆盖原错误。包清单按文件标记MISSING/OMITTED_LIMIT/unstable，不把“压缩包存在”当作完整证据。分析单源≤512MiB、每点≤1GiB、输出≤8MiB，原始大事件仅在raw中一次；两/四点比较只合并compact报告。不重复嵌入原始事件。服务器脚本在独立子Bash里运行，由外层if捕获失败，停止后续点而保留交互终端。
+失败 trap 保存第一退出码和 stage，先打印 failure_layer、原运行资格、缺失 producer/count/union_ms、evidence-status 和包路径，再尝试导出；不再输出容易掩盖首错的 status/errors。次生导出错误分别记录，不能覆盖原退出码。详见 [fsync 归因说明](rolling-eager-fsync-attribution.md)。包清单按文件标记MISSING/OMITTED_LIMIT/unstable，不把“压缩包存在”当作完整证据。分析单源≤512MiB、每点≤1GiB、输出≤8MiB，原始大事件仅在raw中一次；两/四点比较只合并compact报告。不重复嵌入原始事件。服务器脚本在独立子Bash里运行，由外层if捕获失败，停止后续点而保留交互终端。
 
 ## 判读
 

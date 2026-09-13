@@ -14,7 +14,9 @@ cd "$REPO"
 test -z "$(git -c core.fsmonitor=false status --porcelain)"
 git cat-file -e "$CONTROL_SHA^{commit}"
 git cat-file -e "$OPTIMIZED_SHA^{commit}"
-git merge-base --is-ancestor "$CONTROL_SHA" "$OPTIMIZED_SHA"
+# Both explicit refs may be sibling commits with the same observation fix.
+# Preserve history; do not require rewriting a control descendant onto the optimized branch.
+git merge-base "$CONTROL_SHA" "$OPTIMIZED_SHA" > /dev/null
 ORDER=(control optimized)
 case "${SR_EXEC_VERSION_ORDER:-control-first}" in
   control-first) : ;;

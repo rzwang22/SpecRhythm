@@ -29,6 +29,14 @@ claims.
 
 ## Pull request progress
 
+### PR #5 — 原子 JSON fsync 归因修复（2026-09-13）
+
+- 已保留 68c30b1 及此前提交，分支保持 Draft；不改 PR #2/#3/#4。
+- c816 控制版 Serial/runtime 45 steps、2164 tokens、30642.241426 ms、70.62146564003774 tok/s；capacity/correctness/execution/measurement/cleanup PASS，所有 causal trace 无丢行。唯一失败为 Target rank0 45次 / 123.609629ms 的 fsync 缺文件名，属于 diagnostic_evidence；后续三点未启动。
+- [归因修复及证据说明](rolling-eager-fsync-attribution.md)：真实 `_write_report` imported alias→atomic JSON→fsync 链缺少上下文；共享底层线程上下文覆盖所有 phase4 sync 写入点，区分目标/临时路径及类别。保持全部同步次数、顺序、原子发布和异常传播，不改 buffer 策略及 eager 调度。
+- 优化路径全量CPU回归2182 passed / 3既有skips；Python3.9相关回归53 passed，Ruff、compileall、Python3.9 AST303文件及19个Bash脚本语法、diff检查通过。
+- 控制、优化版本同时修复；未知事件仍严格失败。首错明细先打印，导出次生错误与原退出码分离。新版本 GPU correctness/overlap/performance **PENDING**；[四点复验 runbook](rolling-eager-execution-runbook.md)。
+
 ### PR #5 — 987ef3 四点复核及执行控制（2026-09-13）
 
 - 分支 `codex/rolling-eager-v0.1` 保持 Draft；不修改 PR #2/#3/#4。
