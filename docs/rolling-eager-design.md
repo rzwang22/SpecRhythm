@@ -540,3 +540,5 @@ document; PingPong integration and any performance repair remain future work.
 参考固定 nano-PEARL `7d020b6ce70d965c85d1bc08248c8af9c22e81cd`，实际源码和987ef3四点复核见 [对照报告](rolling-eager-pearl-comparison.md)。不移植pre/post提交协议，不改bonus/bridge、K4、反馈优先或批级WAITING_DRAFT。
 
 新证据控制提交显式采用phase独立预算，setup/warmup不再耗尽measurement保留量。通过已有control观察阶段，丢失区间跨窗口时仍失败；全历史和窗口完整性分别记录。新增feedback与per-file fsync归因，完整Target诊断inclusive span及实际Graph配置。执行控制版本保持逐条admission fsync。后续单独提交仅评估共享admission证据的既有有界buffer接入，保持准入决策在内存即时完成。验收及服务器边界见 [runbook](rolling-eager-execution-runbook.md)。
+
+执行优化只扩大固定诊断的buffer范围到schema和consumer均匹配的resident admission审计。same-file异类native记录到达时先flush旧批次，避免倒序；混合流的部分digest不冒充全流digest。默认original-live、非Serial consumer及控制/停止发布保持原行为。现有58轮resident360/B16 CPU实际scheduler链验证事件/调度数量守恒；GPU改善仍待配对复测。
