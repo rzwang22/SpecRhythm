@@ -3,7 +3,7 @@
 # receives this script's original failure code in an outer if.
 if bash <<'SR_PING_CHILD'
 set -Eeuo pipefail
-FINAL_SHA=bc908be95d3ad611dc161a467709431bfe0c082a
+FINAL_SHA=429956febe6d731291c1a3c0ee0857337a3c54c2
 REPO="${SR_PING_REPO:-/root/autodl-tmp/src/SpecRhythm}"
 git -C "$REPO" fetch origin codex/rolling-eager-v0.1
 git -C "$REPO" cat-file -e "${FINAL_SHA}^{commit}"

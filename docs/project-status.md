@@ -37,6 +37,7 @@ claims.
 - 单包投影保留最终TP快照及释放来源；缺字段明确失败，首错保留进程码与report_qualification的区别。实际生产→报告→单包→同一契约离线重放回归覆盖，历史缺失字段不补写。
 - 只修复证据和验收，不改变3+1、P1/P4、调度、反馈、模型、runtime/buffered-live或预算。固定两点入口仍capacity→联合完整输出correctness→performance，首错停止并只上传一个总包。
 - CPU全库 **2296 passed / 3既有skip**、Python3.9相关 **49 passed**；Ruff、双版本compileall、340文件3.9语法、19个Bash和diff检查通过。首次测试链遗漏及修复保留在[验收记录](pingpong-prepost3-validation.md)。[固定服务器入口](pingpong-prepost3-runbook.md)仍只返回单包；GPU correctness、native overlap和performance **PENDING**，普通推送后停止等待新总包。
+- 执行修复SHA `429956febe6d731291c1a3c0ee0857337a3c54c2`；后续交付只固定入口与文档，源码执行完全相同。
 
 ### PR #5 — 显式 PingPong prepost3 与跨 A/B rolling（2026-09-13）
 

@@ -61,6 +61,9 @@ Ruff、3.11/3.9 compileall、340个Python文件的3.9语法、19个仓库Bash及
 `git diff --check` 均通过。未提高预算或timeout。交付前基线8c24的push/PR两组CI均SUCCESS；
 本次提交的CI状态另在交付时按实际结果报告，不沿用基线成功。
 
+本次执行修复SHA：`429956febe6d731291c1a3c0ee0857337a3c54c2`。
+其子交付提交只固定该SHA的启动器和文档，没有src差异；服务器仍只运行两个PingPong prepost3点。
+
 以下保留上轮实现当时的验证记录。
 
 2026-09-13，Draft PR #5；保留基线 `71f062c2a5fcef9298300904164a5abbde962a2f` 及之前历史。

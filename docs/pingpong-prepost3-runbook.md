@@ -102,8 +102,9 @@ measured-parent 的后续结算可能落在下一 Target step 或 drain；按 la
 
 ## 固定前台命令
 
-完整执行 SHA：`bc908be95d3ad611dc161a467709431bfe0c082a`。两个性能点和联合GPU correctness均执行此SHA。
-后续交付提交仅新增固定启动器、启动器CPU检查与文档/CI Bash列表，不改变src执行路径。
+完整执行 SHA：`429956febe6d731291c1a3c0ee0857337a3c54c2`。包含设备契约及单包投影修复；
+两个容量点、联合GPU correctness及两个性能点均执行此SHA。后续交付提交仅固定启动器和文档，
+不改变src执行路径。旧bc908be运行及其原FAILED/INVALID记录不复用或覆盖。
 不要 source 严格子脚本到交互 shell。父 shell 使用 `if … then … else … fi` 接收失败，始终保留交互终端。
 
 复制到服务器前台：
@@ -111,7 +112,7 @@ measured-parent 的后续结算可能落在下一 Target step 或 drain；按 la
 ```bash
 if bash <<'SR_PING_CHILD'
 set -Eeuo pipefail
-FINAL_SHA=bc908be95d3ad611dc161a467709431bfe0c082a
+FINAL_SHA=429956febe6d731291c1a3c0ee0857337a3c54c2
 REPO="${SR_PING_REPO:-/root/autodl-tmp/src/SpecRhythm}"
 git -C "$REPO" fetch origin codex/rolling-eager-v0.1
 git -C "$REPO" cat-file -e "${FINAL_SHA}^{commit}"
