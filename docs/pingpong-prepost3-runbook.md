@@ -89,5 +89,33 @@ measured-parent 的后续结算可能落在下一 Target step 或 drain；按 la
 
 ## 固定前台命令
 
-完整执行 SHA 与独立子 Bash 命令在交付提交中固定；见 `scripts/run_ping_prepost_b16_pinned.sh`。
+完整执行 SHA：`bc908be95d3ad611dc161a467709431bfe0c082a`。两个性能点和联合GPU correctness均执行此SHA。
+后续交付提交仅新增固定启动器、启动器CPU检查与文档/CI Bash列表，不改变src执行路径。
 不要 source 严格子脚本到交互 shell。父 shell 使用 `if … then … else … fi` 接收失败，始终保留交互终端。
+
+复制到服务器前台：
+
+```bash
+if bash <<'SR_PING_CHILD'
+set -Eeuo pipefail
+FINAL_SHA=bc908be95d3ad611dc161a467709431bfe0c082a
+REPO="${SR_PING_REPO:-/root/autodl-tmp/src/SpecRhythm}"
+git -C "$REPO" fetch origin codex/rolling-eager-v0.1
+git -C "$REPO" cat-file -e "${FINAL_SHA}^{commit}"
+RUN_TREE="${REPO}-ping-prepost3-${FINAL_SHA:0:12}-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+git -C "$REPO" worktree add --detach "$RUN_TREE" "$FINAL_SHA"
+export SR_EXEC_REPO="$RUN_TREE"
+bash "$RUN_TREE/scripts/run_ping_prepost_b16.sh" "$FINAL_SHA"
+SR_PING_CHILD
+then
+  printf 'PingPong pair finished. Return only the single archive printed by the runner.\n'
+else
+  rc=$?
+  printf 'PingPong stopped (original rc=%s); later points stopped. Interactive terminal remains open.\n' "$rc"
+  # Preserve the interactive parent; original failure is printed above.
+fi
+```
+
+若checkout已包含交付提交，也可用 `if bash scripts/run_ping_prepost_b16_pinned.sh; then :; else rc=$?; printf 'stopped rc=%s\n' "$rc"; fi`。
+此入口只尝试获取代码并创建新worktree；fetch/worktree尚未成功时没有GPU运行或结果目录，
+会保留该setup失败码。runner开始后按上述规则尝试单包导出。

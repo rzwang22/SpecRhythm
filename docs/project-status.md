@@ -37,7 +37,7 @@ claims.
 - 沿用 no-bonus、K4、最多3步 lookahead、一次公共成功扩展/拒绝恢复、版本/KV/fence/释放检查；默认旧模式不变。新实验固定 resident360、总 active16、home8/8、Target ceiling8、同一 TP2 Target。预热两轮按4次真实 admission，允许相邻请求重复。
 - 新联合 correctness 与 Target-only 比完整输出，要求真实混合长度、跨批接续和拒绝后恢复覆盖。脚本固定两点 runtime；不连接 AutoDL，不扩大 grid。GPU correctness、原生 overlap、performance **PENDING**。
 - [设计与源码映射](pingpong-prepost3-design.md)；[服务器单包 runbook](pingpong-prepost3-runbook.md)。成功或失败只返回一个 `pingpong-prepost3-delivery-<tag>.tar.gz`，共享内容按 hash 去重；保留原始退出码、运行资格与诊断/导出错误的区别。
-- CPU全库 **2263 passed / 3既有skip**，Python3.9相关 **64 passed**；Ruff、两版本compileall、337文件Python3.9语法、18个仓库Bash及diff检查通过。首次失败与修复见[验证记录](pingpong-prepost3-validation.md)。执行与固定入口分开提交，等待用户上传GPU总包，不自动继续调优。
+- CPU全库 **2263 passed / 3既有skip**，Python3.9相关 **64 passed**；Ruff、两版本compileall、337文件Python3.9语法、18个仓库Bash及diff检查通过。首次失败与修复见[验证记录](pingpong-prepost3-validation.md)。执行提交 `bc908be95d3ad611dc161a467709431bfe0c082a`；后续固定入口只更新启动器/CPU检查/文档，等待用户上传GPU总包，不自动继续调优。
 
 ### PR #5 — 显式 Serial pre/post3 协议（2026-09-13）
 

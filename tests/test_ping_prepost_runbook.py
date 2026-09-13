@@ -130,3 +130,32 @@ def test_fixed_pair_config_no_grid_or_cross_run_uuid():
     assert "MODES=(pingpong-prepost3 pingpong-eager-prepost3)" in s
     assert "trap finish EXIT" in s and "trap - EXIT ERR" in s
     assert "cross_run_uuid" not in s and "sleep" not in s
+
+
+def test_pinned_launcher_keeps_first_setup_failure_and_interactive_parent(tmp_path):
+    import re
+
+    pinned = Path("scripts/run_ping_prepost_b16_pinned.sh")
+    body = pinned.read_text()
+    sha = re.search(r"^FINAL_SHA=([0-9a-f]{40})$", body, re.MULTILINE).group(1)
+    runbook = Path("docs/pingpong-prepost3-runbook.md").read_text()
+    assert sha in runbook
+    assert 'worktree add --detach "$RUN_TREE" "$FINAL_SHA"' in body
+    assert not any(word in body for word in ("reset --", "push --force", "stash"))
+    binary = tmp_path / "bin"
+    binary.mkdir()
+    executable(binary / "git", "#!/bin/bash\nexit 51\n")
+    outer = (
+        'if bash "' + str(pinned.resolve()) + '"; then echo UNEXPECTED; '
+        'else echo "ORIGINAL=$?"; fi\necho PARENT_ALIVE\n'
+    )
+    result = subprocess.run(
+        ["bash"],
+        input=outer,
+        text=True,
+        capture_output=True,
+        timeout=10,
+        env={**os.environ, "PATH": str(binary) + os.pathsep + os.environ["PATH"]},
+    )
+    assert result.returncode == 0 and "PARENT_ALIVE" in result.stdout
+    assert "ORIGINAL=51" in result.stdout and "UNEXPECTED" not in result.stdout

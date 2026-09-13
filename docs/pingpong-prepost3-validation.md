@@ -41,7 +41,7 @@ CPU测试不会产生其PASS。吞吐或完全隐藏lookahead不是correctness�
 修复后相关41项通过；随后全库先后2256和2261项通过（各3项既有skip）。
 最终执行代码全库 **2263 passed / 3 skipped**（退出码0）；Python3.9相关 **64 passed**。
 Ruff、两版本compileall、337文件Python3.9语法和git diff检查通过。
-完整执行SHA及实际远程CI在交付提交/交付回复记录。后续通过不改写首次失败，CI结果单独读取。
+完整执行SHA为 `bc908be95d3ad611dc161a467709431bfe0c082a`；实际远程CI在交付回复记录。后续通过不改写首次失败，CI结果单独读取。
 一次递归 Bash 检查误包含本地 `tmp/` 的上游 vLLM AMD CI脚本，该脚本使用Mac Bash不支持的 `|&`；
 随后按仓库 tracked及未忽略新增脚本限定检查范围，18个仓库Bash文件通过。没有修改上游脚本或放宽仓库门槛。
 本轮未执行的3个skip为 NVIDIA GPU opt-in 及两个Linux进程/zombie/subreaper特有用例。
@@ -68,3 +68,6 @@ git diff --check
 完整测试使用Python3.11环境，相关64项另外用Python3.9执行。源码契约引用固定vLLM
 `752a3a504485790a2e8491cacbb35c137339ad34`，CI的source job固定同一版本；
 没有在本轮下载模型或连接GPU运行环境。
+
+固定入口交付额外验证：脚本回归11项分别在Python3.11和3.9通过（含新增setup失败保码/父终端存活）；
+交付不改src执行代码。加入固定入口后仓库Bash文件共19个；runbook独立子Bash同样做语法检查。
