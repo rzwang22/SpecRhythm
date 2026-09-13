@@ -534,3 +534,9 @@ interfaces are reusable by the next PingPong stage. Dynamic urgency, per-request
 budget adaptation and Shaping remain outside scope. The returned Serial B16
 correctness and negative-performance evidence are described at the top of this
 document; PingPong integration and any performance repair remain future work.
+
+## 2026-09-13：分阶段证据控制与 PEARL 对照
+
+参考固定 nano-PEARL `7d020b6ce70d965c85d1bc08248c8af9c22e81cd`，实际源码和987ef3四点复核见 [对照报告](rolling-eager-pearl-comparison.md)。不移植pre/post提交协议，不改bonus/bridge、K4、反馈优先或批级WAITING_DRAFT。
+
+新证据控制提交显式采用phase独立预算，setup/warmup不再耗尽measurement保留量。通过已有control观察阶段，丢失区间跨窗口时仍失败；全历史和窗口完整性分别记录。新增feedback与per-file fsync归因，完整Target诊断inclusive span及实际Graph配置。执行控制版本保持逐条admission fsync。后续单独提交仅评估共享admission证据的既有有界buffer接入，保持准入决策在内存即时完成。验收及服务器边界见 [runbook](rolling-eager-execution-runbook.md)。

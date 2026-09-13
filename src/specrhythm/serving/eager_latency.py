@@ -17,9 +17,21 @@ from specrhythm.serving.fixed_results import stats
 
 def trace_rows(host, start, end):
     trace = host.get('causal_timeline', {})
+    measurement = trace.get('status', 'MISSING')
+    if trace.get('layout') == 'phased' and trace.get('mode') == 'light':
+        phases = trace.get('phases', {})
+        missing_bounds = any(p.get('dropped_rows') and not p.get('dropped_bounds_ns')
+                             for p in phases.values())
+        intersects = any(p.get('dropped_bounds_ns')
+                         and p['dropped_bounds_ns'][0] <= end
+                         and p['dropped_bounds_ns'][1] >= start for p in phases.values())
+        measurement = ('MISSING' if missing_bounds or not phases else
+                       'TRUNCATED' if intersects else 'COMPLETE')
     return {
         **{k: v for k, v in trace.items() if k != 'rows'},
         'status': trace.get('status', 'MISSING'),
+        'measurement_status': measurement,
+        'measurement_bounds_ns': [start, end],
         'rows': [r for r in trace.get('rows', []) if touching(r, start, end)],
     }
 

@@ -17,6 +17,7 @@ from pathlib import Path
 from specrhythm.serving.common import require
 from specrhythm.serving.eager_evidence_export import Reader, bounds, duration, intersect, touching
 from specrhythm.serving.eager_latency import causal_cycle, exclusive_main, trace_rows
+from specrhythm.serving.execution_evidence import execution_path
 from specrhythm.serving.fixed_results import stats
 
 MAX_FILE = 512 * 1024 * 1024
@@ -52,6 +53,7 @@ def exclusive_lanes(rows, start, end):
         "required_tp_barrier",
         "draft_required_fence",
         "target_diagnostic_contract_scan",
+        "target_forward_diagnostics",
         "eligibility_snapshot",
         "eligibility_provider",
         "control_json_read",
@@ -231,6 +233,12 @@ def analyze(runtime, backend, light):
             )
             / 1e6,
         }
+        cycle["draft_trace_coverage"] = trace_rows(lanes["draft"], a, b)["measurement_status"]
+        if cycle["draft_trace_coverage"] != "COMPLETE":
+            for field in ("full_scans", "full_prefix_visits", "runtime_affected_request_checks",
+                          "allocator_validation_ms"):
+                cycle["observed_"+field] = cycle[field]
+                cycle[field] = None
         cycles.append(cycle)
     target_rows = [r for d in targets for r in d["forwards"]]
     eager = [r for r in draft["forwards"] if r.get("purpose") == "eager"]
@@ -287,6 +295,7 @@ def analyze(runtime, backend, light):
             status="OBSERVED" if spans or forwards else "NOT_OBSERVED_OR_MISSING",
         )
     return {
+        "execution_path": execution_path(runtime, backend, start, end),
         "exclusive_process_threads": exclusive_lanes(
             [r for h in lanes.values() for r in h.get("intervals", [])] + all_trace, start, end
         ),

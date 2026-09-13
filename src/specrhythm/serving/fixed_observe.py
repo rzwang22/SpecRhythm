@@ -55,6 +55,11 @@ def wrap(owner, name, category):
 
     @functools.wraps(original)
     def measured(*args, **kwargs):
+        if category == "log_fsync":
+            from specrhythm.serving.fixed_logging import IO_CONTEXT
+
+            with TIMERS.span(category, log_name=getattr(IO_CONTEXT, "name", None)):
+                return original(*args, **kwargs)
         if TRACE.enabled and category == "ipc":
             operation = args[1] if len(args) > 1 else kwargs["operation"]
             payload = args[2] if len(args) > 2 else kwargs["payload"]
@@ -70,7 +75,12 @@ def wrap(owner, name, category):
                                 service_send_ns=result.get("service_send_ns"))
                 return result
         with TIMERS.span(category):
-            return original(*args, **kwargs)
+            result = original(*args, **kwargs)
+        if category == "control_json_read":
+            TRACE.follow_control(result)
+        elif category == "control_json_write":
+            TRACE.follow_control(args[1] if len(args) > 1 else kwargs.get("value"))
+        return result
 
     measured._fixed_observer = True
     setattr(owner, name, measured)
@@ -87,7 +97,7 @@ def install_host_observation(role=None):
     import json
     import subprocess
 
-    from specrhythm.phase4 import dual_service, transport
+    from specrhythm.phase4 import dual_service, transport, vllm_diagnostics
     from specrhythm.phase4.dual_uuid import DualVerificationUuidQuery
     from specrhythm.phase4.vllm_draft_worker import VllmDraftWorker
     from specrhythm.serving import s2_pool
@@ -99,6 +109,7 @@ def install_host_observation(role=None):
     wrap(os, "fsync", "log_fsync")
     wrap(transport.UnixDraftClient, "call", "ipc")
     wrap(dual_service.DualDraftClient, "call", "ipc")
+    wrap(vllm_diagnostics, "capture_target_forward", "target_forward_diagnostics")
     wrap(s2_pool.ResidentPoolAudit, "check", "resident_block_audit")
     wrap(VllmDraftWorker, "fence", "draft_required_fence")
     # Wrap aliases in their defining modules before consumers import them.
@@ -241,6 +252,9 @@ def target_startup(worker):
             },
             "role": "target",
             "dtype": str(worker.vllm_config.model_config.dtype),
+            "enforce_eager": getattr(worker.vllm_config.model_config, "enforce_eager", None),
+            "cudagraph_mode": str(getattr(getattr(worker.vllm_config, "compilation_config", None),
+                                          "cudagraph_mode", "NOT_RECORDED")),
             "attention_backends": snapshot["attention_backends"],
         },
     )

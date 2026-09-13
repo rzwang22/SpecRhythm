@@ -43,6 +43,7 @@ class FixedAuditMixin:
             "shutdown; terminal receipt full audit retained",
             observation=os.environ.get("SR_FIXED_OBSERVATION", "original-live"),
             causal_observation=os.environ.get("SR_EAGER_CAUSAL_TRACE", "off"),
+            causal_layout=os.environ.get("SR_EAGER_CAUSAL_LAYOUT", "legacy"),
         )
 
     def audit_control(self):

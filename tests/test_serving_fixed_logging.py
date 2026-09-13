@@ -124,6 +124,27 @@ def install(tmp_path, monkeypatch):
     return logs, captured
 
 
+def test_fsync_filenames_follow_written_file_even_when_other_file_triggers_flush(
+    tmp_path, monkeypatch
+):
+    from specrhythm.serving import fixed_observe
+
+    timers = Timers()
+    monkeypatch.setattr(fixed_observe, "TIMERS", timers)
+    monkeypatch.setattr(os, "fsync", lambda _: None)
+    fixed_observe.wrap(os, "fsync", "log_fsync")
+    logs = DiagnosticLogs(tmp_path, "buffered-live", max_records=3)
+    for name in ("proposal-events.jsonl", "draft-work-events.jsonl", "proposal-events.jsonl"):
+        logs.append(CheckpointJsonl(tmp_path/name), {"ok": True}, CheckpointJsonl.append)
+    native = CheckpointJsonl(tmp_path/"decode-ready-timing.jsonl")
+    logs.append(native, {"ok": True}, CheckpointJsonl.append)
+    logs.finish(deadline())
+    assert [r["log_name"] for r in timers.rows if r["category"] == "log_fsync"] == [
+        "proposal-events.jsonl", "draft-work-events.jsonl", "decode-ready-timing.jsonl"]
+    assert fixed_logging.IO_CONTEXT.name is None
+    assert logs.snapshot()["streams"]["decode-ready-timing.jsonl"]["written"] == 1
+
+
 @pytest.mark.parametrize("case", ["sample", "unsynced", "time_before_verify", "initial", "target"])
 def test_real_serial_stop_state_machine_with_buffered_diagnostics(tmp_path, monkeypatch, case):
     from test_serving_fixed_stop import test_serial_sample_stop_settles_real_pending_proposals

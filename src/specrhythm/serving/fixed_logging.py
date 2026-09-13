@@ -11,6 +11,7 @@ import os
 import threading
 import time
 from collections import defaultdict
+from contextlib import contextmanager
 from pathlib import Path
 
 from specrhythm.phase4.transport import canonical_json_bytes, payload_sha256
@@ -37,6 +38,18 @@ POST_RUN_LOGS = frozenset(
     }
 )
 _CURRENT = None
+IO_CONTEXT = threading.local()
+
+
+@contextmanager
+def file_context(path):
+    """Filename attribution only; no fd lookup, filesystem operation or extra timer."""
+    previous = getattr(IO_CONTEXT, "name", None)
+    IO_CONTEXT.name = path.name
+    try:
+        yield
+    finally:
+        IO_CONTEXT.name = previous
 
 
 class DiagnosticLogs:
@@ -146,11 +159,13 @@ class DiagnosticLogs:
                     not self.closed and self.error is None,
                     "diagnostic logger already finalized or failed",
                 )
-                key = log.path.name if self.eligible(log.path) else "unbuffered-protocol-or-other"
+                key = (log.path.name if log.path.parent == self.directory
+                       else "outside-point-directory")
                 self.produced += 1
                 self.streams[key]["produced"] += 1
                 if self.mode == "original-live" or not self.eligible(log.path):
-                    native(log, value)  # Preserve the real per-record write/flush/fsync.
+                    with file_context(log.path):
+                        native(log, value)  # Preserve per-record write/flush/fsync.
                     self.written += 1
                     self.streams[key]["written"] += 1
                     self.fsyncs += 1
@@ -195,10 +210,11 @@ class DiagnosticLogs:
                     handles[path] = path.open("ab")
                 handle = handles[path]
                 require(handle.write(line) == len(line), "short diagnostic log write")
-            for handle in handles.values():
+            for path, handle in handles.items():
                 self._budget()
                 handle.flush()
-                self.fsync(handle.fileno())
+                with file_context(path):
+                    self.fsync(handle.fileno())
                 self.fsyncs += 1
                 self._budget()
             for handle in handles.values():
@@ -400,7 +416,7 @@ def install_checkpoint_logging(role, capture, timers):
     append, read = CheckpointJsonl.append, CheckpointJsonl.read
 
     def retain(log, row):
-        with timers.span("checkpoint_log_write"):
+        with timers.span("checkpoint_log_write", log_name=log.path.name):
             current().append(log, row, append)
         capture(row)  # Contract validation is immediate, not deferred with persistence.
 

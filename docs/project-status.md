@@ -29,6 +29,14 @@ claims.
 
 ## Pull request progress
 
+### PR #5 — 987ef3 四点复核及执行控制（2026-09-13）
+
+- 分支 `codex/rolling-eager-v0.1` 保持 Draft；不修改 PR #2/#3/#4。
+- 只读确认四点 execution/measurement/cleanup PASS，eager/runtime 66.909556 vs Serial/runtime 69.200389 tok/s；42轮原生重叠仍没有吞吐收益。最后一包是Draft host trace20k截断7897行导致诊断完整性失败，原负性能结果保持有效。
+- [实际PEARL源码对照及因果报告](rolling-eager-pearl-comparison.md)：参考完整SHA固定；449 admitted父拒绝、36 bridge mismatch、185 promotion；每轮恢复仍3 forward。公共admission日志每轮约360次fsync发生在Target forward前，约4.8秒窗口成本。
+- 第一项独立提交只修证据：阶段预算、准确完整性层次、文件/反馈/Target诊断打点、compact报告及runtime配对脚本。执行优化单独提交；控制版本全量CPU pytest 2150 passed / 3既有平台或GPU skips，Ruff、compileall、Python3.9 AST301文件及14个Bash语法检查通过。GPU正确性/重叠/性能等待用户复测。
+- [服务器运行说明](rolling-eager-execution-runbook.md)。本轮不接入PingPong-eager、不改批级恢复调度、不维护A-only。
+
 | PR | Status | Scope | Evidence / boundary |
 | --- | --- | --- | --- |
 | [#1 workload-v0.1](https://github.com/rzwang22/SpecRhythm/pull/1) | merged | strict Mooncake replay, R3 proxy config, validator, manifest, fixture tests and docs | workload plumbing only; proxy payload and illustrative acceptance |
