@@ -1,5 +1,68 @@
 # PingPong prepost3：CPU 验证与待测结论
 
+## 2026-09-13 首次容量 probe 的设备证据契约修复
+
+从当前 `8c24f097db419793063bea898e828fc63a50e801` 继续，没有 reset 或覆盖提交、用户改动。
+只读核对 `pingpong-prepost3-delivery-20260913T135137Z-1665.tar.gz`：17个逻辑文件的大小与 SHA256
+均匹配清单。唯一启动的是 `bc908be95d3ad611dc161a467709431bfe0c082a` 的 `pingpong-prepost3`
+容量 probe。原始 capacity/cleanup PASS、effective_exit_code=0、probe=true、capacity_probe、
+target_steps=[]；报告 qualification 失败。原 execution=FAILED、measurement=INVALID、错误
+`'dual_uuid_query'` 和外层首错码1原样保留。不是 OOM、模型输出错误或性能下降。
+第二容量点、联合 correctness、两个性能点均未启动；GPU correctness/overlap/performance 仍 PENDING。
+提及的终端文本没有独立可访问附件；以上复核基于总包，不宣称核对过该独立文本。
+
+根因是生产/消费契约不一致。`fixed_observe.target_startup()` 仅旧 `pingpong` 调用
+`initialize_pingpong_worker()`；`s2_runtime._target_capacity_snapshot()` 同样仅旧路径写
+`dual_uuid_query`。新类链为 `PingPrePostProposer → PrePostProposer → EagerSerialProposer →
+S2SerialProposer → RemoteDraftProposer`，执行 Serial 派生设备检查及 hooks。
+旧 `decode_scan_results.summarize()` 却对所有 PING_MODES 读取 Dual 专属字段，原执行提交第403行
+列表推导首次抛 KeyError。旧断言本来允许0次验证，根因不是 probe 禁止零计数。
+
+`tests/fixtures/device_contract/bc908be-summarize.py.txt` 固定原生产函数及来源SHA。CPU回归运行真实
+startup、snapshot、DeviceTimeline、Target hooks、target_report，再调用原 summarize，捕获首个异常
+确在该列表推导；相同生产产物交给修复后的真实 summarize 通过。GPU/时钟/传输/预填充模型是CPU替身，
+没有替换报告生产函数或 qualifier。旧包 runtime 投影省略了 `target_final_memory`，不能离线恢复
+原始最终快照；本次复现不是给旧包补字段。包内 startup 仍可独立核对 TP0/GPU1、TP1/GPU2、Draft/GPU0。
+
+### 修复后各模式契约
+
+| 模式 | 实际路径 | probe | correctness / performance |
+|---|---|---|---|
+| `pingpong` | 原Dual initializer / DualBatchRemoteProposer | live、initial=1、cache=0、access=subprocess=0 | 原live计数等式：每rank访问/子进程查询数=实际验证step数；未放宽 |
+| `serial-prepost3` | PrePostProposer / Serial hooks | 真实启动/结束TP2绑定、Draft隔离与容量、零decode step及hook；Dual计数不适用 | 同一绑定链 + rank0每请求start/end计数 + 两rank原生forward/request/proposal关联 |
+| `serial-eager-prepost3` | 同上，已有eager owner | 同上 | 同上 |
+| `pingpong-prepost3` | PingPrePostProposer / Serial hooks | 同上 | 同上，保留PingPong容量/轨迹门槛 |
+| `pingpong-eager-prepost3` | 同上，已有eager owner | 同上 | 同上，保留PingPong容量/轨迹门槛 |
+
+新 `device_evidence_contract` v1 在已有快照边界读取实际 proposer MRO 路径、tp_rank、hooks_seen
+和 Dual 不适用原因；没有新增 UUID 查询、RPC、fence、全池审计或伪造PASS。rank0 hooks 按请求累计，
+rank1 没有该 per-request hook，依靠其原生forward证明；不可混为同种计数。setup/prefill GPU forward
+在 probe 合法，要求为零的是 decode verification。正式关联检查覆盖全部decode阶段，性能窗口边界不变。
+
+离线 `device_contract.qualify_prepost()` 将 actual-capacity startup、runtime final和native identity
+绑定到同一运行的物理设备；检查参数驻留、正容量、三UUID隔离。复用 `device_batches()` 与
+`rounds_by_prefix()` 关联原生TP forward、内部请求、稳定请求/prefix、候选数与实际proposal tokens。
+原执行、真实准备、释放及运行时KV/ownership检查保持。缺字段、rank缺失/重复、错设备、声明路径不一致、
+缺forward或proposal错配都失败；错误包含mode、stage、artifact、rank、field、expected，missing不当零。
+
+总包新增保留 `runtime.target_final_memory`、`target_requests_final`、`diagnostic_drain`；
+actual-capacity、native来源继续保留。清单记录源字节/hash及投影字段，缺最终快照时显式
+`required_fields_missing`、export INCOMPLETE，仍导出可用原文，不重建证据。
+生产→报告→导出→从总包读取→同一契约校验的回归要求结果一致。
+first-failure 保留 report_qualification 层、原始进程码与cleanup状态；终端首行将capacity称为stage，
+随后打印结构化真实失败层。导出错误与首错分开，成功/失败只要求一个总包。
+
+没有改动 token/forward协议、A/B admission、反馈优先、调度或运行预算。首错测试最初漏调生产
+`retained_report()`，cleanup_status因此为None；补齐调用链后要求同时保留cleanup PASS、进程码0、
+qualification FAILED、外层码1。没有放宽断言或超时。第一次全库保留2293通过、1失败、3既有skip；
+失败就是上述测试链遗漏。修正后相关93项通过，再补充联合correctness入口负例与无新增查询检查。
+最终全库 **2296 passed / 3 skipped**，退出码0；Python3.9相关 **49 passed**。
+Ruff、3.11/3.9 compileall、340个Python文件的3.9语法、19个仓库Bash及runbook子Bash语法、
+`git diff --check` 均通过。未提高预算或timeout。交付前基线8c24的push/PR两组CI均SUCCESS；
+本次提交的CI状态另在交付时按实际结果报告，不沿用基线成功。
+
+以下保留上轮实现当时的验证记录。
+
 2026-09-13，Draft PR #5；保留基线 `71f062c2a5fcef9298300904164a5abbde962a2f` 及之前历史。
 没有连接 AutoDL，没有执行 GPU。上轮用户返回 Serial-prepost3 / Serial-eager-prepost3 约
 87.98/100.59 tok/s、单窗口约+14.34%，仅作为已返回的 Serial 记录。新 PingPong 正确性、重叠、性能 **PENDING**。

@@ -22,7 +22,7 @@ mkdir -p "$SR_PING_DELIVERY/points"
 finish() {
   first_rc=$?; trap - EXIT ERR; set +e
   if [[ "$first_rc" != 0 ]]; then
-    printf 'FIRST FAILURE: rc=%s failure_layer=%s point=%s root=%s\n' "$first_rc" "$STAGE" "$POINT" "${SR_FIXED_ROOT:-not_started}"
+    printf 'FIRST FAILURE: rc=%s stage=%s point=%s root=%s; qualification layer follows\n' "$first_rc" "$STAGE" "$POINT" "${SR_FIXED_ROOT:-not_started}"
     "$SR_FIXED_PYTHON" - "$first_rc" "$STAGE" "$POINT" <<'PY_FAILURE'
 import json, os, pathlib, sys
 from specrhythm.serving.execution_failure import summarize

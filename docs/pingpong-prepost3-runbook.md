@@ -45,6 +45,13 @@ GPU0 Draft、GPU1/2 一个 TP2 Target。固定 K4，lookahead≤3、公共步骤
 
 ## 唯一上传文件与完整性
 
+本次入口修复首次容量 probe 的 `dual_uuid_query` schema/consumer 不一致；旧运行仍保持
+FAILED/INVALID、capacity/cleanup PASS、进程码0及外层码1，未进入 correctness/performance。
+各模式证据契约及真实生产链复现见 [验证记录](pingpong-prepost3-validation.md)。
+新prepost3模式用已有startup/final worker快照和原生forward/request/proposal关联，Dual专属计数
+明确不适用；旧pingpong仍执行原live-query规则。容量阶段要求TP2/Draft隔离、真实准备和释放、
+零decode verification；正式点要求非零真实forward关联。必要字段缺失不会默认通过。
+
 只上传终端唯一 `UPLOAD ONLY:` 所指向的：
 
 ```text
@@ -55,6 +62,10 @@ GPU0 Draft、GPU1/2 一个 TP2 Target。固定 K4，lookahead≤3、公共步骤
 `logical_paths` 将文件映射到 `objects/<sha256>.json`；共享文件只存一份。
 包含 comparison、共享完整输出 correctness、两点结果/metadata/status、生命周期与清理、原生设备事件、
 有界 host/owner/协议/Target sampling 记录、first-failure 与包内 export status。
+runtime投影保留 `target_final_memory`、`target_requests_final`、`diagnostic_drain`；同包
+actual-capacity的startup rows及Draft/Target native identity是设备契约的原始来源。
+清单声明保留/省略字段、源hash；缺最终快照时明确required_fields_missing，导出INCOMPLETE，禁止猜填。
+可将这三个逻辑文件读取后传入 `device_contract.qualify_prepost()` 复算相同设备契约。
 服务器另留 `export-status.json`（含最终包 SHA256）和 `export.log`，不要求另行上传。
 
 单原文件≤512MiB，最多192个允许文件，唯一投影内容总量≤1GiB。大型 runtime/backend 只移除明确列出的
@@ -65,6 +76,8 @@ setup8192/warmup4096/measurement65536/drain8192 的原始预算、保留行和 d
 
 `export_status=COMPLETE` 仅表示允许文件按声明导出；未启动的后续点仍标 MISSING，不能据此判运行成功。
 运行资格、diagnostic integrity、coverage、performance conclusion 分开。第一次执行/诊断错误不被后续导出错误替换。
+`first-failure.json` 分别记录stage、failure_layer、原始effective_exit_code、qualification/cleanup及
+mode/rank/field/expected原始错误；进程码0与report_qualification失败可以同时成立。
 若磁盘或环境故障使总包本身无法生成，终端明确打印 `EXPORT FAILED` 和保留的源目录，不冒充成功上传。
 
 ## 读取结果

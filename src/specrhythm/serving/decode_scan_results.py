@@ -396,25 +396,15 @@ def summarize(manifest_path, directory, point, *, probe=False):
         base["prepared_pool"] = prepared_checks(m, r, directory, point)
         base["diagnostic_logging"] = logging_checks(directory, opts["observation"])
         base["identity_matching"] = identity_checks(r, opts["identity_matching"])
-        if point["mode"] == "pingpong" or point["mode"] in PING_MODES:
-            verifications = sum(
-                any(row["candidate_positions"] for row in s["rows"]) for s in r["target_steps"]
-            )
-            ranks = [x["dual_uuid_query"] for x in r["target_final_memory"]]
-            require(
-                len(ranks) == 2
-                and all(
-                    x["uuid_query_mode"] == "live"
-                    and x["uuid_initial_validation_count"] == 1
-                    and x["uuid_cache_hit_count"] == 0
-                    and x["uuid_verification_subprocess_query_count"]
-                    == x["uuid_verification_access_count"]
-                    and x["uuid_verification_access_count"] == verifications
-                    for x in ranks
-                ),
-                "scan live UUID evidence invalid",
-            )
-            base["uuid_query_by_rank"] = ranks
+        from specrhythm.serving.device_contract import PREPOST_MODES, legacy_dual, qualify_prepost
+
+        stage = "capacity_probe" if probe else "performance"
+        if point["mode"] == "pingpong":
+            base["uuid_query_by_rank"] = legacy_dual(r, point["mode"], stage)
+        elif point["mode"] in PREPOST_MODES:
+            base["device_identity_qualification"] = qualify_prepost(
+                r, b, read_json(directory / "actual-capacity.json"), point["mode"],
+                probe=probe, stage=stage)
         if probe:
             require(
                 r["diagnostic_drain"]["status"] == "COMPLETE"
@@ -431,6 +421,9 @@ def summarize(manifest_path, directory, point, *, probe=False):
         return {
             **base,
             "valid": False,
+            "qualification_status": "FAILED",
+            "failure_layer": getattr(error, "details", {}).get(
+                "failure_layer", "report_qualification"),
             "errors": [str(error)],
             "execution_status": "FAILED",
             "measurement_status": "INVALID",

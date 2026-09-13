@@ -165,6 +165,11 @@ def _target_capacity_snapshot(worker, value):
         # Capacity probes legitimately have zero verification accesses. These are
         # raw lifetime counters, not the historical nonempty UUID A/B experiment gate.
         value["dual_uuid_query"] = worker_dual_uuid_evidence(worker)
+    from specrhythm.serving.device_contract import PREPOST_MODES, snapshot_contract
+
+    if os.environ["SR_S2_MODE"] in PREPOST_MODES:
+        value["device_evidence_contract"] = snapshot_contract(
+            worker.model_runner.drafter, os.environ["SR_S2_MODE"])
     return value
 
 

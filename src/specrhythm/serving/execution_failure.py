@@ -43,11 +43,13 @@ def summarize(root, exit_code, stage):
         runs.append(dict(path=str(path), **{k: row.get(k) for k in (
             "capacity_status", "execution_status", "measurement_status", "cleanup_status",
             "formal_comparison_eligible", "effective_exit_code", "errors",
+            "qualification_status", "failure_layer", "primary_error",
         )}))
     return dict(
         schema_version="specrhythm.execution-first-failure.v1",
         first_exit_code=exit_code,
-        failure_layer=status.get("failure_layer") or stage,
+        failure_layer=status.get("failure_layer") or next(
+            (r["failure_layer"] for r in reversed(runs) if r.get("failure_layer")), stage),
         failed_stage=stage,
         original_qualification=status.get("original_qualification"),
         original_run_details=status.get("original_run_details"),

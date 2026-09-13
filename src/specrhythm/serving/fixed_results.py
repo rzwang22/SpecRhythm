@@ -321,6 +321,14 @@ def summarize(manifest_path, directory, point, *, probe=False):
             runtime, manifest["fixed_diagnostic"]["options"].get("identity_matching", "linear")
         )
         base.update(draft_backend_checks=checks, execution_status="PASS")
+        from specrhythm.serving.device_contract import PREPOST_MODES, qualify_prepost
+
+        if point["mode"] in PREPOST_MODES:
+            base["device_identity_qualification"] = qualify_prepost(
+                runtime, backend, read_json(directory / "actual-capacity.json"), point["mode"],
+                probe=probe, stage="correctness" if point.get("prepost_correctness")
+                else "capacity_probe" if probe else "performance")
+
         if point.get("prepost_correctness"):
             require(runtime["stop_reason"] == "all_naturally_completed"
                     and all(r["state"] == "FINISHED" for r in runtime["requests"]),
@@ -370,6 +378,9 @@ def summarize(manifest_path, directory, point, *, probe=False):
         return {
             **base,
             "valid": False,
+            "qualification_status": "FAILED",
+            "failure_layer": getattr(error, "details", {}).get(
+                "failure_layer", "report_qualification"),
             "errors": [str(error)],
             "execution_status": "FAILED",
             "measurement_status": "INVALID",

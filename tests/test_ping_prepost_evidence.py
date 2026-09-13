@@ -158,7 +158,10 @@ def test_single_package_dedup_projection_and_failures_preserve_original(tmp_path
     archive = tmp_path / "delivery.tar.gz"
     result = export(directory, archive, first_code=23, stage="diagnostic_evidence")
     assert result["first_exit_code"] == 23 and result["missing"] > 0
-    assert result["export_status"] == "COMPLETE"
+    # This owner-only fixture has no worker snapshot. Export it, but never claim
+    # the identity contract can be replayed; the producer-chain test covers COMPLETE.
+    assert result["export_status"] == "INCOMPLETE"
+    assert all("missing target_final_memory" in e for e in result["export_errors"])
     with tarfile.open(archive) as pack:
         inv = json.load(pack.extractfile("inventory.json"))
         paths = inv["logical_paths"]

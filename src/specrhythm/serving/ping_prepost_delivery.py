@@ -66,6 +66,9 @@ RUNTIME_KEYS = {
     "stop_reason",
     "host",
     "target_devices",
+    "target_final_memory",
+    "target_requests_final",
+    "diagnostic_drain",
     "target_steps",
     "requests",
     "prompt_lengths",
@@ -236,6 +239,12 @@ def export(directory, output, *, first_code=0, stage="complete"):
                 if source.name in ("runtime.json", "draft-backend-report.json"):
                     value = json.loads(raw)
                     keys = RUNTIME_KEYS if source.name == "runtime.json" else BACKEND_KEYS
+                    if (source.name == "runtime.json"
+                            and value.get("point", {}).get("mode") in MODES
+                            and "target_final_memory" not in value):
+                        row["required_fields_missing"] = ["target_final_memory"]
+                        failures.append(name + ": missing target_final_memory (not reconstructed)")
+
                     projection = dict(
                         omitted_top_level_fields=sorted(set(value) - keys),
                         retained_top_level_fields=sorted(set(value) & keys),
