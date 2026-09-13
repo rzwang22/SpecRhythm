@@ -22,15 +22,19 @@ mkdir -p "$SR_PING_DELIVERY/points"
 finish() {
   first_rc=$?; trap - EXIT ERR; set +e
   if [[ "$first_rc" != 0 ]]; then
-    printf 'FIRST FAILURE: rc=%s stage=%s point=%s root=%s; qualification layer follows\n' "$first_rc" "$STAGE" "$POINT" "${SR_FIXED_ROOT:-not_started}"
+    printf 'FIRST FAILURE: rc=%s stage=%s; actual mode/run and original qualification follow\n' "$first_rc" "$STAGE"
     "$SR_FIXED_PYTHON" - "$first_rc" "$STAGE" "$POINT" <<'PY_FAILURE'
 import json, os, pathlib, sys
-from specrhythm.serving.execution_failure import summarize
+from specrhythm.serving.execution_failure import summarize, summarize_joint
 from specrhythm.serving.audit_layer_report import write
 d=pathlib.Path(os.environ['SR_PING_DELIVERY'])
 root=pathlib.Path(os.environ.get('SR_FIXED_ROOT', str(d/'not_started')))
-v=summarize(root, int(sys.argv[1]), sys.argv[2])
-v.update(point=sys.argv[3], evidence_packages=[str(d)+'.tar.gz'])
+if sys.argv[2]=='joint_gpu_correctness':
+    v=summarize_joint(d/'joint', int(sys.argv[1]))
+else:
+    v=summarize(root, int(sys.argv[1]), sys.argv[2])
+    v['point']=sys.argv[3]
+v.update(evidence_packages=[str(d)+'.tar.gz'])
 print(json.dumps(v), flush=True)
 write(v, d/'first-failure.json')
 PY_FAILURE
@@ -83,6 +87,8 @@ PY_CONFIG
   bash scripts/run_decode_scan.sh capacity --single-point --batch 16 --mode "$POINT"
 done
 STAGE=joint_gpu_correctness
+POINT=joint
+export SR_FIXED_ROOT="$SR_PING_DELIVERY/joint"
 "$SR_FIXED_PYTHON" -m specrhythm.serving.ping_prepost_gpu_check \
   --source "$SR_PING_DELIVERY/points/${MODES[0]}" --output "$SR_PING_DELIVERY/joint"
 for POINT in "${MODES[@]}"; do

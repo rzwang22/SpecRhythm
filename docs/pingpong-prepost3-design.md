@@ -1,5 +1,16 @@
 # PingPong prepost3：单 Draft owner、跨验证机会接续
 
+运行类型与资格契约（2026-09-13修复）：probe是实际调用的bool，run/drive在模型工作前核对point；
+报告公共部分始终写顶层probe。容量为true，correctness和performance为false。
+correctness走非scan：point.prepost_correctness=true，decode_scan不适用；仍要求完整输出/清理及
+原生TP forward/request/proposal绑定。scan容量/性能必须带decode_scan，保留原窗口与检查规则。
+顶层/point/调用参数/阶段冲突或错误类型显式失败，不默认补false。新规则不改变旧模式的执行协议。
+
+联合验证的首错归属当前子运行，不能来自外层容量循环。模式root、实际run目录、原始资格错误及
+进程退出码从run_point的阶段文件和结果读取；外层joint阶段、校验命令码、导出码分开。
+真实报告、stage来源、joint结果/失败、比较及first-failure仍在同一个有界总包中。
+背景与生产链回归见 [验证记录](pingpong-prepost3-validation.md)。
+
 2026-09-13。Draft PR #5 的显式新协议，GPU correctness、overlap、performance **PENDING**。
 实现基础为 `f01e8d037007540209999179357c3dd2ff2335a7`，保留
 `71f062c2a5fcef9298300904164a5abbde962a2f` 的后续交付。

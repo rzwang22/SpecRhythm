@@ -1,5 +1,64 @@
 # PingPong prepost3：CPU 验证与待测结论
 
+## 2026-09-13 非 scan correctness 报告与联合首错修复
+
+从 `e30a338629feb2111377fbad66cd595ec929c1cf` 继续，执行定位基线为
+`429956febe6d731291c1a3c0ee0857337a3c54c2`。只读按logical_paths复核
+`pingpong-prepost3-delivery-20260913T150541Z-1615.tar.gz`：61个逻辑文件的大小/SHA256全部匹配。
+两容量点及设备绑定PASS；Target-only完整输出完成；普通PingPong输出/cleanup完成，进程码0，
+报告qualification失败。旧FAILED/INVALID不变。按request ID比较16×32=512 token完全一致，
+但eager correctness及两性能点未启动，整体联合correctness未通过，export COMPLETE仅表示导出成功。
+
+实际失败目录：`joint/pingpong-prepost3/runs/joint-correctness-pingpong-prepost3-B16-A-20260913T231055-7702917909212099`。
+原错误为mode=pingpong-prepost3、stage=correctness、runtime.json、TP0/1、缺probe，层为report_qualification。
+外层误用容量循环末尾eager的POINT/ROOT；joint/failure.json也只保留泛化joint_execution层和命令码1。
+
+根因：`fixed_runtime.drive()` 把顶层probe和decode_scan放在同一个条件字典中；非scan correctness
+只生成point.probe=false，没有顶层probe。上轮CPU fixture手工提供了probe，并从scan形状的记录
+调用qualifier，没有执行真实非scan报告构造。现在probe在公共报告部分无条件生成；run/drive先检查
+真实bool实参与point及阶段冲突，qualify_run_kind严格核对顶层、point、runtime_mode和stage。
+fixed_results对新模式及联合Target-only参考使用该规则，不将缺失、0或字符串转换为false。
+
+只读定位中另构造过内存派生视图：**仅加入原point.probe=false作为顶层probe**。其余原数据不变，
+设备契约可完整核对213次请求验证、35个TP双rank步骤，未发现下一个缺失字段。
+该派生检查不代表原运行通过，没有回写旧报告，更没有把512 token一致判成整个联合PASS。
+
+| 阶段 | 运行类型字段 | 其余必需/不适用证据 |
+|---|---|---|
+| 新模式capacity | 顶层/point/实参probe=true，scan=true | decode_scan、真实准备/释放、startup/final设备及容量；decode verification与hooks为零 |
+| Target-only及新模式correctness | 顶层/point/实参probe=false，prepost_correctness=true，scan缺省false或false | decode_scan不适用；自然完整输出/释放；新模式仍要求TP native/request/proposal/hook关联；最后另做三模式输出及轨迹覆盖 |
+| 新模式performance | 顶层/point/实参probe=false，scan=true | decode_scan必须存在；原预热/30秒窗口和设备关联、执行/测量/清理/诊断门槛 |
+
+共同设备来源仍为actual-capacity startup、runtime最终快照/设备/steps、Draft native identity。
+旧Serial/Serial-eager/PingPong非联合资格规则保留；不增加GPU查询、fence、热路径全池审计，
+不改3+1、P1/P4、A/B admission、反馈、KV、模型、采样或预算。
+
+联合runner现在从当前模式的run_point阶段文件、异常directory、light-summary/result读取真实首错，
+记录outer_stage、mode、run_directory、failure_layer、primary_error、effective_exit_code及command_exit_code。
+脚本进入joint前清除容量POINT/ROOT，失败heredoc读取joint/failure.json；未启动模式不会被标成失败运行。
+读取/写入摘要的异常只作为secondary错误打印，保留首次异常/码。总包增加stage.json来源，保留
+joint结果/失败、比较、原始报告/native及first-failure。inventory记录export_validation_exit_code；
+终端另打印实际export进程码。包关闭后的sidecar/磁盘失败不能回写已关闭的包，不把校验0当最终进程成功。
+
+新CPU回归实际执行drive、ServingClock、PingPrePostController、commit、settle及startup/snapshot/target_report，
+只替换模型/设备/IPC响应；生产write_once序列化后调用qualify_prepost和correctness summarize。
+两模式×三路径均导出→总包读取→同一契约复算；原始429956完整drive在同一CPU链中复现缺probe。
+联合测试保留真实run_point和阶段发布，三失败位置×进程/报告失败使用真实报告和脚本原heredoc，
+故意提供过期容量变量仍定位正确；后续导出拒绝41不替换首错1/23。
+
+开发失败记录：新CPU fixture起初缺drive需要的capacity metadata、复用了arrival-output-events文件，
+现用生产capacity构造及新输出目录；heredoc用例预写first-failure触发禁止覆盖，现由真实heredoc首次写入。
+Target原缺字段文本含引号，测试保留其原始内容。未放宽断言、不可覆盖约束或timeout。
+最终全库 **2324 passed / 3既有skip**、退出码0；Python3.9相关 **71 passed**，Python3.12
+报告/真实drive/联合首错相关 **58 passed**。Ruff、3.11/3.9 compileall、342文件Python3.9语法、
+19个仓库Bash及runbook语法、diff检查通过。CPU替身不产生GPU正确性/重叠/性能PASS。
+
+另外复核了上一e30a338提交的实际CI：PR的3.12失败是旧复现测试要求`<listcomp>`帧名；3.12实际
+将同一异常报告在外层帧。测试现严格检查原始出错源码行和KeyError内容，3.9/3.11/3.12均验证。
+旧push的3.12还出现refill请求集合与drain deadline失败，本轮未改这些策略/预算；原因未据此确定，
+本地重跑成功也不等于已解释旧失败。旧PR3.9为CANCELLED，push3.9及两个contract任务成功。
+本轮提交CI另按推送后的实际状态报告，不沿用旧任务成功。
+
 ## 2026-09-13 首次容量 probe 的设备证据契约修复
 
 从当前 `8c24f097db419793063bea898e828fc63a50e801` 继续，没有 reset 或覆盖提交、用户改动。

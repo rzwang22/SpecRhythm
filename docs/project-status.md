@@ -29,6 +29,14 @@ claims.
 
 ## Pull request progress
 
+### PR #5 — 非 scan correctness 报告与联合首错修复（2026-09-13）
+
+- 保留e30a338当前分支和429956执行基线。150541Z总包61逻辑文件大小/hash通过；两容量点和设备绑定PASS，普通PingPong完成/cleanup且进程码0。与Target-only逐请求512 token相同，但缺顶层probe导致report_qualification失败；原FAILED/INVALID与联合未通过状态不改写，后续点未启动。
+- drive公共报告统一真实bool probe；run/drive、point和离线阶段契约严格一致，correctness不要求decode_scan、不跳过设备/原生关联。原CPU fixture手工补probe遗漏真实非scan构造，现用真实drive/clock/drain/report/序列化→qualifier→单包→同一契约回归覆盖。
+- 联合首错从实际模式run目录和原始报告读取，外层阶段、进程码、校验码、导出码分开；脚本不继承容量POINT/ROOT。总包保留stage来源、joint失败、原始报告及native。首错后导出失败也不替换原码。
+- 无调度、3+1、P1/P4、KV/fence、模型、审计/日志或预算变更；不连接AutoDL。新GPU correctness、overlap、performance **PENDING**。完成CPU验收、普通推送及[固定入口](pingpong-prepost3-runbook.md)后停止等待单个新总包。
+- 全库2324 passed / 3既有skip，Python3.9相关71 passed、Python3.12相关58 passed；Ruff、双版本compileall、342文件3.9语法、19个Bash和diff通过。旧CI复现测试的帧名假设改为严格源码行定位；旧refill/drain失败单独记录，未改调度或timeout，见[验证记录](pingpong-prepost3-validation.md)。
+
 ### PR #5 — PingPong prepost3 设备证据契约修复（2026-09-13）
 
 - 从 `8c24f097db419793063bea898e828fc63a50e801` 继续，保留此前执行和交付提交、旧结果，保持Draft；不改PR #2/#3/#4。

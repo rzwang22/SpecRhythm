@@ -9,6 +9,7 @@ import traceback
 from pathlib import Path
 
 from specrhythm.serving.common import read_json, require
+from specrhythm.serving.execution_failure import joint_run_failure
 from specrhythm.serving.fixed_results import device_batches
 from specrhythm.serving.ping_prepost import MODES, PROTOCOL
 from specrhythm.serving.prepost_gpu_check import compare_outputs, prepare
@@ -81,9 +82,12 @@ def run(source, directory):
     directory.mkdir(parents=True)
     runtimes, backends, receipts = {}, {}, []
     output_status, layer = "PENDING", "joint_execution"
+    mode, root, point = None, directory, None
     try:
         for mode in ("target", *MODES):
             root = directory / mode
+            point = None
+            layer = "joint_prepare"
             path = prepare(source, root, mode, modes=MODES)
             selected = dict(
                 mode=mode,
@@ -95,6 +99,7 @@ def run(source, directory):
                 discard_warmup=False,
                 prepost_correctness=True,
             )
+            layer = "joint_execution"
             point, result = run_point(root, selected, manifest_path=path)
             require(
                 result["valid"]
@@ -104,6 +109,7 @@ def run(source, directory):
             )
             runtime = runtimes[mode] = read_json(point / "runtime.json")
             backends[mode] = read_json(point / "draft-backend-report.json")
+            layer = "joint_native_evidence"
             device_batches(runtime["target_devices"], runtime["target_steps"])
             require(
                 all(
@@ -133,13 +139,13 @@ def run(source, directory):
         return value
     except BaseException as error:
         try:
+            context = joint_run_failure(root, mode, error, layer, point)
             write_once(
                 directory / "failure.json",
                 dict(
                     error=str(error),
-                    failure_layer=layer,
+                    **context,
                     output_correctness=output_status,
-                    original_returncode=getattr(error, "details", {}).get("returncode", 1),
                     completed_runs=receipts,
                     GPU_correctness="NOT_QUALIFIED",
                     performance="NOT_TESTED",

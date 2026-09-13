@@ -111,6 +111,30 @@ def qualify_prepost(runtime, backend, actual, mode, *, probe=False, stage=None):
         )
 
 
+def qualify_run_kind(runtime, mode, *, probe, stage):
+    """Strict invocation/report agreement, also for the joint Target-only reference."""
+    c = Check(mode, stage)
+    selected = c.need(runtime, "point")
+    c.equal(c.need(selected, "mode"), mode, "point.mode")
+    c.equal(c.need(selected, "runtime_mode"), mode, "point.runtime_mode")
+    for field, value in (("execution probe parameter", probe),
+                         ("probe", c.need(runtime, "probe")),
+                         ("point.probe", c.need(selected, "probe"))):
+        if type(value) is not bool:
+            c.fail("runtime.json", "TP0/1", field, "actual boolean", value)
+        c.equal(value, probe, field)
+    scan, correctness = selected.get("scan", False), selected.get("prepost_correctness", False)
+    for field, value in (("point.scan", scan), ("point.prepost_correctness", correctness)):
+        if type(value) is not bool:
+            c.fail("runtime.json", "TP0/1", field, "actual boolean when present", value)
+    c.equal(stage, "capacity_probe" if probe else "correctness" if correctness else "performance",
+            "stage/point/probe")
+    if correctness:
+        c.equal((probe, scan), (False, False), "correctness invocation")
+        c.equal("decode_scan" in runtime, False, "decode_scan not applicable to correctness")
+    c.equal("decode_scan" in runtime, scan, "point.scan/decode_scan")
+
+
 def _qualify_prepost(runtime, backend, actual, mode, *, probe, stage):
     """Same offline contract for probe, full-output correctness and performance.
 
@@ -121,8 +145,7 @@ def _qualify_prepost(runtime, backend, actual, mode, *, probe, stage):
 
     c = Check(mode, stage)
     c.equal(mode in PREPOST_MODES, True, "supported_mode")
-    c.equal(c.need(c.need(runtime, "point"), "mode"), mode, "point.mode")
-    c.equal(bool(c.need(runtime, "probe")), probe, "probe")
+    qualify_run_kind(runtime, mode, probe=probe, stage=stage)
     initial = c.ranks(
         c.need(actual, "target_worker_ranks", "actual-capacity.json"),
         "actual-capacity.json",

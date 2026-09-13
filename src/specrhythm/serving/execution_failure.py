@@ -67,6 +67,57 @@ def summarize(root, exit_code, stage):
     )
 
 
+def joint_run_failure(root, mode, error, layer, point=None):
+    """Read only the currently invoked mode's actual run, never a prior capacity point."""
+    root = Path(root)
+    errors = []
+    details = getattr(error, "details", {})
+    stage = read_optional(root / "stage.json", errors)
+    candidate = point or details.get("directory") or stage.get("directory")
+    run = Path(candidate) if candidate else None
+    if run is not None and run.resolve().parent != (root / "runs").resolve():
+        errors.append(dict(error="joint failure run is outside the invoked mode root",
+                           path=str(run)))
+        run = None
+    report, exits = {}, {}
+    if run is not None:
+        report = read_optional(run / "light-summary.json", errors)
+        if not report:
+            report = read_optional(run / "result.json", errors)
+        exits = read_optional(run / "exit-code.json", errors)
+    code = details.get("returncode", 130 if isinstance(error, KeyboardInterrupt) else 1)
+    code = code if type(code) is int and 0 < code < 256 else 1
+    return dict(
+        outer_stage="joint_gpu_correctness", mode=mode, point=mode,
+        mode_root=str(root), run_directory=str(run) if run is not None else None,
+        failure_layer=report.get("failure_layer") or details.get("failure_layer") or layer,
+        primary_error=report.get("primary_error") or dict(error=str(error), **details),
+        effective_exit_code=report.get("effective_exit_code", exits.get("effective_exit_code")),
+        command_exit_code=code, original_returncode=code,
+        qualification_status=report.get("qualification_status"),
+        execution_status=report.get("execution_status"),
+        measurement_status=report.get("measurement_status"),
+        cleanup_status=report.get("cleanup_status"),
+        source_report=str(run / "light-summary.json") if run is not None else None,
+        missing_run_evidence=not bool(report), summary_read_errors=errors,
+    )
+
+
+def summarize_joint(root, exit_code, stage="joint_gpu_correctness"):
+    """Project the joint runner's first failure without inventing a failed next mode."""
+    root = Path(root)
+    errors = []
+    failure = read_optional(root / "failure.json", errors)
+    return {
+        **failure, "first_exit_code": exit_code, "failed_stage": stage, "outer_stage": stage,
+        "failure_layer": failure.get("failure_layer", "joint_failure_evidence_missing"),
+        "point": failure.get("mode"), "run_directory": failure.get("run_directory"),
+        "joint_failure_source": str(root / "failure.json"),
+        "summary_read_errors": [*failure.get("summary_read_errors", []), *errors],
+        "original_results_unchanged": True,
+    }
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, required=True)

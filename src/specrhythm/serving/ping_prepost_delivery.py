@@ -40,6 +40,7 @@ NAMES = {
     "first-failure.json",
     "comparison.json",
     "run-state.json",
+    "stage.json",
     "diagnostic-primary-error.json",
     "diagnostic-secondary-errors.json",
     "exit-code.json",
@@ -283,6 +284,8 @@ def export(directory, output, *, first_code=0, stage="complete"):
             logical_paths=objects,
             export_status="INCOMPLETE" if failures else "COMPLETE",
             export_errors=failures,
+            export_validation_exit_code=(41 if failures else 42 if first_code == 0 and not
+                              read_json(compare_path)["valid"] else 0),
             first_exit_code=first_code,
             failed_stage=stage,
             limits=dict(file_bytes=FILE_LIMIT, unique_payload_bytes=TOTAL_LIMIT, files=FILE_COUNT),
@@ -315,10 +318,8 @@ def main(argv=None):
     print(
         json.dumps({k: result[k] for k in ("export_status", "first_exit_code", "export_errors")})
     )
-    if result["export_errors"]:
-        raise SystemExit(41)
-    if args.first_code == 0 and not read_json(args.directory / "comparison.json")["valid"]:
-        raise SystemExit(42)
+    if result["export_validation_exit_code"]:
+        raise SystemExit(result["export_validation_exit_code"])
 
 
 if __name__ == "__main__":

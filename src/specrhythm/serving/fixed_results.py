@@ -297,7 +297,20 @@ def summarize(manifest_path, directory, point, *, probe=False):
     try:
         runtime = read_json(directory / "runtime.json")
         base["capacity"] = runtime["capacity"]
-        require(bool(runtime.get("probe")) == probe, "capacity/execution artifact kind differs")
+        from specrhythm.serving.device_contract import (
+            PREPOST_MODES,
+            qualify_prepost,
+            qualify_run_kind,
+        )
+
+        stage = ("correctness" if point.get("prepost_correctness") else
+                 "capacity_probe" if probe else "performance")
+        if point["mode"] in PREPOST_MODES or point.get("prepost_correctness"):
+            qualify_run_kind(runtime, point["mode"], probe=probe, stage=stage)
+        else:
+            # Historical fixed modes retain their original report schema rules.
+            require(bool(runtime.get("probe")) == probe,
+                    "capacity/execution artifact kind differs")
         if not probe:
             require(runtime["point"] == point, "runtime mode/point identity differs")
         backend = read_json(directory / "draft-backend-report.json")
@@ -321,13 +334,10 @@ def summarize(manifest_path, directory, point, *, probe=False):
             runtime, manifest["fixed_diagnostic"]["options"].get("identity_matching", "linear")
         )
         base.update(draft_backend_checks=checks, execution_status="PASS")
-        from specrhythm.serving.device_contract import PREPOST_MODES, qualify_prepost
-
         if point["mode"] in PREPOST_MODES:
             base["device_identity_qualification"] = qualify_prepost(
                 runtime, backend, read_json(directory / "actual-capacity.json"), point["mode"],
-                probe=probe, stage="correctness" if point.get("prepost_correctness")
-                else "capacity_probe" if probe else "performance")
+                probe=probe, stage=stage)
 
         if point.get("prepost_correctness"):
             require(runtime["stop_reason"] == "all_naturally_completed"

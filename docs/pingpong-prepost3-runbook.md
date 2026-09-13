@@ -7,6 +7,11 @@
 
 ## 固定资源和顺序
 
+本次修复非scan correctness缺少顶层probe及联合首错误用容量点的问题。
+旧150541Z总包两个容量点PASS，普通PingPong与Target-only的512 token一致，但报告FAILED/INVALID
+及联合未通过状态保留。新GPU correctness/overlap/performance仍PENDING。
+阶段字段、派生分析及真实生产链回归见 [验证记录](pingpong-prepost3-validation.md)。
+
 只运行 `pingpong-prepost3/runtime` 与 `pingpong-eager-prepost3/runtime`。
 两点使用同一完整执行 SHA；入口 `scripts/run_ping_prepost_b16.sh <full-SHA>`。
 交付固定入口使用独立 detached worktree，不 reset、stash 或修改保存的 checkout。
@@ -78,6 +83,10 @@ setup8192/warmup4096/measurement65536/drain8192 的原始预算、保留行和 d
 运行资格、diagnostic integrity、coverage、performance conclusion 分开。第一次执行/诊断错误不被后续导出错误替换。
 `first-failure.json` 分别记录stage、failure_layer、原始effective_exit_code、qualification/cleanup及
 mode/rank/field/expected原始错误；进程码0与report_qualification失败可以同时成立。
+联合mode/run_directory取自实际joint子运行；同包保留joint/failure.json、mode的stage.json及原始
+light-summary/exit-code。command_exit_code与effective_exit_code分列。
+inventory的export_validation_exit_code表示离线导出校验；实际export进程码在终端单列。
+包关闭后的sidecar/磁盘故障不能回写已关闭的包，不将包内校验0宣称为最终进程成功；首错码不被替换。
 若磁盘或环境故障使总包本身无法生成，终端明确打印 `EXPORT FAILED` 和保留的源目录，不冒充成功上传。
 
 ## 读取结果

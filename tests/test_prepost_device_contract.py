@@ -41,14 +41,15 @@ def write(path, data):
 
 @pytest.fixture
 def produced(tmp_path, monkeypatch, hardware):
-    def build(mode, probe):
+    def build(mode, probe, *, root=None):
+        base_path = root or tmp_path
         # Reuse existing validated process/backend evidence for the simulated model lifecycle.
-        _, directory, _ = native_fixture(tmp_path / "base", monkeypatch, "serial")
+        _, directory, _ = native_fixture(base_path / "base", monkeypatch, "serial")
         runtime, _, point, opts = evidence("pingpong" if mode.startswith("pingpong") else "serial")
         opts.update(observation="original-live", identity_matching="linear")
         point.update(mode=mode, runtime_mode=mode, probe=probe)
         rows = [replace(request(i, 512), request_id=str(i)) for i in range(360)]
-        path, manifest, _ = profile(tmp_path / "profile", rows=rows)
+        path, manifest, _ = profile(base_path / "profile", rows=rows)
         manifest.pop("sha256")
         manifest.update(active_limit=16, fixed_diagnostic=dict(options=opts))
         manifest = sealed(manifest)
@@ -264,6 +265,7 @@ def produced(tmp_path, monkeypatch, hardware):
             probe=probe,
             workers=workers,
             hardware=hardware,
+            native_clock=clock,
         )
 
     return build
@@ -306,7 +308,11 @@ def test_original_summarize_reproduces_first_exception_from_real_producers(produ
     finally:
         sys.settrace(previous)
     assert result["errors"] == ["'dual_uuid_query'"] and not result["valid"]
-    assert caught[0][0] == "<listcomp>" and caught[0][2:] == ("KeyError", "'dual_uuid_query'")
+    # Python 3.12 reports this in the containing frame. Assert the exact original
+    # source location and exception, rather than an interpreter-specific frame name.
+    assert source.read_text().splitlines()[caught[0][1] - 1].strip() == (
+        'ranks = [x["dual_uuid_query"] for x in r["target_final_memory"]]')
+    assert caught[0][2:] == ("KeyError", "'dual_uuid_query'")
     assert decode_scan_results.summarize(h.path, h.directory, h.point, probe=True)["valid"]
 
 
@@ -316,6 +322,8 @@ def test_joint_correctness_report_uses_same_strict_contract(mode, produced):
 
     h = produced(mode, False)
     h.point["prepost_correctness"] = True
+    h.point.pop("scan", None)
+    h.runtime.pop("decode_scan", None)
     h.runtime["point"] = h.point
     del h.runtime["target_final_memory"][1]["gpu_uuid"]
     write(h.directory / "runtime.json", h.runtime)
