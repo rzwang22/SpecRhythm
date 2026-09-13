@@ -38,7 +38,8 @@ for _mode in ("serial-prepost3", "serial-eager-prepost3"):
                       "specrhythm.serving.prepost_proposer.PrePostProposer")
 
 
-for _mode in ("pingpong-prepost3", "pingpong-eager-prepost3"):
+for _mode in ("pingpong-prepost3", "pingpong-eager-prepost3",
+                          "serial-k3", "pingpong-k3", "pingpong-eager-k3"):
     CLASSES[_mode] = ("specrhythm.serving.ping_prepost_scheduler.PingPrePostScheduler",
                       "specrhythm.serving.ping_prepost_proposer.PingPrePostProposer")
 
@@ -104,7 +105,8 @@ def configure(root, manifest_path, directory, mode):
         SR_PHASE4_DECODE_READY_MODE="1",
         SR_PHASE4_RESIDENT_CONSUMER="serial"
         if mode in ("serial", "serial-eager", "serial-prepost3", "serial-eager-prepost3",
-                          "pingpong-prepost3", "pingpong-eager-prepost3")
+                          "pingpong-prepost3", "pingpong-eager-prepost3",
+                          "serial-k3", "pingpong-k3", "pingpong-eager-k3")
         else "target-only",
         SR_PHASE4_DUAL_BATCH="1" if mode == "pingpong" else "0",
         SR_PHASE4_DUAL_RESIDENT="1" if mode == "pingpong" else "0",
@@ -114,7 +116,8 @@ def configure(root, manifest_path, directory, mode):
     consumer = {"target": "target-only", "serial": "serial", "serial-eager": "serial",
                 "serial-prepost3": "serial", "serial-eager-prepost3": "serial",
                 "pingpong-prepost3": "serial", "pingpong-eager-prepost3": "serial",
-                "pingpong": "dual-batch"}[mode]
+                "serial-k3": "serial", "pingpong-k3": "serial",
+                "pingpong-eager-k3": "serial", "pingpong": "dual-batch"}[mode]
     write_once(
         directory / "setup-control.json",
         build_setup_control(
@@ -211,7 +214,7 @@ def make_engine(config, mode, *, classes=None, sequence_limit=POOL_SLOTS, query_
         speculative_config={
             "model": proposer,
             "method": "custom_class",
-            "num_speculative_tokens": 4,
+            "num_speculative_tokens": 3 if mode.endswith("-k3") else 4,
         },
         disable_log_stats=False,
     )
@@ -229,7 +232,8 @@ def initial_work(mode, admitted, clock, warm, client, packet):
     definitions = clock.definitions
     if mode == "target":
         return
-    if mode in ("pingpong-prepost3", "pingpong-eager-prepost3"):
+    if mode in ("pingpong-prepost3", "pingpong-eager-prepost3",
+                          "serial-k3", "pingpong-k3", "pingpong-eager-k3"):
         from specrhythm.phase4.serial import token_prefix_hash
 
         rows = [dict(request_id=rid, home_cohort=clock.rows[rid]["cohort"], round_id=0,
@@ -500,7 +504,8 @@ def prepare_resident(llm, definitions, directory, mode, eos, timeout=14400, logp
             if b["terminal"]:
                 payload = {"request_id": rid}
                 if mode in ("serial-eager", "serial-prepost3", "serial-eager-prepost3",
-                          "pingpong-prepost3", "pingpong-eager-prepost3"):
+                          "pingpong-prepost3", "pingpong-eager-prepost3",
+                          "serial-k3", "pingpong-k3", "pingpong-eager-k3"):
                     payload.update(
                         committed_prefix=list(warm[rid].logical_committed_prefix_token_ids),
                         committed_prefix_hash=warm[rid].logical_committed_prefix_sha256,

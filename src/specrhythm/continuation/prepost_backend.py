@@ -15,14 +15,18 @@ from specrhythm.serving.common import require
 
 
 class PrePostBackendMixin(GPUContinuationBackendMixin):
+    protocol = PROTOCOL
+    parameters = PARAMETERS
+    uniform_candidate_length = None
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.prepost_jobs, self.prepost_retired = {}, {}
         self.prepost_forwards = Records()
         self.metrics.batches.update({p: Counter() for p in PURPOSES})
         self._provenance["prepost"] = dict(
-            protocol=PROTOCOL,
-            **PARAMETERS,
+            protocol=self.protocol,
+            **self.parameters,
             candidate_root_is_committed=False,
             target_bonus_is_committed=False,
         )
@@ -226,7 +230,9 @@ class PrePostBackendMixin(GPUContinuationBackendMixin):
                     len(context) - int(prepare_next and not plan.terminal),
                 )
             # Runtime checks require the committed prefix materialized even on release.
-            needs_row = not stop_lookahead and (
+            complete_candidates = bool(self.uniform_candidate_length and retained
+                                       and len(retained) == work.limit)
+            needs_row = not stop_lookahead and not complete_candidates and (
                 (not plan.terminal and prepare_next) or valid < len(plan.final_prefix)
             )
             if needs_row:
@@ -386,8 +392,8 @@ class PrePostBackendMixin(GPUContinuationBackendMixin):
         for key in ("min", "p10", "p50", "p90", "max", "mean"):
             value["draft_batch_size_" + key] = stats[key]
         value["prepost_physical"] = dict(
-            protocol=PROTOCOL,
-            parameters=PARAMETERS,
+            protocol=self.protocol,
+            parameters=self.parameters,
             forwards=self.prepost_forwards.rows(),
             retention={k: v for k, v in self.prepost_forwards.report().items() if k != "rows"},
             pending_work=list(self.prepost_jobs),

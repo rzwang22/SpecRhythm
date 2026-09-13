@@ -21,7 +21,7 @@ from specrhythm.serving.fixed_results import (
     rounds_by_prefix,
     stats,
 )
-from specrhythm.serving.ping_prepost import MODES as PING_MODES
+from specrhythm.serving.ping_prepost import SCHEDULED_MODES as PING_MODES
 from specrhythm.serving.runtime_profile import load_s2
 from specrhythm.serving.s1_workload import write_once
 

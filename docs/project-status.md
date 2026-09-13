@@ -1,6 +1,6 @@
 # SpecRhythm project status
 
-Last updated: 2026-09-13
+Last updated: 2026-09-14
 
 Maintenance rule: every code-changing PR updates this file with its scope, status, evidence,
 known limitations, and next gate before that PR is considered complete.
@@ -28,6 +28,16 @@ claims.
    confidence intervals, and failure analysis.
 
 ## Pull request progress
+
+### PR #5 — 统一候选 K3 与跨组 owner 流水线（2026-09-14）
+
+- 从干净 `0b37d37ff364bcc6533b8805940bcbe572dafc56` 继续，执行参考 `c0ecc2a405c8b6c9cb3016c7254739bda5bec2b6`；旧模式、后续有效提交和历史结果保留，Draft不合并。
+- 新显式 `serial-k3` / `pingpong-k3` / `pingpong-eager-k3`：实际 K=min(3,remaining)，候选EOS可短；seed计入K3，初始化缓存seed+两次扩展；拒绝后correction materialization给seed，再两次扩展；成功复用完整lookahead3不产生第四候选。独立READY、版本/KV/fence/ownership、反馈优先和无bonus提交协议保持。
+- 三模式同active16/home8/8/Target ceiling8/单Draft+TP2。Serial有显式Draft idle gate；两个PingPong共用稳定home策略，差别为是否生成未决依赖continuation。新owner以每次状态变化后发布的只读snapshot处理信息性status，claim/control/feedback/release仍由真实owner执行，保留单token写入边界。
+- CPU可控顺序复现旧status等待GPU替身写入，并证明新status不等写入、B先claim而A尚未完成恢复、B反馈前A能READY。只读校验本地保留c0ecc2a总包102逻辑对象：普通点77个相邻轮次均有另一组先READY，却等到前组四次Draft完成才开始Target；154次status排队平均41.44ms。原始顺序支持调度串行化；剩余Target前处理不强行归因，也不据此预估加速。
+- 真实factory/scheduler/adapter/owner/backend、固定vLLM bookkeeping+独立oracle完整输出、full/runtime allocator，以及报告生产→序列化→qualify→总包重读回归覆盖。仍严格拒绝缺probe、错误阶段/设备/native关联。比较JSON、拒绝恢复时序和native交并集纳入唯一总包。
+- 全量pytest2414 passed / 3既有skip；Python3.9相关148、Python3.12相关136通过。Ruff、compileall、354文件3.9语法、20个Bash及diff检查通过；候选生命周期守恒与重复结算回归通过。既有CI的5秒旧drain失败单独保留调查结论，新CI状态交付时查询，不以本地通过覆盖旧失败。
+- [设计](k3-design.md)、[验证](k3-validation.md)、[服务器runbook](k3-runbook.md)：容量3点→Target-only+3模式联合correctness→固定runtime3点，首错停止、原始码与导出码分开，只上传一个新总包。未连接AutoDL；新GPU correctness、pipeline/overlap、performance **PENDING**。
 
 ### PR #5 — 非 scan correctness 报告与联合首错修复（2026-09-13）
 

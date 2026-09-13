@@ -16,7 +16,7 @@ from pathlib import Path
 from specrhythm.serving.audit_layer_report import write
 from specrhythm.serving.common import read_json, require
 from specrhythm.serving.execution_evidence import qualify
-from specrhythm.serving.ping_prepost import MODES
+from specrhythm.serving.ping_prepost import MODES, SCHEDULED_MODES
 
 FILE_LIMIT = 512 * 1024 * 1024
 TOTAL_LIMIT = 1024 * 1024 * 1024
@@ -98,11 +98,11 @@ BACKEND_KEYS = {
 }
 
 
-def comparison(directory):
+def comparison(directory, *, modes=MODES):
     points = []
     missing = []
     reports = []
-    for mode in MODES:
+    for mode in modes:
         path = directory / "points" / (mode + "-audit-report.json")
         if not path.exists():
             missing.append(mode)
@@ -130,8 +130,16 @@ def comparison(directory):
                 overlap=r["pingpong"]["native_overlap"],
             )
         )
-    matched = len(reports) == 2 and all(
-        reports[0][k] == reports[1][k] for k in ("source_commit", "options", "workload_sha256")
+        if mode.endswith("-k3"):
+            points[-1]["K3_mechanism"] = {
+                k: r["pingpong"].get(k) for k in (
+                    "outcomes", "generated", "retained", "discarded",
+                    "ready_to_admission_ms", "feedback_to_ready_ms")}
+            points[-1]["pipeline"] = {k: v for k, v in r["pingpong"].get("pipeline", {}).items()
+                                       if k not in ("timeline",)}
+    matched = len(reports) == len(modes) and all(
+        reports[0][k] == r[k] for r in reports[1:]
+        for k in ("source_commit", "options", "workload_sha256")
     )
     valid = matched and all(
         qualify(r)["diagnostic_integrity"] == "COMPLETE"
@@ -144,6 +152,10 @@ def comparison(directory):
     joint = directory / "joint/result.json"
     if not joint.exists() or read_json(joint).get("GPU_correctness") != "PASS":
         valid = False
+    if any(m.endswith("-k3") for m in modes) and joint.exists():
+        joint_value = read_json(joint)
+        valid = valid and joint_value.get("protocol") == "specrhythm.uniform-k3.v1"
+        valid = valid and {r["mode"] for r in joint_value.get("runs", [])} == {"target", *modes}
     return dict(
         schema_version="specrhythm.ping-prepost-delivery.v1",
         points=points,
@@ -156,12 +168,12 @@ def comparison(directory):
     )
 
 
-def export(directory, output, *, first_code=0, stage="complete"):
+def export(directory, output, *, first_code=0, stage="complete", modes=MODES):
     require(directory.is_dir() and not output.exists(), "new delivery archive required")
     compare_path = directory / "comparison.json"
     if not compare_path.exists():
         try:
-            value = comparison(directory)
+            value = comparison(directory, modes=modes)
         except (OSError, ValueError, KeyError) as error:
             value = dict(valid=False, comparison_error=str(error), status="MISSING_OR_INVALID")
         write(value, compare_path)
@@ -173,7 +185,7 @@ def export(directory, output, *, first_code=0, stage="complete"):
     )
     inventory, objects, emitted, total, failures = [], {}, set(), 0, []
     expected = ["joint/result.json", "comparison.json"]
-    for mode in MODES:
+    for mode in modes:
         root = directory / "points" / mode
         runs = []
         for path in (root / "runs").glob("*/point.json"):
@@ -199,7 +211,7 @@ def export(directory, output, *, first_code=0, stage="complete"):
                 )
         else:
             expected.append("points/" + mode + "/runs/<performance-not-started>")
-    for mode in MODES:
+    for mode in modes:
         expected.extend(
             [
                 "points/" + mode + suffix
@@ -241,7 +253,7 @@ def export(directory, output, *, first_code=0, stage="complete"):
                     value = json.loads(raw)
                     keys = RUNTIME_KEYS if source.name == "runtime.json" else BACKEND_KEYS
                     if (source.name == "runtime.json"
-                            and value.get("point", {}).get("mode") in MODES
+                            and value.get("point", {}).get("mode") in SCHEDULED_MODES
                             and "target_final_memory" not in value):
                         row["required_fields_missing"] = ["target_final_memory"]
                         failures.append(name + ": missing target_final_memory (not reconstructed)")
@@ -307,8 +319,12 @@ def main(argv=None):
     p.add_argument("--output", required=True, type=Path)
     p.add_argument("--first-code", type=int, default=0)
     p.add_argument("--stage", default="complete")
+    p.add_argument("--k3", action="store_true")
     args = p.parse_args(argv)
-    result = export(args.directory, args.output, first_code=args.first_code, stage=args.stage)
+    from specrhythm.serving.k3 import MODES as K3_MODES
+
+    result = export(args.directory, args.output, first_code=args.first_code, stage=args.stage,
+                    modes=K3_MODES if args.k3 else MODES)
     from specrhythm.phase4.manifest import sha256_file
 
     write(

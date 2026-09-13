@@ -65,7 +65,7 @@ class PingPrePostMachine(PrePostMachine):
             )
         for r in rows:
             self.homes[r["request_id"]] = r["home_cohort"]
-        result = super().batch_propose(rows)
+        result = self.batch_propose(rows)
         return dict(
             registered=[r["request_id"] for r in rows],
             actual_batch_model_forward_count=result["actual_batch_model_forward_count"],
@@ -360,8 +360,9 @@ class PingPrePostMachine(PrePostMachine):
             )
             if not plan.terminal and not (draining or self.draining):
                 tokens = self.backend.states[rid].proposal
-                normal = not (self.enabled and rid in self.eligible)
-                budget = min(4, state.remaining)
+                normal = (self.uniform_candidate_length or
+                          not (self.enabled and rid in self.eligible))
+                budget = min(self.uniform_candidate_length or 4, state.remaining)
                 if normal and len(tokens) < budget and tokens[-1] not in state.eos_token_ids:
                     self.normal[rid] = DraftProposalPlan(
                         rid,
@@ -446,7 +447,7 @@ class PingPrePostMachine(PrePostMachine):
     def eager_report(self):
         result = super().eager_report()
         result["pingpong"] = dict(
-            protocol=PROTOCOL,
+            protocol=self.protocol if self.uniform_candidate_length else PROTOCOL,
             events=self.ping_events.rows(),
             retention={k: v for k, v in self.ping_events.report().items() if k != "rows"},
             pending_normal=list(self.normal),

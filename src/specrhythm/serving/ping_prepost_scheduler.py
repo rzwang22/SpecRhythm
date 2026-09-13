@@ -1,5 +1,7 @@
 """Install owner-claimed ragged proposals into the actual resident Target scheduler."""
 
+import os
+
 from specrhythm.phase4.serial import Proposal, token_prefix_hash
 from specrhythm.serving.common import require
 from specrhythm.serving.fixed_scheduler import FixedBatch
@@ -48,6 +50,11 @@ class PingPrePostScheduler(FixedBatch, S2SerialScheduler):
             and proposal.parent_prefix_hash == token_prefix_hash(request.all_token_ids),
             "stale claimed Target prefix",
         )
+        if os.environ.get("SR_S2_MODE", "").endswith("-k3"):
+            budget = min(3, request.sampling_params.max_tokens - request.num_output_tokens)
+            require(len(proposal.proposal_token_ids) == budget or (
+                0 < len(proposal.proposal_token_ids) < budget and proposal.proposal_eos),
+                "Target refuses incomplete K3 claim")
         request.spec_token_ids = list(proposal.proposal_token_ids)
         return True
 

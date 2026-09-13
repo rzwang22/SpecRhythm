@@ -20,8 +20,9 @@ from specrhythm.serving.s2_pool import publish
 fixed_schedulers, s2_schedulers = _fixed_schedulers, _s2_schedulers
 
 
+@pytest.mark.parametrize("uniform", [False, True])
 def test_actual_scheduler_claimed_ragged_single_batch_and_replay_guard(
-    fixed_schedulers, monkeypatch
+    fixed_schedulers, monkeypatch, uniform
 ):
     build, path = fixed_schedulers
     base, packet = build("serial", "bound-prefix", batch=16, n=16)
@@ -46,7 +47,18 @@ def test_actual_scheduler_claimed_ragged_single_batch_and_replay_guard(
     publish(path, packet)
     scheduler.freeze_pool()
     ids = list(scheduler.requests)
-    m = PingPrePostMachine(Backend(NS(max_model_len=4096), worker=OwnerWorker()), request_ids=ids)
+    if uniform:
+        from test_k3 import Backend as K3Backend
+
+        from specrhythm.serving.k3_machine import K3Machine
+        monkeypatch.setenv("SR_S2_MODE", "pingpong-eager-k3")
+        m = K3Machine(K3Backend(NS(max_model_len=4096), worker=OwnerWorker()),
+                      request_ids=ids)
+        for r in scheduler.requests.values():
+            r.sampling_params = NS(max_tokens=100 + r.num_output_tokens)
+    else:
+        m = PingPrePostMachine(Backend(NS(max_model_len=4096), worker=OwnerWorker()),
+                              request_ids=ids)
     for rid, r in scheduler.requests.items():
         m.initialize(rid, tuple(r.all_token_ids), token_prefix_hash(r.all_token_ids))
     m.register(
@@ -58,6 +70,8 @@ def test_actual_scheduler_claimed_ragged_single_batch_and_replay_guard(
             for rid, r in scheduler.requests.items()
         ]
     )
+    if uniform:
+        run_work(m)
     controller = PingPrePostController()
     try:
         for cycle in range(4):
@@ -69,9 +83,11 @@ def test_actual_scheduler_claimed_ragged_single_batch_and_replay_guard(
             claims = packet["pp_admission"]["claims"]
             assert len(result.num_scheduled_tokens) == len(claims) == 8
             assert set(result.num_scheduled_tokens) == {c["request_id"] for c in claims}
-            if cycle in (2, 3):
+            if uniform:
+                assert {len(v) for v in result.scheduled_spec_decode_tokens.values()} == {3}
+            if not uniform and cycle in (2, 3):
                 assert {len(v) for v in result.scheduled_spec_decode_tokens.values()} == {1, 4}
-            if cycle == 3:
+            if not uniform and cycle == 3:
                 assert {c["home_cohort"] for c in claims} == {"A", "B"}
             with pytest.raises(Exception, match="duplicate Target claim"):
                 scheduler.schedule()
@@ -94,7 +110,7 @@ def test_actual_scheduler_claimed_ragged_single_batch_and_replay_guard(
             run_work(m)
         events = [r for r in m.ping_events.rows() if r["event"] == "admission"]
         assert [r["opportunity_cohort"] for r in events[:3]] == ["A", "B", "A"]
-        assert events[1]["claims"][0]["home_cohort"] == "A"
+        assert events[1]["claims"][0]["home_cohort"] == ("B" if uniform else "A")
         assert any(r["deferred"] for r in events)
     finally:
         cleanup(m)

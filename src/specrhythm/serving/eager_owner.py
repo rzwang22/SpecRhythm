@@ -39,6 +39,7 @@ class EagerOwner:
         waiting = []
         try:
             self.machine = machine = factory()
+            self._publish_status()
             self.ready.put(
                 (
                     True,
@@ -87,6 +88,7 @@ class EagerOwner:
                                 value = None
                             else:
                                 value = self._dispatch(operation, payload)
+                            self._publish_status()
                             if response is not None:
                                 response.put((True, value))
                     except Exception as error:
@@ -153,6 +155,7 @@ class EagerOwner:
                     waiting.remove(item)
                 if not self.closed and self._has_work():
                     machine.step()
+                    self._publish_status()
             machine.owner_stopped = True
         except BaseException as error:
             self.failure = error
@@ -170,6 +173,9 @@ class EagerOwner:
                     self.machine.backend.shutdown()
                 finally:
                     self.machine.owner_stopped = True
+
+    def _publish_status(self):
+        pass  # Legacy owners keep their original synchronous status path.
 
     def _has_work(self):
         return self.machine is not None and any(

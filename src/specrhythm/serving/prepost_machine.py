@@ -22,8 +22,13 @@ from specrhythm.serving.fixed_settle import DiagnosticSerialMachine, remaining
 
 
 class PrePostMachine(DiagnosticSerialMachine):
+    protocol = PROTOCOL
+    parameters = PARAMETERS
+    uniform_candidate_length = None
+
     def __init__(self, backend, *, request_ids, eager=True, report_path=None):
-        super().__init__(backend, candidate_budget=4, report_path=report_path)
+        super().__init__(backend, candidate_budget=self.uniform_candidate_length or 4,
+                         report_path=report_path)
         self.core = PrePostLedger()
         self.eligible = frozenset(request_ids)
         self.enabled, self.decision_version = eager, 0
@@ -51,8 +56,8 @@ class PrePostMachine(DiagnosticSerialMachine):
 
     def eager_report(self):
         return dict(
-            protocol=PROTOCOL,
-            parameters=PARAMETERS,
+            protocol=self.protocol,
+            parameters=self.parameters,
             counters=dict(self.counters),
             cycles=self.cycles.rows(),
             cycle_retention={k: v for k, v in self.cycles.report().items() if k != "rows"},
@@ -85,7 +90,7 @@ class PrePostMachine(DiagnosticSerialMachine):
             self.backend.provenance,
             dict(
                 backend=self.backend.backend_name,
-                prepost_protocol=PROTOCOL,
+                prepost_protocol=self.protocol,
                 rolling_proposal_id=state.proposal_id,
                 rolling_prefix_version=state.prefix_version,
                 source_continuation_id=source,
@@ -109,7 +114,7 @@ class PrePostMachine(DiagnosticSerialMachine):
                         round_ids=[state.prefix_version],
                         first_token_from_cached_logits=False,
                         batch_participation_only=True,
-                        prepost_protocol=PROTOCOL,
+                        prepost_protocol=self.protocol,
                     )
                 )
             self.backend.metrics.counters["proposals"] += 1
@@ -194,7 +199,11 @@ class PrePostMachine(DiagnosticSerialMachine):
                 "prepost verify dependency mismatch",
             )
             new.append(row)
-            limit = min(3, max(state.remaining - len(state.proposal_tokens) - 1, 0))
+            limit = min(3, max(state.remaining - len(state.proposal_tokens)
+                               - (0 if self.uniform_candidate_length else 1), 0))
+            if (self.uniform_candidate_length and state.proposal_tokens
+                    and state.proposal_tokens[-1] in state.eos_token_ids):
+                limit = 0  # No legal continuation beyond a hypothetically accepted EOS.
             if self.enabled and rid in self.eligible and limit:
                 works.append(
                     PrePostWork(

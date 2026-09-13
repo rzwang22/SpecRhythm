@@ -45,7 +45,8 @@ for _mode in ("serial-prepost3", "serial-eager-prepost3"):
                       "specrhythm.serving.prepost_proposer.PrePostProposer")
 
 
-for _mode in ("pingpong-prepost3", "pingpong-eager-prepost3"):
+for _mode in ("pingpong-prepost3", "pingpong-eager-prepost3",
+                          "serial-k3", "pingpong-k3", "pingpong-eager-k3"):
     CLASSES[_mode] = ("specrhythm.serving.ping_prepost_scheduler.PingPrePostScheduler",
                       "specrhythm.serving.ping_prepost_proposer.PingPrePostProposer")
 
@@ -155,7 +156,8 @@ def commit_outputs(clock, outputs, packet, client, runtime_mode):
             if output.finished and runtime_mode != "pingpong":
                 payload = {"request_id": rid}
                 if runtime_mode in ("serial-eager", "serial-prepost3", "serial-eager-prepost3",
-                                    "pingpong-prepost3", "pingpong-eager-prepost3"):
+                                    "pingpong-prepost3", "pingpong-eager-prepost3",
+                          "serial-k3", "pingpong-k3", "pingpong-eager-k3"):
                     from specrhythm.phase4.serial import token_prefix_hash
 
                     final = (*clock.definitions[rid].prompt_token_ids, *tokens)
@@ -206,7 +208,8 @@ def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5, 
                 "scan pre-forward stop requires synchronous allocator without deferred frees")
     active = manifest["active_limit"] if scan or point.get("prepost_correctness") else (
         point["batch"] if initial and runtime_mode != "pingpong" else 64)
-    ping_prepost = runtime_mode in ("pingpong-prepost3", "pingpong-eager-prepost3")
+    ping_prepost = runtime_mode in ("pingpong-prepost3", "pingpong-eager-prepost3",
+                          "serial-k3", "pingpong-k3", "pingpong-eager-k3")
     grouped = runtime_mode == "pingpong" or ping_prepost
     if ping_prepost:
         from specrhythm.serving.ping_prepost_controller import PingPrePostController
@@ -348,7 +351,11 @@ def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5, 
                 publish_control()
             # This is the only serial-split execution difference. No Target step
             # can begin with any owner work pending, including terminal materialization.
-            if mode == "serial-split":
+            if mode == "serial-k3":
+                with TIMERS.span("serial_k3_idle_gate"):
+                    while not client.call("k3_idle", {})["idle"]:
+                        remaining(int(observation_deadline * 1e9))
+            elif mode == "serial-split":
                 status = wait_draft(client, options["drain_timeout"])
             elif grouped:
                 status = client.call("status", {})
@@ -632,11 +639,15 @@ def run(root, manifest_path, directory, point, *, probe=False):
             and not cfg.cache_config.enable_prefix_caching,
             "fixed effective engine limits/config differ from requested values",
         )
+        if mode.endswith("-k3"):
+            require(cfg.speculative_config.num_speculative_tokens == 3,
+                    "K3 effective Target candidate capacity differs")
         draft = read_json(directory / "draft-startup.json")
         capacity = [r["s2_capacity"] for r in ranks] + [draft["s2_capacity"]]
         checks = [capacity_for(
             definitions, r, active_limit=active,
-            speculative_tokens=(9 if mode == "serial-eager" else 7)
+            speculative_tokens=(6 if mode == "pingpong-eager-k3" and r["role"] == "draft" else 3)
+            if mode.endswith("-k3") else (9 if mode == "serial-eager" else 7)
             if mode in ("serial-eager", "serial-eager-prepost3", "pingpong-eager-prepost3")
             and r["role"] == "draft" else 4,
         ) for r in capacity]

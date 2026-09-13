@@ -7,6 +7,7 @@ PREPOST_MODES = (
     "serial-eager-prepost3",
     "pingpong-prepost3",
     "pingpong-eager-prepost3",
+    "serial-k3", "pingpong-k3", "pingpong-eager-k3",
 )
 SCHEMA = "specrhythm.prepost-device-evidence.v1"
 SERIAL_PATH = "specrhythm.serving.prepost_proposer.PrePostProposer"
@@ -162,7 +163,7 @@ def _qualify_prepost(runtime, backend, actual, mode, *, probe, stage):
         c.equal(c.need(runtime, "stop_reason"), "capacity_probe", "stop_reason")
     elif not verification_rows:
         c.fail("runtime.json", "TP0/1", "target_steps", "nonzero actual decode verification")
-    path = PING_PATH if mode.startswith("pingpong-") else SERIAL_PATH
+    path = PING_PATH if mode.startswith("pingpong-") or mode == "serial-k3" else SERIAL_PATH
     uuids = []
     for rank in (0, 1):
         start = initial[rank]

@@ -83,7 +83,7 @@ def prepare(source, root, mode, *, modes=MODES):
     return path
 
 
-def compare_outputs(runtimes, *, modes=MODES):
+def compare_outputs(runtimes, *, modes=MODES, require_mixed=True):
     require(set(runtimes) == {"target", *modes}, "joint check lacks a mode/reference")
     values = {}
     for mode, runtime in runtimes.items():
@@ -96,6 +96,9 @@ def compare_outputs(runtimes, *, modes=MODES):
             "joint output/cleanup incomplete",
         )
         values[mode] = {r["request_id"]: r["generated_token_ids"] for r in runtime["requests"]}
+    if not require_mixed:
+        require(all(len(v) == 16 and set(v) == set(values["target"]) for v in values.values()),
+                "K3 complete-output request identity set differs")
     comparisons = [
         dict(
             mode=mode,
@@ -117,12 +120,14 @@ def compare_outputs(runtimes, *, modes=MODES):
         for s in runtimes[modes[1]]["target_steps"]
         if {r["candidate_positions"] for r in s.get("rows", [])} >= {1, 4}
     ]
-    require(mixed, "joint correctness coverage missing actual mixed 1/4 Target forward")
+    if require_mixed:
+        require(mixed, "joint correctness coverage missing actual mixed 1/4 Target forward")
     return dict(
         valid=True,
         GPU_correctness="PASS",
         comparisons=comparisons,
-        mixed_target_steps=len(mixed),
+        mixed_target_steps=len(mixed) if require_mixed else None,
+        mixed_length_requirement="P1/P4" if require_mixed else "uniform K3 with budget/EOS tails",
         performance="NOT_TESTED",
         overlap="NOT_QUALIFIED",
     )

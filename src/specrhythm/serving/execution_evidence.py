@@ -276,7 +276,8 @@ def qualify(report):
         if prepost.get("status") != "COMPLETE":
             errors.append("prepost protocol/forward evidence incomplete: "
                           + str(prepost.get("errors")))
-    if report.get("mode") in ("pingpong-prepost3", "pingpong-eager-prepost3"):
+    if report.get("mode") in ("pingpong-prepost3", "pingpong-eager-prepost3",
+                              "serial-k3", "pingpong-k3", "pingpong-eager-k3"):
         ping = report.get("pingpong", {})
         if ping.get("status") != "COMPLETE":
             errors.append("PingPong protocol evidence incomplete: " + str(ping.get("errors")))

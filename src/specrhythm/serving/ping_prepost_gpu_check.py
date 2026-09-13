@@ -75,7 +75,8 @@ def coverage(runtime, backend):
     )
 
 
-def run(source, directory):
+def run(source, directory, *, modes=MODES, protocol=PROTOCOL,
+        coverage_check=coverage, require_mixed=True):
     from specrhythm.serving.fixed_cli import run_point
 
     require(not directory.exists(), "joint correctness needs a fresh root")
@@ -84,11 +85,11 @@ def run(source, directory):
     output_status, layer = "PENDING", "joint_execution"
     mode, root, point = None, directory, None
     try:
-        for mode in ("target", *MODES):
+        for mode in ("target", *modes):
             root = directory / mode
             point = None
             layer = "joint_prepare"
-            path = prepare(source, root, mode, modes=MODES)
+            path = prepare(source, root, mode, modes=modes)
             selected = dict(
                 mode=mode,
                 runtime_mode=mode,
@@ -121,17 +122,17 @@ def run(source, directory):
             )
             receipts.append(dict(mode=mode, point=str(point), execution="PASS", cleanup="PASS"))
         layer = "joint_output_and_mixed_verification"
-        result = compare_outputs(runtimes, modes=MODES)
+        result = compare_outputs(runtimes, modes=modes, require_mixed=require_mixed)
         output_status = "PASS"
         layer = "joint_coverage"
-        cov = coverage(runtimes[MODES[1]], backends[MODES[1]])
+        cov = coverage_check(runtimes[modes[-1]], backends[modes[-1]])
         write_once(directory / "coverage.json", cov)
         require(cov["status"] == "COMPLETE", "joint real protocol coverage incomplete", **cov)
         value = dict(
             **result,
             coverage=cov,
             runs=receipts,
-            protocol=PROTOCOL,
+            protocol=protocol,
             output_correctness=output_status,
             single_shared_correctness=True,
         )

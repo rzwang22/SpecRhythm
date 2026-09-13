@@ -1,5 +1,6 @@
 """Target publication is asynchronous to Draft settlement; only claimed proposals verify."""
 
+import os
 import time
 
 from specrhythm.phase4.serial import Proposal, token_prefix_hash
@@ -97,7 +98,8 @@ class PingPrePostProposer(PrePostProposer):
             target_microbatch_id=state.target_batch_id,
             ping_target_batch_id=state.ping_claim["target_batch_id"],
             home_cohort=state.ping_claim["home_cohort"],
-            ping_prepost_protocol=PROTOCOL,
+            ping_prepost_protocol=("specrhythm.uniform-k3.v1"
+                if os.environ.get("SR_S2_MODE", "").endswith("-k3") else PROTOCOL),
             target_authority=True,
             timeline=dict(
                 draft_start_ns=proposal.draft_start_ns,

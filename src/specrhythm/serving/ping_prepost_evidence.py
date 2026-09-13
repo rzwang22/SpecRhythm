@@ -21,7 +21,10 @@ from specrhythm.serving.eager_evidence_export import Reader, bounds, duration, i
 from specrhythm.serving.eager_latency import exclusive_main, trace_rows
 from specrhythm.serving.execution_evidence import delta, execution_path, qualify
 from specrhythm.serving.fixed_results import stats
-from specrhythm.serving.ping_prepost import MODES, PROTOCOL, PURPOSES
+from specrhythm.serving.k3 import PARAMETERS as K3_PARAMETERS
+from specrhythm.serving.k3 import PROTOCOL as K3_PROTOCOL
+from specrhythm.serving.k3 import accounting_complete
+from specrhythm.serving.ping_prepost import MODES, PROTOCOL, PURPOSES, SCHEDULED_MODES
 
 
 def queue_landmarks(host, key):
@@ -40,10 +43,15 @@ def queue_landmarks(host, key):
 
 def mechanism(runtime, backend):
     start, end = runtime["measurement_start_ns"], runtime["measurement_end_ns"]
+    uniform = runtime["point"]["mode"].endswith("-k3")
+    expected_protocol = K3_PROTOCOL if uniform else PROTOCOL
+    parameters = K3_PARAMETERS if uniform else PARAMETERS
     protocol, physical = backend.get("prepost", {}), backend.get("prepost_physical", {})
     ping, errors = protocol.get("pingpong", {}), []
-    if ping.get("protocol") != PROTOCOL or physical.get("parameters") != PARAMETERS:
+    if ping.get("protocol") != expected_protocol or physical.get("parameters") != parameters:
         errors.append("protocol parameters/binding missing")
+    if uniform and not accounting_complete(protocol.get("candidate_accounting")):
+        errors.append("K3 final lifetime candidate accounting missing/inconsistent")
     retentions = {
         "owner": protocol.get("retention"),
         "admissions": ping.get("retention"),
@@ -117,7 +125,7 @@ def mechanism(runtime, backend):
     if any(g not in mapped for g in window_native if g.get("purpose") in PURPOSES):
         mapping_complete = False
         errors.append("native forward lacks role mapping")
-    eager = runtime["point"]["mode"] == MODES[1]
+    eager = runtime["point"]["mode"] in (MODES[1], "pingpong-eager-k3")
     cycles = []
     targets = [g for d in runtime["target_devices"] for g in d["device"].get("forwards", [])]
     for step in runtime["target_steps"]:
@@ -164,7 +172,7 @@ def mechanism(runtime, backend):
             look = [(g, b) for g, b in f if b.get("work_kind") == "lookahead"]
             common = [(g, b) for g, b in f if b.get("work_kind") in ("post", "repair")]
             extensions = [b for _, b in f if b.get("work_kind") == "normal_extension"]
-            if len(look) > 3 or len(common) > 1 or (eager and extensions):
+            if len(look) > 3 or len(common) > 1 or (eager and extensions and not uniform):
                 errors.append("per-parent lookahead/common/recovery forward bound violated")
             if p is None:
                 errors.append("measured parent settlement missing (including drain)")
@@ -173,7 +181,7 @@ def mechanism(runtime, backend):
                 errors.append("committed accepted/correction conservation failed")
             if not 0 <= p["retained"] <= p["generated"] <= 3:
                 errors.append("lookahead generated/reused/discarded conservation failed")
-            if eager and not p["terminal"] and p["next_candidate_length"]:
+            if eager and not uniform and not p["terminal"] and p["next_candidate_length"]:
                 if p["accepted"] < p["parent_length"] and p["next_candidate_length"] != 1:
                     errors.append("rejection recovery did not publish P1")
                 if p["retained"] == 3 and p["next_candidate_length"] != 4:
@@ -182,6 +190,17 @@ def mechanism(runtime, backend):
                     if not following.get("candidate_EOS"):
                         errors.append("complete non-EOS lookahead failed to publish P4")
             nxt = ready.get((key[0], key[1] + 1))
+            if uniform:
+                current = ready.get(key, {})
+                budget = current.get("remaining_output_budget")
+                reason = current.get("short_reason")
+                if type(budget) is not int or not (lengths[key[0]] == min(3, budget)
+                    or (0 < lengths[key[0]] < min(3, budget) and reason == "candidate_EOS")):
+                    errors.append("incomplete/non-tail K3 entered Target")
+                if not eager and look:
+                    errors.append("disabled eager generated conditional work")
+                if p["retained"] == 3 and p["common_start_ns"] is not None:
+                    errors.append("complete K3 reuse performed an unnecessary tail forward")
             definite_steps = (
                 sum(g["end_ns"] <= target_end for g, _ in look) if target_end else None
             )
@@ -213,6 +232,11 @@ def mechanism(runtime, backend):
                     decision_version=c["decision_version"],
                     source="promoted" if c["promoted"] else "normal",
                     P=lengths.get(key[0]),
+                    short_reason=ready.get(key, {}).get("short_reason"),
+                    admission_to_Target_GPU_ms={side: delta(c["claimed_ns"],
+                        min((g.get("start_" + bound + "_ns") for g in tg
+                             if g.get("start_" + bound + "_ns") is not None), default=None))
+                        for side, bound in (("lower", "lower"), ("upper", "upper"))},
                     parent_outcome="terminal"
                     if p["terminal"]
                     else "rejection"
@@ -257,7 +281,9 @@ def mechanism(runtime, backend):
                     native_lookahead_steps_at_Target_end=complete_counts,
                     lookahead_forward_count=len(look),
                     common_forward_count=len(common),
-                    next_P=p["next_candidate_length"],
+                    next_P=(nxt or {}).get("candidate_length") if uniform
+                    else p["next_candidate_length"],
+                    settlement_private_candidate_count=p["next_candidate_length"],
                 )
             )
         cycles.append(
@@ -299,7 +325,8 @@ def mechanism(runtime, backend):
     ]
     flat = [r for c in cycles for r in c["requests"]]
     return dict(
-        protocol=PROTOCOL,
+        protocol=expected_protocol,
+        candidate_accounting=protocol.get("candidate_accounting") if uniform else None,
         status="INCOMPLETE" if errors else "COMPLETE",
         errors=sorted(set(errors)),
         retentions=retentions,
@@ -394,6 +421,13 @@ def analyze(runtime, backend, light):
     )
     steps = [s for s in runtime["target_steps"] if s.get("window") and s["B"]]
     ping = mechanism(runtime, backend)
+    if light["mode"].endswith("-k3"):
+        from specrhythm.serving.k3_evidence import pipeline
+
+        ping["pipeline"] = pipeline(runtime, backend)
+        if ping["pipeline"]["evidence_integrity"] != "COMPLETE":
+            ping["status"] = "INCOMPLETE"
+            ping["errors"].extend(ping["pipeline"]["errors"])
     return dict(
         mode=light["mode"],
         draft_audit=backend["draft_audit"],
@@ -464,7 +498,7 @@ def report(root, output, status, commit):
     point = points[0]
     light = reader.read(point / "light-summary.json", required=True)
     require(
-        light["mode"] in MODES
+        light["mode"] in SCHEDULED_MODES
         and light["git_commit"] == commit
         and light["workload_sha256"] == config["workload_sha256"],
         "point binding differs",

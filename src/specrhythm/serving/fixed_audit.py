@@ -29,7 +29,8 @@ class FixedAuditMixin:
             require(
                 os.environ.get("SR_S2_MODE") in (
                     "serial", "serial-eager", "serial-prepost3", "serial-eager-prepost3",
-                          "pingpong-prepost3", "pingpong-eager-prepost3"),
+                          "pingpong-prepost3", "pingpong-eager-prepost3",
+                          "serial-k3", "pingpong-k3", "pingpong-eager-k3"),
                 "runtime Draft audit requires an explicit supported serving mode",
             )
             self.audit_guard = RuntimeKVGuard(self)

@@ -13,8 +13,9 @@ from specrhythm.phase4.serial import token_prefix_hash
 from specrhythm.serving.ping_prepost_machine import PingPrePostMachine
 
 
+@pytest.mark.parametrize("uniform", [False, True])
 @pytest.mark.parametrize("mode", ["full", "runtime"])
-def test_real_runtime_allocator_mixed_post_fence_and_release(mode, tmp_path, monkeypatch):
+def test_real_runtime_allocator_mixed_post_fence_and_release(mode, tmp_path, monkeypatch, uniform):
     from test_fixed_runtime_audit import LifecycleWorker
 
     from specrhythm.serving import s2_draft
@@ -23,18 +24,22 @@ def test_real_runtime_allocator_mixed_post_fence_and_release(mode, tmp_path, mon
 
     monkeypatch.setattr(s2_draft, "cuda_memory", lambda _: {"free_memory_bytes": 10**9})
     monkeypatch.setenv("SR_FIXED_DRAFT_AUDIT", mode)
-    monkeypatch.setenv("SR_S2_MODE", "pingpong-eager-prepost3")
+    monkeypatch.setenv("SR_S2_MODE", "pingpong-eager-k3" if uniform else "pingpong-eager-prepost3")
     path = tmp_path / "control.json"
     monkeypatch.setenv("SR_S2_CONTROL", str(path))
     monkeypatch.setenv("SR_S2_RUN_DIRECTORY", str(tmp_path))
     states = {str(i): {"state": "STAGED"} for i in range(360)}
     publish(path, {"barrier_ns": None, "requests": states})
 
-    class Audited(PingPrePostBackendMixin, FixedAuditMixin, s2_draft.S2DraftBackend):
+    from specrhythm.continuation.k3_backend import K3BackendMixin
+    from specrhythm.serving.k3_machine import K3Machine
+
+    physical = K3BackendMixin if uniform else PingPrePostBackendMixin
+    class Audited(physical, FixedAuditMixin, s2_draft.S2DraftBackend):
         pass
 
     b = Audited(SimpleNamespace(max_model_len=4096), worker=LifecycleWorker())
-    m = PingPrePostMachine(b, request_ids=states)
+    m = (K3Machine if uniform else PingPrePostMachine)(b, request_ids=states)
     for rid in ("0", "1"):
         m.initialize(rid, (10, 20), token_prefix_hash((10, 20)))
     b.initialize_many([(rid, (10, 20)) for rid in states if rid not in ("0", "1")])
@@ -43,6 +48,8 @@ def test_real_runtime_allocator_mixed_post_fence_and_release(mode, tmp_path, mon
     publish(path, {"barrier_ns": 1, "requests": states})
     b.audit_requests(tuple(states))
     m.register([{**proposal_row(rid), "home_cohort": "A"} for rid in ("0", "1")])
+    if uniform:
+        run_work(m)
     proposals = [c["proposal"] for c in admit(m, active=["0", "1"])["claims"]]
     m.verify_start([verify_row(p) for p in proposals])
     visits = b.audit_full_visits
@@ -53,10 +60,12 @@ def test_real_runtime_allocator_mixed_post_fence_and_release(mode, tmp_path, mon
     rows = [feedback(p, (10, 20), reject=p["request_id"] == "1")[0] for p in proposals]
     m.feedback(rows)
     assert m.step()
-    assert b.states["0"].proposal == greedy_tokens(b.states["0"].prefix, 4)
+    assert b.states["0"].proposal == greedy_tokens(b.states["0"].prefix, 3 if uniform else 4)
     assert len(b.states["1"].proposal) == 1
     # A second parent batch: common rejection recovery merges with the other
     # parent's still-running lookahead through the actual allocator callbacks.
+    if uniform:
+        run_work(m)
     proposals = [c["proposal"] for c in admit(m, active=["0", "1"])["claims"]]
     m.verify_start([verify_row(p) for p in proposals])
     m.step()

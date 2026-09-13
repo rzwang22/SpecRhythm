@@ -24,7 +24,8 @@ from specrhythm.serving.schema import load_requests
 
 BATCHES = (16, 32, 64, 128)
 EXPLICIT_MODES = (*MODES, "serial-eager", "serial-prepost3", "serial-eager-prepost3",
-                          "pingpong-prepost3", "pingpong-eager-prepost3")
+                          "pingpong-prepost3", "pingpong-eager-prepost3",
+                          "serial-k3", "pingpong-k3", "pingpong-eager-k3")
 POOL_SIZE = 360
 SCHEMA = "specrhythm.decode-scan.v1"
 BOUNDARY = "prefilled resident pool; post-warmup full-batch decode; actual stop before drain"
@@ -65,7 +66,8 @@ def select(main, small_ids, seed=1666):
 
 def selected_point(mode, batch, repeat=0):
     require(mode in EXPLICIT_MODES and batch in BATCHES, "unknown decode scan mode/B")
-    require(mode not in ("pingpong-prepost3", "pingpong-eager-prepost3") or batch == 16,
+    require(mode not in ("pingpong-prepost3", "pingpong-eager-prepost3",
+                          "serial-k3", "pingpong-k3", "pingpong-eager-k3") or batch == 16,
             "PingPong prepost3 currently requires total active B16")
     return dict(
         mode=mode,
@@ -208,8 +210,10 @@ def prepare(root, s1, opts, *, seed=1666, s0=None):
                 for r in range(opts["repeats"])
                 for b in BATCHES
                 for m in ("serial-eager", "serial-prepost3", "serial-eager-prepost3",
-                          "pingpong-prepost3", "pingpong-eager-prepost3")
-                if b == 16 or m not in ("pingpong-prepost3", "pingpong-eager-prepost3")
+                          "pingpong-prepost3", "pingpong-eager-prepost3",
+                          "serial-k3", "pingpong-k3", "pingpong-eager-k3")
+                if b == 16 or m not in ("pingpong-prepost3", "pingpong-eager-prepost3",
+                          "serial-k3", "pingpong-k3", "pingpong-eager-k3")
             ],
             "boundary": BOUNDARY,
             "capacity": "PENDING per fresh point before decode",

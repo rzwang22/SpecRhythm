@@ -12,7 +12,7 @@ from specrhythm.phase4.vllm_draft_backend import VllmBatchedDraftBackend
 from specrhythm.serving import eager_draft, fixed_runtime, s2_runtime
 from specrhythm.serving.decode_scan_plan import selected_point
 from specrhythm.serving.fixed_plan import capacity_metadata
-from specrhythm.serving.ping_prepost import MODES
+from specrhythm.serving.ping_prepost import MODES, SCHEDULED_MODES
 from specrhythm.serving.ping_prepost_machine import PingPrePostMachine
 from specrhythm.serving.ping_prepost_owner import PingPrePostOwner
 from specrhythm.serving.s2_pool import prefix_record
@@ -20,7 +20,7 @@ from specrhythm.serving.s2_pool import prefix_record
 phase4_config = _config
 
 
-@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize("mode", SCHEDULED_MODES)
 def test_true_service_factory_and_target_engine_classes(
     mode, phase4_config, tmp_path, monkeypatch
 ):
@@ -33,7 +33,8 @@ def test_true_service_factory_and_target_engine_classes(
     cfg = calls[0]
     assert cfg["scheduler_cls"].endswith("PingPrePostScheduler")
     assert cfg["speculative_config"]["model"].endswith("PingPrePostProposer")
-    assert cfg["speculative_config"]["num_speculative_tokens"] == 4
+    assert cfg["speculative_config"]["num_speculative_tokens"] == (
+        3 if mode.endswith("-k3") else 4)
     assert cfg["tensor_parallel_size"] == 2 and not cfg["async_scheduling"]
     cap = capacity_metadata(mode, active_limit=16, resident_requirement=360)
     assert cap["active_request_limit"] == 16 and cap["max_requests_per_target_forward"] == 8
@@ -57,8 +58,15 @@ def test_true_service_factory_and_target_engine_classes(
         assert isinstance(server.machine, PingPrePostOwner)
         assert isinstance(server.machine.machine, PingPrePostMachine)
         assert isinstance(server.machine.machine.backend, PingPrePostBackendMixin)
-        assert server.machine.machine.enabled == (mode == MODES[1])
+        assert server.machine.machine.enabled == (mode in (MODES[1], "pingpong-eager-k3"))
         assert server.machine.commands.maxsize == 256
+        if mode.endswith("-k3"):
+            from specrhythm.continuation.k3_backend import K3BackendMixin
+            from specrhythm.serving.k3_machine import K3Machine
+            from specrhythm.serving.k3_owner import K3Owner
+            assert isinstance(server.machine, K3Owner)
+            assert isinstance(server.machine.machine, K3Machine)
+            assert isinstance(server.machine.machine.backend, K3BackendMixin)
         # No admitted work: exercise actual shutdown, owner join and final report.
         server.machine.call("shutdown", {})
 

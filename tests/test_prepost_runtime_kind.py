@@ -23,7 +23,7 @@ from specrhythm.serving.common import DataError, read_json
 from specrhythm.serving.device_contract import qualify_prepost
 from specrhythm.serving.fixed_plan import capacity_metadata
 from specrhythm.serving.fixed_results import summarize
-from specrhythm.serving.ping_prepost import MODES
+from specrhythm.serving.ping_prepost import MODES, SCHEDULED_MODES
 from specrhythm.serving.ping_prepost_delivery import export
 from specrhythm.serving.runtime_profile import load_s2
 from specrhythm.serving.s1_workload import write_once
@@ -110,6 +110,8 @@ def driven(produced, monkeypatch, tmp_path):
 
         class Client:
             def call(self, operation, payload):
+                if operation == "k3_idle":
+                    return dict(idle=True)
                 if operation == "status":
                     return dict(inflight_request_ids=[], failures={})
                 if operation == "pp_admit":
@@ -289,7 +291,7 @@ def driven(produced, monkeypatch, tmp_path):
     return build
 
 
-@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize("mode", SCHEDULED_MODES)
 @pytest.mark.parametrize("stage", ["capacity_probe", "correctness", "performance"])
 def test_actual_drive_serialization_contract_and_archive(mode, stage, driven, tmp_path):
     h = driven(mode, stage)

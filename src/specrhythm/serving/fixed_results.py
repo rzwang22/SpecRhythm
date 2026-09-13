@@ -573,6 +573,10 @@ def measurements(manifest, runtime, backend, point):
         from specrhythm.continuation.prepost import PURPOSES
 
         purposes = ("proposal", "commit", *PURPOSES)
+    elif point["mode"].endswith("-k3"):
+        from specrhythm.serving.ping_prepost import PURPOSES
+
+        purposes = ("proposal", "commit", *PURPOSES)
     draft_forwards = [r for r in backend["fixed_device"]["forwards"]
                       if r["purpose"] in purposes]
     for p in backend["fixed_proposals"]:

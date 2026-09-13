@@ -72,7 +72,7 @@ class EagerSerialServer(DraftUnixServer):
 
 
 def serve(config, directory, socket_path, *, backend_class=None, prepost_mode=None):
-    from specrhythm.serving.ping_prepost import MODES as PING_MODES
+    from specrhythm.serving.ping_prepost import SCHEDULED_MODES as PING_MODES
 
     report = directory / "draft-backend-report.json"
     cls = backend_class or EagerFixedDraftBackend
@@ -89,6 +89,10 @@ def serve(config, directory, socket_path, *, backend_class=None, prepost_mode=No
             from specrhythm.continuation.ping_prepost_backend import PingPrePostBackendMixin
 
             PrePostBackendMixin = PingPrePostBackendMixin
+        if prepost_mode.endswith("-k3"):
+            from specrhythm.continuation.k3_backend import K3BackendMixin
+
+            PrePostBackendMixin = K3BackendMixin
         cls = type("PrePostFixedDraftBackend", (PrePostBackendMixin,
                    backend_class or FixedDraftBackend), {})
 
@@ -102,9 +106,14 @@ def serve(config, directory, socket_path, *, backend_class=None, prepost_mode=No
                 from specrhythm.serving.ping_prepost_machine import PingPrePostMachine
 
                 PrePostMachine = PingPrePostMachine
+            if prepost_mode.endswith("-k3"):
+                from specrhythm.serving.k3_machine import K3Machine
+
+                PrePostMachine = K3Machine
             return PrePostMachine(backend, request_ids=tuple(control()["requests"]),
                                   eager=prepost_mode in (
-                                      "serial-eager-prepost3", "pingpong-eager-prepost3"),
+                                      "serial-eager-prepost3", "pingpong-eager-prepost3",
+                                      "pingpong-eager-k3"),
                                   report_path=report)
         return EagerSerialMachine(
             backend, request_ids=tuple(control()["requests"]), report_path=report
@@ -113,6 +122,10 @@ def serve(config, directory, socket_path, *, backend_class=None, prepost_mode=No
     if prepost_mode in PING_MODES:
         from specrhythm.serving.ping_prepost_owner import PingPrePostOwner
 
+        if prepost_mode.endswith("-k3"):
+            from specrhythm.serving.k3_owner import K3Owner
+
+            PingPrePostOwner = K3Owner
         owner = PingPrePostOwner(factory)
     else:
         owner = EagerOwner(factory)
