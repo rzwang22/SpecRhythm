@@ -36,6 +36,7 @@ claims.
 - 联合首错从实际模式run目录和原始报告读取，外层阶段、进程码、校验码、导出码分开；脚本不继承容量POINT/ROOT。总包保留stage来源、joint失败、原始报告及native。首错后导出失败也不替换原码。
 - 无调度、3+1、P1/P4、KV/fence、模型、审计/日志或预算变更；不连接AutoDL。新GPU correctness、overlap、performance **PENDING**。完成CPU验收、普通推送及[固定入口](pingpong-prepost3-runbook.md)后停止等待单个新总包。
 - 全库2324 passed / 3既有skip，Python3.9相关71 passed、Python3.12相关58 passed；Ruff、双版本compileall、342文件3.9语法、19个Bash和diff通过。旧CI复现测试的帧名假设改为严格源码行定位；旧refill/drain失败单独记录，未改调度或timeout，见[验证记录](pingpong-prepost3-validation.md)。
+- 执行SHA `c0ecc2a405c8b6c9cb3016c7254739bda5bec2b6`；后续交付只固定入口和文档，不改变src执行路径。
 
 ### PR #5 — PingPong prepost3 设备证据契约修复（2026-09-13）
 

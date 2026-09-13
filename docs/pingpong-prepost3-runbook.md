@@ -50,7 +50,7 @@ GPU0 Draft、GPU1/2 一个 TP2 Target。固定 K4，lookahead≤3、公共步骤
 
 ## 唯一上传文件与完整性
 
-本次入口修复首次容量 probe 的 `dual_uuid_query` schema/consumer 不一致；旧运行仍保持
+入口保留首次容量 probe 的 `dual_uuid_query` schema/consumer 修复；该旧运行仍保持
 FAILED/INVALID、capacity/cleanup PASS、进程码0及外层码1，未进入 correctness/performance。
 各模式证据契约及真实生产链复现见 [验证记录](pingpong-prepost3-validation.md)。
 新prepost3模式用已有startup/final worker快照和原生forward/request/proposal关联，Dual专属计数
@@ -111,7 +111,8 @@ measured-parent 的后续结算可能落在下一 Target step 或 drain；按 la
 
 ## 固定前台命令
 
-完整执行 SHA：`429956febe6d731291c1a3c0ee0857337a3c54c2`。包含设备契约及单包投影修复；
+完整执行 SHA：`c0ecc2a405c8b6c9cb3016c7254739bda5bec2b6`。包含非scan correctness运行类型、
+联合首错来源修复，以及此前设备契约与单包投影修复；
 两个容量点、联合GPU correctness及两个性能点均执行此SHA。后续交付提交仅固定启动器和文档，
 不改变src执行路径。旧bc908be运行及其原FAILED/INVALID记录不复用或覆盖。
 不要 source 严格子脚本到交互 shell。父 shell 使用 `if … then … else … fi` 接收失败，始终保留交互终端。
@@ -121,7 +122,7 @@ measured-parent 的后续结算可能落在下一 Target step 或 drain；按 la
 ```bash
 if bash <<'SR_PING_CHILD'
 set -Eeuo pipefail
-FINAL_SHA=429956febe6d731291c1a3c0ee0857337a3c54c2
+FINAL_SHA=c0ecc2a405c8b6c9cb3016c7254739bda5bec2b6
 REPO="${SR_PING_REPO:-/root/autodl-tmp/src/SpecRhythm}"
 git -C "$REPO" fetch origin codex/rolling-eager-v0.1
 git -C "$REPO" cat-file -e "${FINAL_SHA}^{commit}"
