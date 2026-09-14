@@ -275,6 +275,12 @@ compatibility cases are rerun on that final source. Ruff, compileall3.9/3.11/3.1
 `git diff --check` pass. The server-only GPU stages remain unexecuted locally.
 
 After the final normalizer-factory adjustment, Python3.9 and3.12 each passed38
-affected production scheduler/identity/dispatch cases. A fresh full pinned-source
-run is in progress at the implementation commit; the delivery commit records its
-actual completion and pins the execution object, without changing execution code.
+affected production scheduler/identity/dispatch cases. The final source's full pinned-source run completed2556 passed/3 existing skips
+in349.15s. The delivery commit pins execution
+`d007dce448bd2a7d510172222ae166d7bb6f299e`, without changing execution code.
+Pinned entry/runbook first-error/single-archive regression:15 passed. Git object
+checks confirm this exact execution SHA contains the runner, normalizer path and
+strict resident diagnostic gate, with the original three-mode budgets.
+The implementation's push/PR CI source contracts and Python3.11 contracts have
+reported SUCCESS; Python3.9/3.12 full jobs are still running at this documentation
+snapshot. Delivery CI is reported separately after its normal push, not assumed PASS.

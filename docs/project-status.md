@@ -31,13 +31,15 @@ claims.
 
 ### PR #5 — K3 resident 调度规范化（2026-09-14）
 
+- 执行SHA `d007dce448bd2a7d510172222ae166d7bb6f299e`；后续固定入口提交只绑定此SHA和更新交付文档，执行源码不变。
+
 - 从干净PR HEAD `8b8a2d5fb9ca16f35756429feb19214d544520d6` 继续，保留基线执行 `8a3aca007fb60f9f67d1dcb7bedb5f8b78b8602e` 和后续入口。Draft、不合并、只普通推送，不改其他PR/历史结果。
 - 复用082831Z-1891总包的145逻辑文件核验与原生关联；三点52.54/75.72/79.70 tok/s和原PASS保留。独立[基线派生](k3-resident-8a3aca-observations.json)标明来源和缺少旧resident子阶段，不把34.6ms全部归因于token转换。
 - 只消除同次调用中的重复整行int/tuple规范化。K3私有不可变输入构造器遍历当前完整token行一次，bound/full matching复用本次数据；完整当前prompt比较、生成后缀转换、双向绑定/历史/别名/歧义拒绝均保留。旧普通sequence接口保持原路径。三个K3模式一致启用，不缓存前缀、KV、版本或decision。
 - 两次完整resident快照/block审计、live KV、全部admission记录和buffer策略保留。六个有界子span分开binding/readiness/decisions/真实stock调用/initial finish/record append，计数live行、规范化行、token访问和记录数；原stock_schedule为包装层inclusive，嵌套子耗时不重复相加。
 - 新诊断报告同时给window/steps、engine-step与外围时间、重叠轮数、恢复物理区间并集分母与其他请求TP覆盖比例；缺证据仍null/INCOMPLETE。OBSERVED只表明非零，不宣称充分隐藏。全部必要原始记录在一个去重总包，沿用首错停止和唯一UPLOAD ONLY。
 - `post_prepost()`、promotion READY发布时间、Serial idle gate、A/B claim/反馈/fence/调度策略均不变；READY提前发布仅为后续候选。真正K3/no-bonus、容量3→4与eager6、active16/home8+8/ceiling8、resident360、workload/模型/seed/设备/预算不变。
-- 结构性回归在旧路径确认失败；带pinned源码全量2556 passed/3既有skip，3.9/3.12相关各341项通过，最终factory微调后各38项通过；最终源全量复核与CI在固定入口交付记录更新。既有8b8a2d5远端两次CI运行均SUCCESS，不代表本次CI。
+- 结构性回归在旧路径确认失败；带pinned源码全量2556 passed/3既有skip，3.9/3.12相关各341项通过，最终factory微调后各38项通过；最终源全量复核2556 passed/3既有skip，固定入口15项通过，Ruff/3版本compileall/369文件3.9语法/21个Bash/diff通过。执行提交CI的source与3.11契约已SUCCESS，3.9/3.12全量job在此文档快照仍运行；交付时单独报告最新CI。既有8b8a2d5远端两次CI运行均SUCCESS，不代表本次CI。
 - 新GPU correctness、cross-request恢复覆盖、native overlap、performance **PENDING**。不连接AutoDL。完成固定三模式入口后停止，等待唯一服务器总包。[设计](k3-design.md)、[验证](k3-validation.md)、[runbook](k3-runbook.md)。
 
 ### PR #5 — K3 Target dispatch 重复 prompt digest（2026-09-14）
