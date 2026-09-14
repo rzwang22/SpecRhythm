@@ -15,6 +15,13 @@ class PingPrePostScheduler(FixedBatch, S2SerialScheduler):
         self.pp_consumed = set()
         self.selected_cohort = "A"
 
+    def physical_rows(self):
+        if os.environ.get("SR_S2_MODE", "").endswith("-k3"):
+            from specrhythm.serving.k3_prompt_proof import physical_rows
+
+            return physical_rows(self)
+        return super().physical_rows()
+
     def schedule(self, *args, **kwargs):
         packet = control()
         admission = packet.get("pp_admission", {})

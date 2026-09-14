@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 from dataclasses import replace
 
+from specrhythm.continuation.trace import TRACE
 from specrhythm.phase4.admissibility import ExecutionPhase, ScheduledOperation
 from specrhythm.phase4.resident_scheduler import ResidentSetupScheduler
 from specrhythm.phase4.serial import Proposal
@@ -42,9 +43,11 @@ class PoolScheduler:
         self.s2_control = control()
         timed = self.s2_control["barrier_ns"] is not None
         if timed:
-            self.s2_pool.check(self.physical_rows(), self.s2_control["requests"])
+            with TRACE.span("target_pool_pre_schedule"):
+                self.s2_pool.check(self.physical_rows(), self.s2_control["requests"])
         before = {i: int(r.num_computed_tokens) for i, r in self.requests.items()}
-        output = super().schedule(*args, **kwargs)
+        with TRACE.span("target_resident_stock_schedule"):
+            output = super().schedule(*args, **kwargs)
         if timed:
             require(not output.preempted_req_ids, "S2 Target preemption would destroy resident KV")
             ids = [self._identity().stable_id(str(i)) for i in output.num_scheduled_tokens]
@@ -60,7 +63,8 @@ class PoolScheduler:
                     "S2 timed Target attempted prefix prefill",
                     request_id=str(i),
                 )
-            self.s2_pool.check(self.physical_rows(), states)
+            with TRACE.span("target_pool_post_schedule"):
+                self.s2_pool.check(self.physical_rows(), states)
             self.s2_steps.append(
                 {
                     "timestamp_ns": time.monotonic_ns(),

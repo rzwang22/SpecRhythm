@@ -137,3 +137,68 @@ with the3.9 grammar,21 tracked Bash scripts, and git diff whitespace checks pass
 Only environment setup changed between the identified import/PATH failures and
 revalidation; no assertion or timeout was relaxed. New GPU capacity, joint correctness,
 cleanup, native overlap and performance remain operator gates, all PENDING.
+
+
+## Dispatch follow-up against successful 778d K3 run (2026-09-14)
+
+Continued from clean a5cdcf9f6e81cc9975321e37fc6100a143fa607d; the778d capacity
+fix and owner status snapshot remain. All145 logical files in062632Z-1634 were
+resolved through inventory.logical_paths and checked for bytes/SHA256. Export COMPLETE,
+first code0, no missing records; all three original capacity/execution/measurement/
+cleanup and shared joint outputs PASS. Single-window rates46.5544/67.6436/71.3875
+remain valid, not a repeatability claim. Request/native rejoining reproduces zero
+ordinary/recovery cross-request overlap and6860.926–6904.569ms parent-eager overlap.
+Old reports and archives were not rewritten. The new derivative is explicitly
+labelled offline analysis and retains source object hashes/indices.
+
+The remaining known bottleneck is Target scheduler's two repeated resident prompt
+normalization/JSON/digest passes. Source and111 ordinary measured dispatches place
+84.087ms in scheduler within99.055ms claim→Target. Inclusive prefix/block-record
+work accounts for37.945ms; full block auditing7.911ms. Other scheduler work remains
+38.231ms, and14.969ms lies outside scheduler. Those are same-lane boundary differences,
+not a sum with Draft/TP/RPC/wait times. Neither the necessary admission fence nor a
+fast mailbox-only verify-start ACK waits for the other request's complete proposal.
+The detailed A/version2 rejection → correction/seed → two extensions → A/version3
+READY and B claim/Target timeline is in k3-pipeline-778d-observations.json.
+
+The new production-chain regression substitutes only hardware/transport boundaries:
+real proposer factory, controller, authoritative owner, actual resident/FixedBatch/
+Ping scheduler and verify-start/end adapter. A mixed acceptance/rejection batch
+recovers K3 while B is dispatched; both Target/Draft completion orders and eager
+on/off are event-controlled. Existing complete-output, EOS, budget, refill, repeated
+rejection, stale/duplicate claim/feedback, ownership and drain suites remain enabled.
+Both real full pool audits must still execute, with no repeat prompt digest. Restoring
+the old PoolScheduler physical_rows method in the same regression yields4 failures
+at that structural assertion, not a wall-time threshold. Its execution interleaving
+assertions themselves still pass with held GPU work: this rules out inventing an
+old whole-proposal wait. Earlier owner-only regressions missed post-claim CPU work.
+
+New report regressions collect actual owner/backend records, attach explicitly
+synthetic native GPU endpoints, run strict joins, serialize/export/re-read and obtain
+the same results. Missing/duplicated TP rank, missing native request IDs or clock,
+wrong proposal/version and Draft parent dependency all make integrity INCOMPLETE and
+overlap null. An other-request interval in the same home remains cross-request,
+not cross-home; duplicate TP intervals do not double its union. Bounded prompt-proof
+spans record real setup/measurement scopes; mutated prompts/types/frontiers/blocks
+and resident disappearance remain rejected. Existing run→report→qualify→archive
+capacity/correctness/performance regressions still cover all three K3 modes.
+
+Development failures: the new fixture initially used the wrong eager constructor
+keyword and work-step helper, and held only the pure extension purpose, missing a
+real mixed eager/recovery batch. It now drives the actual interfaces and both physical
+purposes. A compatibility command initially named a nonexistent report-test file
+(collection exit4, no executed tests); the real device-contract selection replaced
+that filename. None required assertion/timeout relaxation or protocol changes.
+Fixture logging now uses its absolute temporary point path instead of writing test
+receipts in the checkout. No production logging behavior changed.
+
+Full local suite:2535 passed,3 existing platform/GPU skips. The final owner-vs-Target
+claim and transport landmark additions then passed27 targeted regressions; both
+Python3.9/3.12 passed269 relevant cases and their final27-case selection. Ruff,
+compileall on3.9/3.11/3.12,364 Python files parsed as3.9,21 Bash scripts and whitespace
+checks pass. The new implementation's remote CI is queried after the ordinary push;
+the baseline a5cdcf9's eight checks were all SUCCESS. Separate final CI status is
+reported at delivery, never inferred from local or baseline success.
+New GPU correctness, cross-request pipeline, native overlap and performance are
+PENDING. The same fixed three-mode foreground runner and single verified archive
+remain the next gate; it does not retry or extend the experiment.

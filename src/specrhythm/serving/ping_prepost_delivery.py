@@ -138,7 +138,9 @@ def comparison(directory, *, modes=MODES):
                     "outcomes", "generated", "retained", "discarded",
                     "ready_to_admission_ms", "feedback_to_ready_ms")}
             points[-1]["pipeline"] = {k: v for k, v in r["pingpong"].get("pipeline", {}).items()
-                                       if k not in ("timeline",)}
+                                       if k not in ("timeline", "rejection_cycle", "dispatch")}
+            points[-1]['dispatch'] = {k: v for k, v in
+                r['pingpong'].get('pipeline', {}).get('dispatch', {}).items() if k != 'rows'}
     matched = len(reports) == len(modes) and all(
         reports[0][k] == r[k] for r in reports[1:]
         for k in ("source_commit", "options", "workload_sha256")

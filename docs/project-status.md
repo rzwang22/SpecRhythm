@@ -29,6 +29,16 @@ claims.
 
 ## Pull request progress
 
+### PR #5 — K3 Target dispatch 重复 prompt digest（2026-09-14）
+
+- 从干净 `a5cdcf9f6e81cc9975321e37fc6100a143fa607d` 继续，保留778d容量、异常清理及owner信息快照；Draft不合并，不改其他PR或历史结果。
+- 只读核验062632Z-1634总包145逻辑文件大小/SHA256。三容量、联合输出、execution/measurement/cleanup通过；46.55/67.64/71.39单窗口结果保留。跨请求普通/恢复原生重叠均0；eager父轮重叠6860.926–6904.569ms；不宣称稳定收益。
+- 普通PingPong的111轮claim→Target平均99.055ms，其中scheduler84.087ms、内部prefix/block-record37.945ms和独立完整block audit7.911ms。剩余scheduler38.231ms、scheduler外14.969ms保留未细分；不与RPC/跨进程/GPU时间相加。首段B已claim且A尚未恢复完成，之后Target CPU双快照/hash消耗重叠机会；没有证据表明verify-start等待A整份proposal。状态查询已快，enqueue只等mailbox ACK，单token必要fence保留。
+- 三个显式K3模式共用不可变prompt digest证明：每次仍比对完整当前prompt/整数类型/绑定，读取live frontier和block并执行前后两次完整ResidentPoolAudit；移除的是重复规范化/JSON/hash，不是KV审计或当前请求检查。变更/结束/移除时拒绝或退役证明，不缓存control/claim/KV。旧模式路径、K3候选与容量、Serial有意idle gate、A/B策略、反馈和日志缓冲均保持。
+- 实际controller→owner→scheduler→verify adapter四个受控顺序证明B进入执行时A仍有未完成扩展，A可在B验证中READY；恢复旧快照实现四项结构断言失败。不是CPU模拟GPU overlap。原测试止于owner/claim，漏过Target后续双全池hash。
+- 新有界三段scheduler span与prompt-proof计数；原生forward先绑定request/proposal/version/TP rank再分home，独立报告跨请求普通/恢复、父轮eager和未覆盖Draft区间。记录物理完成与实际READY发布两种时刻；GPU空闲不等于CPU dispatch空闲。缺关联仍INCOMPLETE/null。拒绝周期最多128行；比较只嵌入汇总，单包保留原始证据。
+- 本地全量pytest **2535 passed / 3既有skip**；最后证据绑定补充后定向27项通过，Python3.9/3.12相关各269项及最终27项通过。Ruff、3.9/3.11/3.12 compileall、364文件3.9语法、21个Bash和diff通过。参考a5cdcf9远端8个检查SUCCESS，新提交CI在普通推送后查询。新GPU correctness、cross-request pipeline、native overlap、performance **PENDING**；[设计](k3-design.md)、[验证](k3-validation.md)、[只读原始时间线派生](k3-pipeline-778d-observations.json)、[固定入口](k3-runbook.md)。不连接AutoDL；完成后等待用户唯一总包。
+
 ### PR #5 — K3 容量预留与初始化异常清理（2026-09-14）
 
 - 本轮实现 SHA `778d87b5b6fd312ae376d468d356396a7b93b891`；后续固定入口只绑定此实现、更新runbook，不变更执行源码。固定后入口15项通过，已用git对象检查该SHA含执行脚本、静态容量接口、预留与清理修复；新CI状态交付时查询。

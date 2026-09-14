@@ -3,6 +3,7 @@
 from collections import Counter, defaultdict
 
 from specrhythm.serving.eager_evidence_export import bounds, duration, intersect
+from specrhythm.serving.k3_dispatch_evidence import dispatch, rejection_timeline, target_groups
 
 
 def pipeline(runtime, backend):
@@ -21,6 +22,18 @@ def pipeline(runtime, backend):
     native = backend["fixed_device"]["forwards"]
     targets = [g for d in runtime["target_devices"] for g in d["device"]["forwards"]]
     groups, pairs, timeline, errors = defaultdict(dict), defaultdict(list), [], []
+    target_batches = target_groups(runtime, errors)
+    for batch in target_batches:
+        for key, c in batch["claims"].items():
+            owner = claim_map.get((key, c["prefix_version"]), {})
+            if any(
+                owner.get(k) != c[k]
+                for k in ("request_id", "prefix_version", "proposal_id", "claim_id")
+            ):
+                errors.append(
+                    "Target claim differs from authoritative owner: step " + str(batch["index"])
+                )
+    request_pairs, parent_pairs, draft_rows = defaultdict(list), [], []
     first_rows, preceding, captured_recovery = [], [], False
     for index, f in enumerate(backend["prepost_physical"]["forwards"]):
         if not start <= f["start_ns"] <= end:
@@ -49,10 +62,35 @@ def pipeline(runtime, backend):
                 if parent.get("correction")
                 else "ordinary_draft"
             )
+            parent_version = version - int(kind == "normal_extension")
+            if (
+                rid not in homes
+                or (
+                    kind in ("lookahead", "post", "repair")
+                    or (kind == "normal_extension" and version > 0)
+                )
+                and ((rid, parent_version) not in claim_map)
+            ):
+                errors.append(
+                    "Draft request/parent proposal dependency missing: physical index "
+                    + str(index)
+                )
+            if kind == "lookahead" and (
+                not binding.get("continuation_id")
+                or binding["continuation_id"] != parent.get("continuation_id")
+            ):
+                errors.append(
+                    "Draft continuation/settled parent mismatch: physical index " + str(index)
+                )
             groups[role][ni] = g
             row = dict(
                 request_id=rid,
                 prefix_version=version,
+                version_scope="work round; normal_extension uses next proposal version; "
+                "post/lookahead use parent version",
+                produces_prefix_version=(
+                    version + 1 if kind in ("lookahead", "post") else version
+                ),
                 home_cohort=homes.get(rid),
                 role=role,
                 physical_record_index=index,
@@ -69,7 +107,13 @@ def pipeline(runtime, backend):
                 feedback_ns=parent.get("feedback_ns"),
                 host_start_ns=f["start_ns"],
                 host_end_ns=f["end_ns"],
+                native_bounds={
+                    k: g[k]
+                    for k in ("start_lower_ns", "start_upper_ns", "end_lower_ns", "end_upper_ns")
+                    if k in g
+                },
             )
+            draft_rows.append(row)
             if len(first_rows) < 128:
                 first_rows.append(row)
             if role == "rejection_recovery" and not captured_recovery:
@@ -78,14 +122,21 @@ def pipeline(runtime, backend):
             if captured_recovery and len(timeline) < 128:
                 timeline.append(row)
             preceding = (preceding + [row])[-16:]
-            for s in runtime["target_steps"]:
-                claims = s.get("ping_admission", {}).get("claims", [])
-                if not claims or homes.get(rid) not in ("A", "B"):
-                    continue
-                if any(c["home_cohort"] == homes[rid] for c in claims):
-                    continue  # Strict other-home interval, not just same-device overlap.
-                tg = [t for t in targets if s["start_ns"] <= t["host_start_ns"] <= s["end_ns"]]
-                pairs[role].append((g, tg))
+            for batch in target_batches:
+                claims, tg = batch["claims"], batch["native"]
+                if rid not in claims:
+                    request_pairs[role].append((g, tg))
+                    if homes.get(rid) in ("A", "B") and any(
+                        c["home_cohort"] != homes[rid] for c in claims.values()
+                    ):
+                        pairs[role].append((g, tg))
+                elif role == "eager_lookahead":
+                    c = claims[rid]
+                    if (
+                        c["prefix_version"] == version
+                        and c["proposal_id"] == row["parent_proposal_id"]
+                    ):
+                        parent_pairs.append((g, tg))
     complete = (
         bool(native and targets)
         and not errors
@@ -97,21 +148,14 @@ def pipeline(runtime, backend):
     )
     if not complete and not errors:
         errors.append("native Draft/Target intervals absent or bounds missing")
-    overlap, uncovered, costs = {}, {}, {}
-    for role in ("ordinary_draft", "rejection_recovery", "eager_lookahead", "KV_repair"):
-        rows = list(groups[role].values())
-        costs[role] = dict(
-            forward_count=len(rows),
-            B_histogram=dict(Counter(str(r["B"]) for r in rows)),
-            GPU_event_sum_ms=sum(r["gpu_event_ms"] for r in rows),
-            count_scope="physical batch participating in role; mixed roles not additive",
-        )
-        overlap[role] = (
+
+    def union_overlap(joined):
+        return (
             {
                 side: duration(
                     [
                         interval
-                        for g, tg in pairs[role]
+                        for g, tg in joined
                         for interval in intersect(
                             bounds([g], start, end, inner), bounds(tg, start, end, inner)
                         )
@@ -122,32 +166,37 @@ def pipeline(runtime, backend):
             if complete
             else None
         )
-        if role == "rejection_recovery":
-            # Union difference bounds, not subtraction from throughput or from inclusive spans.
-            uncovered[role] = (
-                dict(
-                    lower_ms=max(
-                        0,
-                        duration(bounds(rows, start, end, True))
-                        - duration(
-                            intersect(
-                                bounds(rows, start, end, True), bounds(targets, start, end, False)
-                            )
-                        ),
-                    ),
-                    upper_ms=max(
-                        0,
-                        duration(bounds(rows, start, end, False))
-                        - duration(
-                            intersect(
-                                bounds(rows, start, end, False), bounds(targets, start, end, True)
-                            )
-                        ),
+
+    def not_hidden(rows):
+        return (
+            {
+                side: max(
+                    0,
+                    duration(bounds(rows, start, end, inner))
+                    - duration(
+                        intersect(
+                            bounds(rows, start, end, inner), bounds(targets, start, end, not inner)
+                        )
                     ),
                 )
-                if complete
-                else None
-            )
+                for side, inner in (("lower_ms", True), ("upper_ms", False))
+            }
+            if complete
+            else None
+        )
+
+    overlap, uncovered, costs = {}, {}, {}
+    for role in ("ordinary_draft", "rejection_recovery", "eager_lookahead", "KV_repair"):
+        rows = list(groups[role].values())
+        costs[role] = dict(
+            forward_count=len(rows),
+            B_histogram=dict(Counter(str(r["B"]) for r in rows)),
+            GPU_event_sum_ms=sum(r["gpu_event_ms"] for r in rows),
+            count_scope="physical batch participating in role; mixed roles not additive",
+        )
+        overlap[role] = union_overlap(pairs[role])
+        if role == "rejection_recovery":
+            uncovered[role] = not_hidden(rows)
     polls = [e for e in events if e["event"] == "admission" and start <= e["timestamp_ns"] <= end]
     pending = [r for e in polls for r in e.get("waiting_inventory", [])]
     observed = any(
@@ -158,8 +207,30 @@ def pipeline(runtime, backend):
     return dict(
         evidence_integrity="COMPLETE" if complete else "INCOMPLETE",
         errors=errors,
-        cross_cohort_pipeline_behavior="OBSERVED" if observed else "NOT_DEMONSTRATED",
+        cross_cohort_pipeline_behavior=(
+            "INCOMPLETE" if not complete else "OBSERVED" if observed else "NOT_DEMONSTRATED"
+        ),
+        cross_request_pipeline_behavior=(
+            "INCOMPLETE"
+            if not complete
+            else "OBSERVED"
+            if any(
+                union_overlap(request_pairs[role])["lower_ms"] > 0
+                for role in ("ordinary_draft", "rejection_recovery")
+            )
+            else "NOT_DEMONSTRATED"
+        ),
         cross_home_native_overlap=overlap,
+        cross_request_native_overlap={
+            r: union_overlap(v) for r, v in ((role, request_pairs[role]) for role in costs)
+        },
+        parent_eager_native_overlap=union_overlap(parent_pairs),
+        all_Draft_GPU_union_not_hidden_by_any_Target=not_hidden(native),
+        association="native internal IDs -> scheduler stable IDs -> authoritative claim "
+        "proposal/version; Draft physical binding and parent dependency; then home; "
+        "mixed physical batches participate in multiple roles, never additive",
+        dispatch=dispatch(runtime, target_batches, events),
+        rejection_cycle=rejection_timeline(runtime, backend, target_batches, draft_rows),
         per_role_forwards=costs,
         recovery_GPU_union_not_hidden_by_any_Target=uncovered,
         wait_reasons=dict(Counter(r["reason"] for r in pending)),

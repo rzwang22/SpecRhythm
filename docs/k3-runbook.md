@@ -1,7 +1,10 @@
 # Unified K3: three fixed runtime points, one upload
 
 This is an explicit new protocol, not a reinterpretation of old P1/P4 or Serial/B16
-results. GPU output correctness, pipeline/native overlap and performance are PENDING.
+results. The returned778d run passed capacity/joint output/execution/measurement/cleanup,
+but normal/recovery cross-request native overlap remained zero. This follow-up changes
+only repeated Target immutable-prompt digest work and offline dispatch evidence; new
+GPU output correctness, pipeline/native overlap and performance remain PENDING.
 Only the operator runs GPUs. The implementation and token/forward accounting are in
 [k3-design.md](k3-design.md).
 
@@ -55,18 +58,40 @@ Read each point's `pingpong.cycles` for actual P lengths, short reasons, batches
 committed tokens, feedback→READY, READY→admission, admission→native Target, and work
 reuse/discard. `pingpong.pipeline` separates physical normal/recovery/lookahead/KV
 forwards, B histograms and GPU sums. Mixed-role forwards participate in each role;
-those role sums must not be added. Native cross-home overlap uses interval unions.
+those role sums must not be added. Native associations first verify actual request/proposal/version and TP identity, then
+classify other-request and other-home work. `cross_request_native_overlap` separates
+ordinary and rejection recovery from `parent_eager_native_overlap`. These are interval
+unions, not sums of per-request or TP event times.
 Recovery GPU union outside any Target is bounded separately; it is not subtracted
 from throughput. Full-step wall distributions and outside-step time remain reported.
 
-The bounded example timeline starts16 rows before the first measured recovery,
+`pipeline.dispatch` reports actual owner READY publication→claim, claim→native Target,
+pre-pool/stock-resident/post-pool phase spans, hash/proof counts, and GPU-idle intervals
+while subsequently claimed READY work exists. The original `ready_ns` is physical
+proposal completion; the actual publication timestamp is separately named. A GPU-idle
+interval is not proof that CPU sampling or Target dispatch was already available.
+Scheduler child spans are nested; unknown fields remain null. Proof policy
+`k3-current-prompt-proof.v1` records live row count, newly hashed prompts, reused
+immutable digests and current tokens compared. Both full live block checks remain.
+
+`pipeline.rejection_cycle` adds READY/publication/claim, both native TP forwards,
+validated owner feedback, physical ordinary/recovery work and next READY (at most128
+rows). Target/Draft forward IDs name original producer array indices with rank,
+request/proposal versions and calibrated bounds. Comparison embeds only aggregates;
+point reports hold detailed rows once, and the projected raw records remain complete.
+Its missing/omitted counts are explicit; the previous compact Draft timeline is
+retained for compatibility. That bounded example timeline starts16 rows before the first measured recovery,
 retains up to128 rows, and reports omissions. Its forward IDs explicitly name array
 indices in the original producer (not invented hardware event IDs); raw phased
 records retain all request/proposal/version joins. No recorded recovery is labelled
 NO_RECORDED_RECOVERY, not fabricated. A zero-overlap point must be read with owner
 waiting_inventory, ready_inventory and raw coordinator/owner spans. Output correctness,
 execution/measurement/cleanup, evidence integrity, cross-cohort pipeline, native overlap
-and performance are separate conclusions. First single windows cannot establish small
+and performance are separate conclusions. `cross_request_pipeline_behavior` remains
+NOT_DEMONSTRATED if only same-parent eager overlaps; INCOMPLETE native evidence is not
+zero. If the new ordinary point still has zero overlap, inspect READY eligibility,
+one-step admission wait and the three scheduler phases before proposing another
+change. Do not relabel it achieved based on throughput. First single windows cannot establish small
 stable speedup; a later authorized repeat can use a fresh SR_PING_RUN_TAG.
 
 ## Foreground command

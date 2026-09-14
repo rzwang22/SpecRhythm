@@ -165,3 +165,130 @@ also remain supervisor-managed. These limits are explicit in startup-cleanup.jso
 actual descendant exit, no stale owner/socket, and final cleanup qualification still
 require new server evidence. The original capacity exception remains the command's
 first failure even when shutdown or recording fails.
+
+## K3 dispatch follow-up: verified 778d run (2026-09-14)
+
+The preceding status-RPC diagnosis concerns c0ecc2a/P1-P4. It is **not** the cause
+of the remaining K3 zero overlap after the owner snapshot fix. The returned
+`pingpong-k3-delivery-20260914T062632Z-1634.tar.gz` verifies all145 logical objects,
+capacity, joint outputs, execution, measurement and cleanup. Its original status and
+46.55 / 67.64 / 71.39 tok/s single windows remain unchanged. Native joins confirm
+ordinary/recovery cross-request overlap0 in all modes; eager/parent overlap is
+6860.925561–6904.568683ms. These observations do not establish stable speedup.
+
+[Read-only derivative with source hashes, request/proposal versions and original
+forward indices](k3-pipeline-778d-observations.json) contains the first rejection
+cycle and aggregate dispatch decomposition. In ordinary PingPong, all111 measured
+claim→Target intervals average99.055ms; scheduler accounts for84.087ms. Its inclusive
+`prefix_hash_and_block_record` intervals occupy37.945ms and the separate full block
+checks7.911ms. About38.231ms inside scheduler remains outside those two categories,
+and14.969ms of dispatch lies outside scheduler. The prefix category includes token
+validation, JSON encoding, digest and block-record construction: it is not a pure
+hash benchmark. JSON spans nest inside it. These per-lane quantities neither include
+all wall time nor imply that removing37.945ms would yield a specified throughput.
+The old run lacks finer scheduler phase spans; missing fields remain null.
+
+The first measured A→B cycle, relative to A rank0 start lower bound
+7758704266688304ns, illustrates the actual ordering:
+
+| Actual boundary | Relative ms | Source / interpretation |
+| --- | ---: | --- |
+| A Target native interval | 0–77.100 | TP0; TP1 separately retained |
+| A result available | 117.366 | Target rank0 feedback hook |
+| A feedback RPC | 118.583–121.057 | inclusive RPC, not added to owner work |
+| Owner processes A feedback | 119.201–120.714 | `pp_feedback` dispatch |
+| A public Draft repair/seed | 125.656–158.055 | native interval |
+| Two coordinator status RPCs | 129.383–129.661;130.167–130.378 | snapshot reads, already fast |
+| B admission RPC / owner dequeue | 130.780–166.000 /164.414 | waits for current fenced token only |
+| B authoritative claim | about164.450 | B was already READY |
+| A two extensions | 169.585–199.492;205.828–228.258 | native intervals |
+| B scheduler | 175.326–255.991 | full resident snapshot/check twice |
+| B eager-registration RPC | 260.466–260.974 | mailbox ACK,0.508ms |
+| B Target native interval | 260.188–339.069 | calibrated native bounds |
+
+The native CUDA anchor has uncertainty; the projected lower GPU endpoint may slightly
+precede the host hook. It does not establish GPU execution before the enqueue barrier.
+The complete IDs/versions and both native endpoint bounds are in the derivative.
+A's version2 proposal `sr-c6fd4c5bc623ca136c924dbe915c49c1837c97e1e42c6e9a1236021c9819828e:prepost:2`
+rejects after one accepted candidate. Its correction and two extensions produce
+version3 READY; B has entered its own claim while that recovery remains in progress.
+The scheduler subsequently consumes the available overlap opportunity on CPU.
+
+Source conclusions:
+
+| Path | Actual dependency | Treatment |
+| --- | --- | --- |
+| `fixed_runtime.drive` → `K3Owner.status` | informational population copy | Existing snapshot retained; no new wait-idle in PingPong |
+| `PingPrePostController.select` → `pp_admit` | authoritative once-only claim at current Draft write fence | Retained; no unfenced backend access |
+| `PoolScheduler.schedule` → `physical_rows` → `ResidentPoolAudit.check` twice | all live KV/frontier/ownership; repeated immutable prompt digest | Reuse only validated immutable prompt digest |
+| `PingPrePostProposer.on_target_verify_start` | this claim's prefix/version/candidates | Retained; no wait for another request's full proposal |
+| `EagerSerialProposer` → `EagerOwner.call(eager_enqueue)` | bounded mailbox acceptance, TP ACK barrier | Already nonblocking with respect to Draft execution; not split again |
+| `EagerOwner._run` → `machine.step` | single token step, then queued control/feedback first | Retained; no concurrent backend thread |
+| `fixed_runtime.drive` Serial `k3_idle` | deliberate all-Draft idle gate | Serial comparison retains serial execution |
+
+There is no evidence that the B verify-start callback waits for all A recovery,
+that eager registration waits for GPU start, or that a global PingPong idle gate
+causes this run. The confirmed repeated work is in Target's dispatch path. Other
+resident scheduling, serialization, sampling and worker launch costs remain; no
+unmeasured residual is assigned to GIL, RPC or fence.
+
+### Narrow execution change and proof invalidation
+
+`PingPrePostScheduler.physical_rows` selects `k3_prompt_proof` only for the three
+explicit K3 modes. First observation records `(internal ID, immutable token tuple,
+validated digest)`. Every subsequent observation compares the **entire current
+prompt**, exact integer types and internal identity, then reads the **current**
+materialized frontier and every current block list. It does not cache rows, KV,
+allocator ownership, decisions, control files or a permanent checks-passed flag.
+Changed prompt/binding fails; finished/removed handles evict the proof. New handles
+hash again. Both full `ResidentPoolAudit.check` calls remain synchronous: private
+block uniqueness, cross-request conflicts, initial prefix retention, resident states,
+frontier and peak/check counters retain their original behavior. Frozen/control
+identity checks still run. New CPU negatives reject corrupt prompt, bool/float token,
+duplicate blocks, missing/evicted resident and invalid frontier.
+
+This removes repeated normalization-list/JSON/hash work for immutable prompts. It
+**does not remove the all-pool KV scans**, change audit mode, batch size, sampling,
+logging buffer or protocol. The common optimization applies equally to all three K3
+modes. Serial's scheduling policy is unchanged; paired Serial must be remeasured.
+Old non-K3 modes use the old snapshot producer. K3 demand3/reserve4 and eager Draft6,
+initialization cleanup and strict report/device contracts remain unchanged.
+
+### Observability and CPU proof boundaries
+
+Bounded causal spans now cover Target pre-schedule pool work, stock resident
+scheduling and post-schedule pool work. Each snapshot records proof policy v1,
+resident count, new hashes, reused proofs and current tokens compared. No disk write,
+GPU query, fence, observer lock or extra control read is added by these spans.
+
+`k3_evidence` first binds each Target native forward's internal request IDs to the
+actual scheduler rows, then to claim proposal/version and both TP ranks. Draft
+physical records bind native forwards, request/work versions and parent claims.
+Only then are cross-request roles and homes classified. Mixed physical batches can
+participate in more than one role; role event sums and overlaps are not additive.
+Parent-eager, cross-request normal/recovery, cross-home and Draft union outside every
+Target are reported separately. Missing native/request/parent/rank evidence makes
+integrity INCOMPLETE and overlap null, never zero.
+
+`pipeline.dispatch` retains actual READY publication as well as the earlier physical
+proposal completion, per-claim scheduler boundaries, native starts and phase spans.
+GPU-idle time while a subsequently claimed proposal is READY does not prove the CPU
+sampler/dispatcher is free. The bounded rejection example includes READY, publication,
+claim, TP forwards, validated owner feedback, ordinary/recovery forwards and next
+READY. Host timestamps and calibrated CUDA bounds remain separate. Detailed rows
+appear once in the point report; comparison JSON embeds only aggregates. Raw bounded
+producer records remain available for rejoining; caps and missing-row checks stay.
+
+The new event-coordinated regression runs actual controller, owner, scheduler and
+verify-start/end adapters with a controllable Draft worker and CPU Target boundary.
+B reaches execution while A's second extension is deliberately held; A then reaches
+READY during B verification, or after a faster B, depending on the tested order.
+No sleep or elapsed-time threshold proves it. Restoring the old snapshot producer
+fails all four variants at the duplicate-hash structural assertion, while the
+interleaving assertion itself also passes on the old producer when GPU work is held.
+This distinction matters: there was a CPU dispatch bottleneck, not an unobserved
+whole-proposal wait. Earlier tests stopped at claim/owner and missed that bottleneck.
+The regression proves safe interleaving, not native GPU overlap or speedup. New GPU
+cross-request pipeline, native overlap and performance remain **PENDING**. A returned
+zero-overlap run must remain NOT_DEMONSTRATED and be explained from its actual
+READY/claim/phase/forward sequence, even if throughput rises.

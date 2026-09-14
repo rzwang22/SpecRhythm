@@ -55,6 +55,7 @@ def collected(eager=True):
         run_work(m)
         target_native.append(
             dict(
+                internal_request_ids=[c["request_id"] for c in claims],
                 host_start_ns=start,
                 start_lower_ns=start,
                 start_upper_ns=start,
