@@ -31,6 +31,8 @@ claims.
 
 ### PR #5 — K3 容量预留与初始化异常清理（2026-09-14）
 
+- 本轮实现 SHA `778d87b5b6fd312ae376d468d356396a7b93b891`；后续固定入口只绑定此实现、更新runbook，不变更执行源码。固定后入口15项通过，已用git对象检查该SHA含执行脚本、静态容量接口、预留与清理修复；新CI状态交付时查询。
+
 - 从干净 `4206ff53a2346f29be599257fd05ae001d73633c` 继续；此前实现和 owner 信息快照优化保留。参考入口的实际 CI 全部 SUCCESS；本轮 CI 单独查询。
 - 只读核验 `051537Z-2351` 总包17逻辑文件大小/SHA256。真实首错是 Target 初始化后 `fixed_runtime.run → capacity_for(speculative_tokens=3)` 与旧 minimum4 冲突；不是 OOM 或输出错误。旧 capacity UNKNOWN / execution FAILED / measurement INVALID / cleanup FAILED / performance PENDING 保留，其他点未开始。
 - 显式拆分候选3、需求3/6、旧最小预留4和最终预留4/6；实际 Target K=3。block计算使用最终预留，extra为0/2。KV 生命周期核查覆盖当前P3、lookahead3、末token未materialize和correction回退/catch-up；所有安全余量、workspace和resident logits不变。

@@ -71,7 +71,7 @@ stable speedup; a later authorized repeat can use a fresh SR_PING_RUN_TAG.
 
 ## Foreground command
 
-Execution SHA: `b2a2d29210d68357590a567d4819f3552175d179`. The delivery commit adds
+Execution SHA: `778d87b5b6fd312ae376d468d356396a7b93b891`. The delivery commit updates
 `scripts/run_k3_b16_pinned.sh` and this command; it does not change execution source.
 Never source a strict runner into the interactive shell. Default repository is
 `/root/autodl-tmp/src/SpecRhythm`, Python is
@@ -81,7 +81,7 @@ Never source a strict runner into the interactive shell. Default repository is
 ```bash
 if bash <<'SR_K3_CHILD'
 set -Eeuo pipefail
-FINAL_SHA=b2a2d29210d68357590a567d4819f3552175d179
+FINAL_SHA=778d87b5b6fd312ae376d468d356396a7b93b891
 REPO=/root/autodl-tmp/src/SpecRhythm
 git -C "$REPO" fetch origin codex/rolling-eager-v0.1
 git -C "$REPO" cat-file -e "${FINAL_SHA}^{commit}"
