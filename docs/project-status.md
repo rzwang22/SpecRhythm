@@ -31,6 +31,8 @@ claims.
 
 ### PR #5 — K3 Target dispatch 重复 prompt digest（2026-09-14）
 
+- 执行SHA `8a3aca007fb60f9f67d1dcb7bedb5f8b78b8602e`；随后固定入口提交只绑定此SHA并更新交付文档，不变更src执行代码。
+
 - 从干净 `a5cdcf9f6e81cc9975321e37fc6100a143fa607d` 继续，保留778d容量、异常清理及owner信息快照；Draft不合并，不改其他PR或历史结果。
 - 只读核验062632Z-1634总包145逻辑文件大小/SHA256。三容量、联合输出、execution/measurement/cleanup通过；46.55/67.64/71.39单窗口结果保留。跨请求普通/恢复原生重叠均0；eager父轮重叠6860.926–6904.569ms；不宣称稳定收益。
 - 普通PingPong的111轮claim→Target平均99.055ms，其中scheduler84.087ms、内部prefix/block-record37.945ms和独立完整block audit7.911ms。剩余scheduler38.231ms、scheduler外14.969ms保留未细分；不与RPC/跨进程/GPU时间相加。首段B已claim且A尚未恢复完成，之后Target CPU双快照/hash消耗重叠机会；没有证据表明verify-start等待A整份proposal。状态查询已快，enqueue只等mailbox ACK，单token必要fence保留。
