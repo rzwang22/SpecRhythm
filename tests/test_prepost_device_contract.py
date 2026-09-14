@@ -147,6 +147,7 @@ def produced(tmp_path, monkeypatch, hardware):
             worker.model_runner._bookkeeping_sync = lambda *a: None
             worker.model_runner.input_batch = NS(req_ids=[])
             worker.model_runner.kv_cache_config = NS(num_blocks=100000, kv_cache_groups=[object()])
+            worker.model_runner.attn_groups = [[NS(backend=NS(get_name=lambda: "CPU-fixture"))]]
             worker.vllm_config.cache_config.block_size = 16
             worker.vllm_config.model_config = NS(
                 enforce_eager=True,
@@ -234,6 +235,16 @@ def produced(tmp_path, monkeypatch, hardware):
             workload_sha256=manifest["workload_sha256"],
             point=point,
         )
+        if mode.endswith("-k3"):
+            from specrhythm.serving.fixed_plan import capacity_metadata
+            from specrhythm.serving.k3_capacity import SCHEMA, budgets, check
+
+            actual["ranks"][-1].update(free_memory_bytes=8 * 1024**3, vocab_size=151936)
+            actual.update(capacity_schema=SCHEMA, capacity_request_budgets=budgets(rows),
+                          metadata=capacity_metadata(mode, active_limit=16,
+                          resident_requirement=360, target_sequence_limit=512))
+            actual["checks"] = [check(rows, r, mode=mode, active_limit=16,
+                                      metadata=actual["metadata"]) for r in actual["ranks"]]
         backend = read_json(directory / "draft-backend-report.json")
         backend["fixed_device"] = dict(
             identity=dict(role="draft", physical_gpu_id=0, gpu_uuid="GPU-DRAFT"), forwards=[]

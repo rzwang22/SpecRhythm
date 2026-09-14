@@ -123,6 +123,7 @@ def retained_report(directory, report):
         ("measurement-snapshot.json", "measurement_snapshot"),
         ("drain-state.json", "drain"),
         ("diagnostic-secondary-errors.json", "cleanup_diagnostics"),
+        ("startup-cleanup.json", "startup_cleanup"),
     ):
         path = directory / filename
         if path.exists():

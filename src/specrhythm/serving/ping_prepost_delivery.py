@@ -50,6 +50,8 @@ NAMES = {
     "actual-capacity.json",
     "target-incremental-setup.json",
     "drain-state.json",
+    "startup-cleanup.json",
+    "k3-capacity-contract.json",
     "fixed-logging-coordinator.json",
     "fixed-logging-draft.json",
     "fixed-logging-target-rank-0.json",

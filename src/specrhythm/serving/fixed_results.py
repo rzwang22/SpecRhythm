@@ -297,6 +297,11 @@ def summarize(manifest_path, directory, point, *, probe=False):
     try:
         runtime = read_json(directory / "runtime.json")
         base["capacity"] = runtime["capacity"]
+        if point["mode"].endswith("-k3"):
+            from specrhythm.serving.k3_capacity import qualify as qualify_capacity
+
+            base["capacity_reservation_qualification"] = qualify_capacity(
+                read_json(directory / "actual-capacity.json"), point["mode"], definitions)
         from specrhythm.serving.device_contract import (
             PREPOST_MODES,
             qualify_prepost,

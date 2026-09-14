@@ -93,3 +93,75 @@ Serial explicitly waits for all finite Draft work before claiming the next ceili
 batch. PingPong removes only that Serial gate; both PingPong variants use the same
 home selection and informational status implementation. Eager only enables dependent
 continuations; it does not add promotion priority. No old mode's scheduling changes.
+
+## Capacity contract and startup failure cleanup (2026-09-14)
+
+The first K3 server attempt (`b2a2d29210d68357590a567d4819f3552175d179`)
+failed before preparation: `fixed_runtime.run()` initialized Target, obtained actual
+rank capacities, then called `s2_plan.capacity_for(speculative_tokens=3)` for Target.
+The shared legacy function deliberately requires an integer reserve of at least4.
+The conflict was in the caller's allocation contract, not in K3 acceptance or CUDA.
+
+`k3_capacity.reservation()` now separates logical demand from conservative allocation:
+
+| Mode / resource | Actual candidate limit | Current + conditional demand | Legacy minimum | Final reserve |
+| --- | ---: | ---: | ---: | ---: |
+| All three K3 modes, each Target TP rank | 3 | 3 + 0 | 4 | 4 |
+| Serial / ordinary PingPong Draft | 3 | 3 + 0 | 4 | 4 |
+| Eager PingPong Draft | 3 | 3 + 3 | 4 | 6 |
+
+A prompt/committed prefix of length C holds a logical K3 proposal while Draft KV
+covers C+2; the final sampled candidate is not yet materialized. Three lookahead
+forwards consume that final token and then two lookahead tokens: KV reaches C+5,
+with six logical pending candidates total. Successful reuse advances committed C
+by3, leaving a complete K3 with the same last-token frontier. It does not sample
+candidate four. Rejection fences outstanding writes and truncates invalid slots;
+correction replaces the rejected position. One catch-up materializes the corrected
+committed frontier and supplies next seed logits, then two extensions complete K3.
+Correction is committed output, not an additional simultaneously live speculative
+position. Tail budgets/EOS only reduce these bounds. Target's root is already part
+of C; root+K3 gives four query positions but only three speculative positions.
+The model-context guard's extra cursor margin is unchanged; it is not a generated
+candidate or a materialized seventh speculative position.
+
+`capacity_for()` still reserves maximum output growth, including the initial
+committed seed, and rounds at physical block boundaries. It retains the private
+partial/copy block per active request, max(32 blocks, 5% capacity) safety reserve,
+512MiB additional workspace, all resident Draft float32 logits and actual free-memory
+validation. The conservative `5 * target_ceiling` query envelope is also unchanged:
+it is capacity headroom, not candidate generation. No hardware reserve is reduced.
+Old modes call the unchanged capacity function with their original4/7/9 arguments
+and retain the old sparse fields. New K3 checks explicitly record
+`candidate_length`, `required_speculative_positions`, `reserved_speculative_positions`,
+`legacy_minimum_reserve`, reserve-based `speculative_capacity_tokens`, and nonnegative
+`extra_speculative_tokens` (0 or2). Target num_speculative_tokens stays3.
+
+`fixed_plan.capacity_metadata → fixed_runtime.run → k3_capacity.check → capacity_for`
+is the production path. The capacity report also retains raw per-request prompt and
+maximum-output budgets. `fixed_results`, `decode_scan_results` and the device contract
+recompute block/workspace arithmetic from those budgets and the original three rank
+observations, reject missing/wrong types or conflicting declarations, and compare
+against the frozen workload when available. The bounded exporter retains these raw
+fields without inventing them. Historical packages are never backfilled. The static
+`python -m specrhythm.serving.k3_capacity` preflight exercises all six mode/resource
+interfaces before model initialization; it explicitly reports GPU_capacity=PENDING.
+
+For exceptions after entering K3 model startup but before `drive()`, the coordinator
+previously shut down only its Target handle. It did not send the idle Draft service
+an orderly shutdown. `StartupCleanup` now uses the existing drain deadline to request
+the actual owner shutdown, requiring empty pending work, zero physical live requests
+and a shutdown receipt, then closes the Target engine. Per-call sockets close through
+the existing transport context manager. No retry or process-wide kill is added.
+The helper is idempotent, records primary and secondary errors separately, and publishes
+its phase deadline for the existing owned-process supervisor. Normal drain and all
+old modes remain unchanged.
+
+An acknowledged owner and returned Target shutdown API are not process cleanup PASS.
+A model constructor may fail before returning a handle; owned subprocess cleanup then
+still depends on the supervisor. The pinned in-process vLLM client accepts a timeout
+but does not forward it to every internal shutdown call; the existing external drain
+supervision remains necessary. Configuration failures before entering model startup
+also remain supervisor-managed. These limits are explicit in startup-cleanup.json;
+actual descendant exit, no stale owner/socket, and final cleanup qualification still
+require new server evidence. The original capacity exception remains the command's
+first failure even when shutdown or recording fails.

@@ -81,6 +81,8 @@ def settings(
 
 def capacity_metadata(mode, resident_count=None, *, active_limit=64, resident_requirement=100,
                       target_sequence_limit=128):
+    from specrhythm.serving.k3_capacity import reservation
+
     require(mode in EXPLICIT_MODES, "unknown fixed diagnostic mode", actual=mode)
     grouped = mode in ("serial-split", "pingpong", "pingpong-prepost3", "pingpong-eager-prepost3",
                           "serial-k3", "pingpong-k3", "pingpong-eager-k3")
@@ -118,7 +120,10 @@ def capacity_metadata(mode, resident_count=None, *, active_limit=64, resident_re
         **({"prepost_protocol": "specrhythm.uniform-k3.v1",
             "pingpong_protocol": "specrhythm.uniform-k3.v1",
             "candidate_length": 3, "serial_extension_steps": 2,
-            "draft_speculative_capacity_tokens": 6 if mode == "pingpong-eager-k3" else 3,
+            "draft_speculative_capacity_tokens": reservation(mode, "draft")[
+                "reserved_speculative_positions"],
+            "speculative_reservations": {role: reservation(mode, role)
+                                         for role in ("target", "draft")},
             "eager_lookahead_steps": 3 if mode == "pingpong-eager-k3" else 0,
             "post_verify_batch_steps": "0 for complete reuse; seed + up to 2 recovery extensions",
             "readiness_policy": "K3 complete; owner claim; informational status snapshot",

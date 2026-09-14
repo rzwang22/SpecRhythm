@@ -16,6 +16,7 @@ MODES = ("serial-k3", "pingpong-k3", "pingpong-eager-k3")
 @pytest.mark.parametrize(
     "failure,point,export_error",
     [
+        ("static_capacity_contract", "", False),
         ("capacity", MODES[0], False),
         ("capacity", MODES[1], False),
         ("capacity", MODES[2], False),
@@ -59,11 +60,14 @@ args=sys.argv[1:]
 body=sys.stdin.read() if args and args[0]=='-' else ''
 mode=os.environ.get('SR_AUDIT_SERVING_MODE','')
 kind=('export' if 'specrhythm.serving.ping_prepost_delivery' in args else
+ 'static_capacity_contract' if 'specrhythm.serving.k3_capacity' in args else
  'correctness' if 'specrhythm.serving.k3_gpu_check' in args else
  'evidence' if 'specrhythm.serving.ping_prepost_evidence' in args else
  'measurement' if 'formal_comparison_eligible' in body else
  'failure' if 'summarize(root' in body else 'other')
 with open(os.environ['CALLS'],'a') as f: f.write(mode+' '+kind+'\\n')
+if kind=='static_capacity_contract':
+ assert os.environ['SR_FIXED_ROOT']==os.environ['SR_PING_DELIVERY']+'/not_started'
 if kind=='export':
  pathlib.Path(args[args.index('--output')+1]).write_bytes(b'bounded package stand-in')
  sys.exit(41 if os.environ['EXPORT_ERROR']=='yes' else 0)
@@ -83,6 +87,8 @@ if kind==os.environ['FAIL_STAGE'] and mode==os.environ['FAIL_POINT']: sys.exit(2
         "SR_FIXED_PYTHON": str(fake),
         "SR_PING_RESULTS": str(results),
         "SR_PING_RUN_TAG": "fixture",
+        "SR_AUDIT_SERVING_MODE": "",
+        "SR_FIXED_ROOT": str(tmp_path / "inherited-historical-root"),
         "CALLS": str(log),
         "FAIL_STAGE": failure,
         "FAIL_POINT": point,
@@ -93,6 +99,7 @@ if kind==os.environ['FAIL_STAGE'] and mode==os.environ['FAIL_POINT']: sys.exit(2
     )
     assert result.returncode == 0 and "PARENT_ALIVE" in result.stdout, result.stderr
     calls = log.read_text().splitlines()
+    assert calls[0] == " static_capacity_contract"
     assert sum(r.endswith(" export") for r in calls) == 1
     assert result.stdout.count("UPLOAD ONLY:") == 1
     assert len(list(results.glob("*.tar.gz"))) == 1

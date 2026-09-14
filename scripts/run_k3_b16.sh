@@ -19,6 +19,8 @@ export PYTHONPATH="$PWD/src" PYTHONUNBUFFERED=1
 test ! -e "$SR_PING_DELIVERY"
 test ! -e "$ARCHIVE"
 mkdir -p "$SR_PING_DELIVERY/points"
+# Before a point starts, never attribute a static failure to an inherited old root.
+export SR_FIXED_ROOT="$SR_PING_DELIVERY/not_started"
 finish() {
   first_rc=$?; trap - EXIT ERR; set +e
   if [[ "$first_rc" != 0 ]]; then
@@ -60,6 +62,9 @@ trap finish EXIT
 [[ "$RUN_TAG" =~ ^[a-zA-Z0-9._-]+$ ]]
 test -z "$(git -c core.fsmonitor=false status --porcelain)"
 test "$(git rev-parse HEAD)" = "$FINAL_SHA"
+STAGE=static_capacity_contract
+"$SR_FIXED_PYTHON" -m specrhythm.serving.k3_capacity \
+  --output "$SR_PING_DELIVERY/k3-capacity-contract.json"
 MODES=(serial-k3 pingpong-k3 pingpong-eager-k3)
 for POINT in "${MODES[@]}"; do
   STAGE=prepare

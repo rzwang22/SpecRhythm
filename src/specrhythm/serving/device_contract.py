@@ -280,6 +280,14 @@ def _qualify_prepost(runtime, backend, actual, mode, *, probe, stage):
             value = c.need(cap, key, "actual-capacity.json", role)
             if type(value) is not int or value <= 0:
                 c.fail("actual-capacity.json", role, key, "positive physical capacity", value)
+    if mode.endswith("-k3"):
+        from specrhythm.serving.k3_capacity import qualify as qualify_capacity
+
+        try:
+            qualify_capacity(actual, mode)
+        except (ValueError, TypeError, KeyError) as error:
+            c.fail("actual-capacity.json", "Draft+TP0/1", "K3 capacity reservation/arithmetic",
+                   "complete typed raw budgets and recomputable conservative reserve", str(error))
     uuids.append(c.need(draft, "gpu_uuid", "draft-backend-report.json", "Draft"))
     if any(not isinstance(u, str) or not u for u in uuids) or len(set(uuids)) != 3:
         c.fail(

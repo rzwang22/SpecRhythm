@@ -621,6 +621,7 @@ def run(root, manifest_path, directory, point, *, probe=False):
     llm = None
     failure = None
     started = time.monotonic_ns()
+    drive_entered = False
     try:
         llm = make_engine(config, mode, classes=CLASSES,
                           sequence_limit=capacity_spec["target_sequence_limit"], query_limit=4096)
@@ -644,13 +645,18 @@ def run(root, manifest_path, directory, point, *, probe=False):
                     "K3 effective Target candidate capacity differs")
         draft = read_json(directory / "draft-startup.json")
         capacity = [r["s2_capacity"] for r in ranks] + [draft["s2_capacity"]]
-        checks = [capacity_for(
-            definitions, r, active_limit=active,
-            speculative_tokens=(6 if mode == "pingpong-eager-k3" and r["role"] == "draft" else 3)
-            if mode.endswith("-k3") else (9 if mode == "serial-eager" else 7)
-            if mode in ("serial-eager", "serial-eager-prepost3", "pingpong-eager-prepost3")
-            and r["role"] == "draft" else 4,
-        ) for r in capacity]
+        if mode.endswith("-k3"):
+            from specrhythm.serving.k3_capacity import check
+
+            checks = [check(definitions, r, mode=mode, active_limit=active,
+                            metadata=capacity_spec) for r in capacity]
+        else:
+            checks = [capacity_for(
+                definitions, r, active_limit=active,
+                speculative_tokens=(9 if mode == "serial-eager" else 7)
+                if mode in ("serial-eager", "serial-eager-prepost3", "pingpong-eager-prepost3")
+                and r["role"] == "draft" else 4,
+            ) for r in capacity]
         for check in checks:
             check["block_deficit"] = max(0, check["required_blocks"] - check["num_gpu_blocks"])
             check["workspace_deficit_bytes"] = max(
@@ -670,6 +676,10 @@ def run(root, manifest_path, directory, point, *, probe=False):
             "target_effective_by_rank": [r["s1_effective_capacity"] for r in ranks],
             "draft_effective": draft.get("fixed_engine_limits"),
         }
+        if mode.endswith("-k3"):
+            from specrhythm.serving.k3_capacity import SCHEMA, budgets
+
+            actual.update(capacity_schema=SCHEMA, capacity_request_budgets=budgets(definitions))
         write_once(directory / "actual-capacity.json", actual)
         require(
             all(r["valid"] for r in checks),
@@ -690,6 +700,7 @@ def run(root, manifest_path, directory, point, *, probe=False):
                     and 5 * maximum <= cfg.scheduler_config.max_num_batched_tokens,
                     "scan actual sequence/query-position capacity insufficient", actual=effective)
             # Every scan point (including capacity-only probes) prepares all360 KV.
+            drive_entered = True
             result = drive(llm, manifest, definitions, directory, point, options,
                            logprobs=config.logprobs, probe=probe)
         elif probe:
@@ -748,6 +759,7 @@ def run(root, manifest_path, directory, point, *, probe=False):
             )
             publish(directory / "drain-state.json", probe_drain)
         else:
+            drive_entered = True
             result = drive(
                 llm, manifest, definitions, directory, point, options, logprobs=config.logprobs
             )
@@ -770,7 +782,13 @@ def run(root, manifest_path, directory, point, *, probe=False):
         record_error(directory, error, "runtime")
         raise
     finally:
-        if llm is not None:
+        if failure is not None and not drive_entered and mode.endswith("-k3"):
+            from specrhythm.serving.k3_startup_cleanup import StartupCleanup
+
+            deadline = time.monotonic_ns() + int(options["drain_timeout"] * 1e9)
+            StartupCleanup(directory, mode, failure, deadline).finish(
+                llm, lambda: client_for(mode))
+        elif llm is not None:
             try:
                 llm.llm_engine.engine_core.shutdown()
             except Exception as error:

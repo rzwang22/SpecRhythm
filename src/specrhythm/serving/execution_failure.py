@@ -45,6 +45,11 @@ def summarize(root, exit_code, stage):
             "formal_comparison_eligible", "effective_exit_code", "errors",
             "qualification_status", "failure_layer", "primary_error",
         )}))
+        if (path.parent / "startup-cleanup.json").exists():
+            runs[-1]["startup_cleanup"] = read_optional(
+                path.parent / "startup-cleanup.json", errors)
+        if (path.parent / "exit-code.json").exists():
+            runs[-1]["process_exit_codes"] = read_optional(path.parent / "exit-code.json", errors)
     return dict(
         schema_version="specrhythm.execution-first-failure.v1",
         first_exit_code=exit_code,

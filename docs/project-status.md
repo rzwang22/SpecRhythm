@@ -29,6 +29,16 @@ claims.
 
 ## Pull request progress
 
+### PR #5 — K3 容量预留与初始化异常清理（2026-09-14）
+
+- 从干净 `4206ff53a2346f29be599257fd05ae001d73633c` 继续；此前实现和 owner 信息快照优化保留。参考入口的实际 CI 全部 SUCCESS；本轮 CI 单独查询。
+- 只读核验 `051537Z-2351` 总包17逻辑文件大小/SHA256。真实首错是 Target 初始化后 `fixed_runtime.run → capacity_for(speculative_tokens=3)` 与旧 minimum4 冲突；不是 OOM 或输出错误。旧 capacity UNKNOWN / execution FAILED / measurement INVALID / cleanup FAILED / performance PENDING 保留，其他点未开始。
+- 显式拆分候选3、需求3/6、旧最小预留4和最终预留4/6；实际 Target K=3。block计算使用最终预留，extra为0/2。KV 生命周期核查覆盖当前P3、lookahead3、末token未materialize和correction回退/catch-up；所有安全余量、workspace和resident logits不变。
+- 新原始容量报告保留逐请求预算和三rank数据，正式 summarize/device qualify 及总包重读均重新计算；旧模式容量函数、字段默认和执行路径不变。加载模型前静态入口只能证明接口一致，GPU容量仍待测。
+- K3进入模型初始化后、drive前失败时，按既有drain预算请求真实空Draft owner关闭，并关闭Target handle；记录原始错误、各释放结果和次生写盘/清理错误。CPU真实owner/socket回归覆盖。未返回handle的部分初始化、vLLM内部未传递timeout及进程后代最终退出仍依赖监督器，不能将API返回当cleanup PASS。
+- 此前CPU报告测试从drive开始，漏过run中的真实容量推导。新回归经过run→实际capacity_for→报告→summarize/qualify→总包重读；三模式×容量/非scan correctness/scan性能均覆盖。首轮新回归真实复现旧断言后修复，没有放宽断言或预算。
+- Python3.9与3.12相关回归各266通过；3.12首轮两项子进程缺包失败已由stderr定位，补齐服务器已有PYTHONPATH后通过，原失败记录保留。全量pytest **2512 passed / 3既有skip**（343.09s）；首轮因Shell PATH缺python导致旧测试2失败，stderr明确rc127，纠正环境后全量通过，未改断言/预算。最终入口回归两版本各15通过；Ruff、compileall、360文件3.9语法、21个Bash及diff通过。[设计](k3-design.md)、[验证说明](k3-validation.md)、[固定runbook](k3-runbook.md)。不连接AutoDL；新GPU容量、correctness、原生流水线重叠和performance **PENDING**。
+
 ### PR #5 — 统一候选 K3 与跨组 owner 流水线（2026-09-14）
 
 - 从干净 `0b37d37ff364bcc6533b8805940bcbe572dafc56` 继续，执行参考 `c0ecc2a405c8b6c9cb3016c7254739bda5bec2b6`；旧模式、后续有效提交和历史结果保留，Draft不合并。

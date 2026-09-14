@@ -381,6 +381,11 @@ def summarize(manifest_path, directory, point, *, probe=False):
     try:
         r = read_json(directory / "runtime.json")
         b = read_json(directory / "draft-backend-report.json")
+        if point["mode"].endswith("-k3"):
+            from specrhythm.serving.k3_capacity import qualify as qualify_capacity
+
+            base["capacity_reservation_qualification"] = qualify_capacity(
+                read_json(directory / "actual-capacity.json"), point["mode"], definitions)
         if point["mode"] == "serial-eager":
             from specrhythm.serving.eager_results import eager_columns, summarize_eager
 

@@ -10,10 +10,14 @@ Draft GPU0 and a single TP2 Target on GPU1/2, frozen resident360 workload/seed16
 no-bonus commits, actual K=min(3,remaining), runtime audit and buffered-live recording.
 The source S1 config retains its historical K4 capacity envelope; the new mode's
 actual engine num_speculative_tokens and proposal budget are explicitly3. GPU capacity
-checks reserve3 Target positions and up to6 Draft speculative positions (eager only).
+checks require3 Target/ordinary Draft positions but conservatively reserve4; eager
+Draft requires and reserves6. `legacy_minimum_reserve=4` is unchanged. The report
+records both demand and allocation; reserving4 does not generate a fourth candidate.
 No model, sampling, control/drain budget, graph setting or measurement boundary changes.
 
-`scripts/run_k3_b16.sh <full SHA>` runs three fresh capacity points, then one shared
+`scripts/run_k3_b16.sh <full SHA>` first runs the no-GPU static capacity interface
+check (`k3-capacity-contract.json`, GPU_capacity=PENDING), then three fresh real
+capacity points, then one shared
 Target-only + all three modes complete-output check (16 requests, at most32 output
 fixture tokens), then three runtime performance points. Each point genuinely prefills
 all360, warms up two rotations (four nonempty admissions), measures continuous30s,
@@ -22,7 +26,8 @@ and retains setup900s/drain60s. Workload SHA256 remains
 Correctness and mechanism coverage must pass before performance. It never retries or
 expands B/load grids. All points use independent roots inside a fresh tagged delivery.
 
-The script retains the first error. `joint/failure.json` names the actual mode and
+The script retains the first error. Before any point starts, failure attribution uses
+the new delivery/not_started directory, never an inherited historical SR_FIXED_ROOT. `joint/failure.json` names the actual mode and
 run, the original report/process layer, process exit and command exit; subsequent
 summary/export errors are separate. `inventory.json` includes logical_paths, unique
 objects, SHA256/byte counts, missing fields, first code and export validation code.
@@ -40,7 +45,10 @@ One package contains comparison, joint output checks, first-failure, manifests,
 startup/final TP/Draft identities, original runtime/native/owner reports and bounded
 point analyses. The existing192-file/512MiB-file/1GiB-total bounds and phased trace
 budgets stay in force; omissions/truncation remain explicit failures. There are no
-nested subpackages to collect manually. If no archive can be created, the terminal
+nested subpackages to collect manually. Capacity reports retain the three raw rank
+observations, per-request budgets and demand/reserve schema for offline recomputation.
+Pre-drive failures also retain startup-cleanup.json, original/secondary errors and
+process exit codes; returned cleanup APIs alone never override supervisor qualification. If no archive can be created, the terminal
 reports that export failure and retained source directory instead of inventing a path.
 
 Read each point's `pingpong.cycles` for actual P lengths, short reasons, batches,

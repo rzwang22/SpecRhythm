@@ -73,3 +73,67 @@ the three new launcher tests pass on3.9, all21 Bash files and355 Python grammar
 checks pass. The explicit pinned vLLM CI source job includes the new Target test;
 its full local98-test selection passed. Remote CI is checked after ordinary push;
 no pending check is labelled PASS.
+
+
+## Capacity failure follow-up (2026-09-14)
+
+Read-only verification of `pingpong-k3-delivery-20260914T051537Z-2351.tar.gz`
+resolved inventory.logical_paths and checked sizes/SHA256 for all17 logical files.
+Export was COMPLETE. The first serial-k3 capacity attempt failed at the legacy
+minimum4 assertion, before any joint correctness, other capacity or performance point.
+Historical labels remain capacity UNKNOWN, execution FAILED, measurement INVALID,
+cleanup FAILED and performance PENDING. No historical record was changed.
+
+Coordinator exit1 and Draft exit0 coexist with cleanup_valid=false: the wrapper
+observed live descendants and the supervisor subsequently emptied its owned group.
+The final empty PID set does not retrospectively qualify normal teardown. The package
+shows supervisor SIGTERM/reap and socket removal, not an orderly pre-drive Draft RPC.
+The observed descendant's exact role is not inferred from its PID/name alone.
+
+The first new real-run regression failed in all three modes with the original
+`speculative capacity cannot be less than the baseline K4 reserve` message. Earlier
+report fixtures entered at drive(), supplying a capacity report and bypassing the
+model-initialized run() arithmetic. New tests substitute only model/worker execution
+and hardware query responses, run the real capacity function and report construction,
+serialize, summarize/qualify, export, reread and apply the same capacity/device contract
+for all nine mode/stage combinations. Full-run fixtures initially also exposed missing
+attention-backend, batch-invariance and native timing fields in the CPU GPU stand-in;
+those fixtures now supply the real startup/forward producer inputs. No production
+qualifier was weakened to accept those omissions.
+
+New cases exercise exact-fit/one-block shortage across block boundaries, invalid
+bool/float/negative/missing values, frozen budget mismatches, all three reservations,
+legacy defaults, and actual backend materialized frontiers/correction catch-up for
+both early/late feedback and rejection. A real owner + Unix socket server handles
+pre-drive shutdown in CPU tests. Constructor, transport, Target shutdown and disk
+failures preserve the original capacity error and remain separately visible in the
+single archive. Script tests retain first failure over a second export failure and
+prove the static entry runs before prepare/model commands. GPU allocation and actual
+vLLM descendant cleanup remain PENDING, as do joint outputs, native pipeline overlap
+and performance. Local validation results are recorded in project-status.md.
+
+The local Python3.12 environment initially lacked an installed package for child
+processes: the new static CLI and an existing supervisor regression each exited1
+with `ModuleNotFoundError: specrhythm`. Both original child stderr records identify
+that import failure, rather than a drain timeout or capacity assertion. Supplying
+PYTHONPATH=src, as the production runner already does, yielded266 passed; Python3.9
+also passed the same266 cases. No test, timeout or production branch was changed for
+this environment correction. The initial2 failures remain recorded here.
+
+The first full local suite reported2510 passed,3 skipped and2 failures in unchanged
+Phase4B.2 shell tests. Their subprocess stderr was `python: command not found` at
+phase4b1_gate_helpers.sh:229, with actual shell rc127 instead of the intended2/19.
+Invoking the virtualenv interpreter by absolute path had not activated its bin
+on PATH. The shell regression passed after supplying that PATH; a complete suite
+was then rerun under the correctly activated environment. This environment failure
+is separate from the reproduced K3 capacity bug and from historical GPU cleanup.
+
+
+Final full suite: **2512 passed,3 skipped in343.09s** with the pinned vLLM source
+checkout enabled. Existing skips are the opt-in CUDA backend and two Linux-only
+owned-process exit-status cases on macOS. Python3.9/3.12 relevant suites each pass266;
+the final shell/launcher suites each pass15. Ruff, compileall,360 Python files parsed
+with the3.9 grammar,21 tracked Bash scripts, and git diff whitespace checks pass.
+Only environment setup changed between the identified import/PATH failures and
+revalidation; no assertion or timeout was relaxed. New GPU capacity, joint correctness,
+cleanup, native overlap and performance remain operator gates, all PENDING.
