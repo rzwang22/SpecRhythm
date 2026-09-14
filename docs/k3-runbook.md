@@ -122,3 +122,30 @@ else
   printf 'K3 stopped, original rc=%s; later points stopped; terminal remains open.\n' "$rc"
 fi
 ```
+
+## Resident CPU decomposition in this follow-up
+
+The fixed three-mode flow and all model/workload/budget/observation parameters remain
+unchanged. The execution diagnostic gate additionally requires all six resident
+subphase spans and their policy/work metadata, on the same PID/thread and cycle.
+No additional GPU point or retry is introduced. Six bounded records per dispatch
+use the existing phased trace budgets and are retained once in the raw runtime host
+trace. Missing fields are INCOMPLETE, never zero-filled. The previous run's original
+qualification is not revised by the new diagnostic contract.
+
+Read `comparison.json` for window/steps cadence alongside complete_step_wall_ms and
+outside_complete_steps_ms. `dispatch.resident_schedule` aggregates binding/readiness/
+decisions/stock/initial_finish/admission-record phases and work scales; detailed
+per-step records are only in the referenced point audit report. Work totals count
+full current-row int visits and normalized rows, including the generated suffix.
+The stock child is the actual pinned Scheduler.schedule call with dynamic predicate
+callbacks; it is distinct from the inclusive target_resident_stock_schedule wrapper.
+
+`pipeline.cross_request_overlap_steps` reports definite/uncertainty-only counts over
+measured Target steps. `recovery_coverage_by_other_requests` gives the clipped native
+physical recovery union denominator, covered interval union and conservative fraction
+bounds. A mixed physical batch or two TP ranks are not additive copies. OBSERVED only
+means some positive overlap; low coverage remains low even if throughput improves.
+The numerator/denominator/window semantics are embedded in the report. All raw
+request/proposal/version/forward evidence remains in the same single total archive.
+GPU correctness, coverage and performance for the new SHA are PENDING until this run.

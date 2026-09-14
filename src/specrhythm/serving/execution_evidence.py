@@ -284,6 +284,12 @@ def qualify(report):
         if any(c.get("latencies_ms", {}).get("service_receive_to_owner_dequeue") is None
                for c in cycles):
             errors.append("per-cycle PingPong owner feedback landmarks incomplete")
+    if report.get("mode") in ("serial-k3", "pingpong-k3", "pingpong-eager-k3"):
+        resident = report.get("pingpong", {}).get("pipeline", {}).get(
+            "dispatch", {}).get("resident_schedule", {})
+        if resident.get("status") != "COMPLETE":
+            errors.append("K3 resident scheduling evidence incomplete: "
+                          + str(resident.get("errors", "MISSING")))
     missing_fsync = [
         r for r in path.get("fsync_by_file", [])
         if not r.get("log_name") or r["log_name"] == "MISSING_FILENAME"

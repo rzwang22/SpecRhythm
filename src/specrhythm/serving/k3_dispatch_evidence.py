@@ -2,6 +2,7 @@
 
 from specrhythm.serving.eager_evidence_export import bounds, duration, intersect
 from specrhythm.serving.fixed_results import stats
+from specrhythm.serving.k3_resident_evidence import resident_step, summarize
 
 
 def target_groups(runtime, errors):
@@ -126,6 +127,7 @@ def dispatch(runtime, groups, events):
                     ),
                 )
         row = dict(
+            resident_schedule=resident_step(step, spans),
             READY_while_Target_idle_ms=ready_idle,
             step_index=group["index"],
             request_versions=[
@@ -190,6 +192,7 @@ def dispatch(runtime, groups, events):
         out.append(row)
     return dict(
         rows=out,
+        resident_schedule=summarize(out),
         claim_to_Target_ms=stats([r["claim_to_Target_ms"] for r in out]),
         published_READY_to_claim_ms=stats(
             [

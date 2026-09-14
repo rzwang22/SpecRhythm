@@ -292,3 +292,72 @@ The regression proves safe interleaving, not native GPU overlap or speedup. New 
 cross-request pipeline, native overlap and performance remain **PENDING**. A returned
 zero-overlap run must remain NOT_DEMONSTRATED and be explained from its actual
 READY/claim/phase/forward sequence, even if throughput rises.
+
+## Resident dispatch normalization (2026-09-14 follow-up)
+
+Source baseline: execution `8a3aca007fb60f9f67d1dcb7bedb5f8b78b8602e`, preserved delivery
+`8b8a2d5fb9ca16f35756429feb19214d544520d6`. The read-only observations from the
+082831Z-1891 archive are recorded separately in `k3-resident-8a3aca-observations.json`.
+All three latest baseline runs and their output/diagnostic qualifications remain valid.
+52.54/75.72/79.70 tok/s are single windows, not a stable speedup claim.
+
+The exact MRO is PingPrePostScheduler → FixedBatch → PoolScheduler →
+ResidentSetupScheduler → pinned vLLM Scheduler. The existing
+`target_resident_stock_schedule` wraps the ENTIRE ResidentSetupScheduler call. Its
+34.6 ms baseline mean includes the following work and is not the vLLM body alone:
+
+| New child span | Production work | Checks / side effects retained |
+|---|---|---|
+| `target_resident_binding` | Current full token row normalization; identity matching | table-key/internal ID equality, complete current prompt comparison, both binding maps, alias/history checks; whole generated suffix still converted |
+| `target_resident_readiness` | setup-ready/deferred refresh; initial lifecycle prepare | existing disk readiness and control semantics, no cached new decision |
+| `target_resident_decisions` | live resident decisions and initial proposal validation | claim parent hash/length, K3 budget/EOS, spec tokens installed, same decisions |
+| `target_resident_stock` | direct `super().schedule()` into pinned Scheduler | stock allocation/selection and dynamic admissibility callbacks; not isolated callback-free vLLM internals |
+| `target_resident_initial_finish` | initial lifecycle completion | existing one-time initial proposal accounting |
+| `target_resident_admission_records` | sorted construction and append for every decision | identical fields, row count, ordering and writer; no reduced log volume |
+
+These six spans are disjoint children on one host PID/thread, nested in the existing
+wrapper. Prefix/hash/JSON subspans remain inclusive and cannot be added to them.
+Wrapper time minus the child interval union is reported as unaccounted. No device
+synchronization, GPU query, per-token event, new trace lock or disk write is added.
+Six rows per scheduler call use the existing phased budgets. Work counters report
+live rows, successful full-row token conversion visits, normalized rows and decision/
+admission rows. They do not claim to count token reads in other phases. The baseline
+has no such subphase records, so individual baseline child times remain unknown.
+
+The confirmed duplicate is narrow: `_bind_requests` converted every item to int and
+built a tuple; BoundPromptIdentityMap converted that already normalized tuple again.
+A full-match fallback converted it once more. K3 now constructs a private immutable
+`_NormalizedTokenRow` from the CURRENT raw input once and passes it directly through
+binding. Its constructor performs exactly the same int conversion over the full row,
+including generated suffix; it does not merely validate the prompt or accept a caller's
+PASS flag. Matching can reuse this call-local normalized tuple. Current complete prompt
+comparison is still performed. New binding, changed identity and non-prefix-free prompts
+retain full matching and its ambiguity/no-match failures. Ordinary public sequence
+inputs retain the previous normalization/matching path, including non-K3 callers.
+
+The input object is neither retained by the scheduler nor the identity map. Growing
+prefixes and refill always create a new row; finished entries keep the legacy skip rule.
+Historical bidirectional bindings outlive removal, so retiring a request does not make
+an illegal internal/stable alias reusable. int-coercible inputs retain existing coercion
+semantics; invalid generated suffix input still fails before stock allocation. The
+separate strict prompt proof checks still reject bool/float prompt content as before.
+
+No admission predicate, record schema, batch choice, initial proposal check, hashing of
+claimed current prefix, logging buffer or fence changed. Both full pool snapshots and
+block audits still run, reading live KV/frontier/ownership. K3 capacities remain demand3/
+reserve4 for Target and normal Draft, demand/reserve6 for eager Draft. True K3, no bonus,
+active16/home8+8/ceiling8, static eager, Serial idle gate and owner feedback boundaries
+are unchanged. `post_prepost()` and promotion READY publication are untouched; earlier
+READY publication remains a separate future candidate requiring dependency proof.
+
+The performance report additionally gives window/steps cadence, existing engine-step
+statistics and outside-step time; count of Target steps with definite cross-request
+ordinary/recovery overlap and uncertainty-only overlap; and recovery coverage fraction.
+The latter denominator is the union of native physical Draft forwards participating in
+rejection recovery, selected by measurement host launch and clipped to the measurement
+window. The numerator unions intersections with Target TP native intervals whose claims
+do not contain that recovery request. Repeated bindings, mixed roles and TP ranks never
+multiply an interval. Lower/upper fractions use opposite denominator bounds; missing
+bounds yield null, a no-recovery window is explicit. OBSERVED means any positive lower
+bound, not sufficiently hidden recovery. Neither CPU savings nor audit costs are
+subtracted from measured throughput.

@@ -202,3 +202,79 @@ reported at delivery, never inferred from local or baseline success.
 New GPU correctness, cross-request pipeline, native overlap and performance are
 PENDING. The same fixed three-mode foreground runner and single verified archive
 remain the next gate; it does not retry or extend the experiment.
+
+## Resident normalization follow-up (2026-09-14)
+
+The baseline 082831Z-1891 archive and read-only analysis are reused, not rerun or
+rewritten. Implementation begins at the clean PR head8b8a2d5 above execution8a3aca0.
+The pinned vLLM0.25.1 CPU source export passes the inventory SHA256 audit for commit
+752a3a504485790a2e8491cacbb35c137339ad34; its Scheduler.schedule begins at line396.
+The new stock span surrounds that actual base call (including installed predicate
+callbacks), not the ResidentSetupScheduler wrapper.
+
+`test_k3_resident_schedule.py` drives actual PingPrePostScheduler/FixedBatch/Pool/
+ResidentSetupScheduler/identity binding with a CPU stock allocator. The structural
+regression first failed on the old path's repeated fixed_identity int conversions.
+After the change every live current token is normalized once in the call-local row;
+restoring the old `_binding_input` tuple path makes the assertion fail again. Three
+modes compare old/new identity maps, selected IDs, candidates, query positions,
+resident decisions and all360 admission records; timestamps are the only removed
+record field. The original CheckpointJsonl append still executes in this comparison.
+
+Negative regressions cover current-prompt mutations, table/internal mismatch,
+reverse-map alias, absent binding, an invalid generated suffix in an unselected
+resident, stale claim, block conflict, illegal frontier and missing resident. They
+must fail before stock allocation. Further comparisons cover unbound and
+non-prefix-free matching, integer-coercible inputs versus invalid inputs, prefix
+growth, finished/removed rows, refill and retained historical bindings. The existing
+full-output K3, EOS/budget, feedback-order, repeated rejection, duplicate claim/commit,
+resource-release, Serial idle and event-controlled cross-request suites remain active.
+
+New phase fields are collected by the actual production scheduler, serialized,
+qualified by the resident phase validator and formal diagnostic qualifier, exported
+with the real content-addressed total-pack exporter, reread and qualified again.
+This scheduler-only harness deliberately lacks GPU startup evidence: its unrelated
+GPU/device qualification stays incomplete, never a fabricated PASS. Existing real
+fixed_runtime drive/serialize/qualify/export tests still cover three-mode capacity,
+non-scan correctness and scan performance including strict probe and native binding.
+Missing phase/work metadata is null/INCOMPLETE and fails the new diagnostic contract;
+it does not make execution or output correctness fail. Existing old reports lack
+these new subphases and must retain their original qualification, not be overwritten
+by replaying a new diagnostic requirement against them.
+
+Native overlap tests preserve exact request/version/TP association, recompute recovery
+physical-interval unions and conservative fraction bounds, and count overlapping
+Target steps. Mixed roles/TP copies do not double the numerator. Missing native
+records yield null fractions/counts, not zero or OBSERVED. Six new trace rows per
+call use existing phase budgets; no recorder threshold or timeout was enlarged.
+
+Development failures before final verification: the first new test fixture used an
+incomplete Proposal constructor (fixed to production schema); the intended structural
+assertion then failed on the unchanged implementation. An unclosed parenthesis in
+new report code caused collection failure and was corrected. Ruff found import,
+closure binding and line-length issues, corrected without changing test assertions.
+These are local development errors, not diagnoses of remote CI failures. Final test
+counts and actual remote CI status are appended at delivery.
+
+New GPU correctness, native pipeline/recovery coverage and performance remain PENDING.
+READY publication and post_prepost/fence order are unchanged and require a separate
+future proposal if the new GPU timeline still shows an exposed recovery bottleneck.
+
+Local verification: the full suite with the pinned source audit completed2556 passed/
+3 existing skips. Python3.9 and3.12 each passed the341-case related selection with
+`PYTHONPATH=$PWD/src`. Their first invocation passed340 and failed the static-entry
+subprocess because those external virtualenvs did not have SpecRhythm installed
+(ModuleNotFoundError); only the invocation environment was corrected. First logs
+were retained under `/tmp/sr-k3-resident-py39.log` and `...-py312.log`; configured
+results are in separate logs. No product/test/timeout workaround was applied.
+
+Final review moved the mode-dependent normalizer selection outside the per-request
+loop (once per binding call, without storing token state). The full suite and affected
+compatibility cases are rerun on that final source. Ruff, compileall3.9/3.11/3.12,
+369 tracked/new Python files parsed with3.9 grammar,21 tracked Bash scripts and
+`git diff --check` pass. The server-only GPU stages remain unexecuted locally.
+
+After the final normalizer-factory adjustment, Python3.9 and3.12 each passed38
+affected production scheduler/identity/dispatch cases. A fresh full pinned-source
+run is in progress at the implementation commit; the delivery commit records its
+actual completion and pins the execution object, without changing execution code.

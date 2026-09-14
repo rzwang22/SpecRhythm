@@ -127,6 +127,8 @@ def comparison(directory, *, modes=MODES):
                         "steps",
                         "tokens_per_step",
                         "complete_step_wall_ms",
+                        "window_average_cadence_ms",
+                        "outside_complete_steps_ms",
                     )
                 },
                 overlap=r["pingpong"]["native_overlap"],

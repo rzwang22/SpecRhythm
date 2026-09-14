@@ -1,10 +1,14 @@
 """Install owner-claimed ragged proposals into the actual resident Target scheduler."""
 
 import os
+from contextlib import contextmanager
 
+from specrhythm.continuation.trace import TRACE
+from specrhythm.phase4.request_identity import _NormalizedTokenRow
 from specrhythm.phase4.serial import Proposal, token_prefix_hash
 from specrhythm.serving.common import require
 from specrhythm.serving.fixed_scheduler import FixedBatch
+from specrhythm.serving.k3 import RESIDENT_POLICY
 from specrhythm.serving.s2_pool import control
 from specrhythm.serving.s2_scheduler import S2SerialScheduler
 
@@ -14,6 +18,29 @@ class PingPrePostScheduler(FixedBatch, S2SerialScheduler):
         super().__init__(*args, **kwargs)
         self.pp_consumed = set()
         self.selected_cohort = "A"
+
+    def _binding_input(self):
+        if os.environ.get("SR_S2_MODE", "").endswith("-k3"):
+            return _NormalizedTokenRow
+        return super()._binding_input()
+
+    @contextmanager
+    def _resident_span(self, name, work=None):
+        if not os.environ.get("SR_S2_MODE", "").endswith("-k3"):
+            yield
+            return
+        # One bounded span per phase, never per token/request. The mutable work
+        # dictionary is call-local and only populated before the span is recorded.
+        work = {} if work is None else work
+        with TRACE.span("target_resident_" + name, work=work,
+                        resident_cycle=self._resident_cycle_id,
+                        request_table_size=len(self.requests),
+                        resident_schedule_policy=RESIDENT_POLICY):
+            yield
+            if name in ("decisions", "admission_records"):
+                work["decision_rows"] = len(self._resident_decisions)
+                if name == "admission_records":
+                    work["admission_records"] = len(self._resident_decisions)
 
     def physical_rows(self):
         if os.environ.get("SR_S2_MODE", "").endswith("-k3"):

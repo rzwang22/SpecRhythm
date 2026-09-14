@@ -34,6 +34,7 @@ def pipeline(runtime, backend):
                     "Target claim differs from authoritative owner: step " + str(batch["index"])
                 )
     request_pairs, parent_pairs, draft_rows = defaultdict(list), [], []
+    cross_steps = defaultdict(list)
     first_rows, preceding, captured_recovery = [], [], False
     for index, f in enumerate(backend["prepost_physical"]["forwards"]):
         if not start <= f["start_ns"] <= end:
@@ -126,6 +127,10 @@ def pipeline(runtime, backend):
                 claims, tg = batch["claims"], batch["native"]
                 if rid not in claims:
                     request_pairs[role].append((g, tg))
+                    if batch["step"].get("window") and role in (
+                        "ordinary_draft", "rejection_recovery"
+                    ):
+                        cross_steps[batch["index"]].append((g, tg))
                     if homes.get(rid) in ("A", "B") and any(
                         c["home_cohort"] != homes[rid] for c in claims.values()
                     ):
@@ -197,6 +202,38 @@ def pipeline(runtime, backend):
         overlap[role] = union_overlap(pairs[role])
         if role == "rejection_recovery":
             uncovered[role] = not_hidden(rows)
+    recovery_rows = list(groups["rejection_recovery"].values())
+    recovery_union = ({side: duration(bounds(recovery_rows, start, end, inner))
+                       for side, inner in (("lower_ms", True), ("upper_ms", False))}
+                      if complete else None)
+    recovery_covered = union_overlap(request_pairs["rejection_recovery"])
+    coverage = dict(
+        status=("INCOMPLETE" if not complete else
+                "NO_RECOVERY" if not recovery_rows else "COMPLETE"),
+        denominator_ms=recovery_union, covered_ms=recovery_covered,
+        fraction=None if not complete or not recovery_union["lower_ms"] else dict(
+            lower=recovery_covered["lower_ms"] / recovery_union["upper_ms"],
+            upper=min(1.0, recovery_covered["upper_ms"] / recovery_union["lower_ms"])),
+        measurement_window_ns=[start, end],
+        denominator="union of native physical Draft intervals participating in rejection "
+        "recovery; unique native forward indices; selected host launches in measurement, "
+        "device bounds clipped to measurement window; mixed batches counted once",
+        numerator="union of intersections with both TP ranks where the recovery request "
+        "is absent from Target claims; duplicate bindings/ranks/roles do not multiply time",
+        uncertainty="lower fraction = covered lower / denominator upper; upper fraction "
+        "= covered upper / denominator lower, capped at 1; absent bounds never become zero",
+    )
+    measured_batches = [b for b in target_batches if b["step"].get("window")]
+    cross_counts = dict(
+        total_measured_Target_steps=len(measured_batches),
+        definite=None if not complete else sum(
+            union_overlap(cross_steps[b["index"]])["lower_ms"] > 0 for b in measured_batches),
+        possible_only=None if not complete else sum(
+            union_overlap(cross_steps[b["index"]])["lower_ms"] == 0
+            and union_overlap(cross_steps[b["index"]])["upper_ms"] > 0 for b in measured_batches),
+        meaning="OBSERVED means any definite nonzero other-request ordinary/recovery overlap; "
+        "it does not mean recovery is sufficiently hidden",
+    )
     polls = [e for e in events if e["event"] == "admission" and start <= e["timestamp_ns"] <= end]
     pending = [r for e in polls for r in e.get("waiting_inventory", [])]
     observed = any(
@@ -225,6 +262,8 @@ def pipeline(runtime, backend):
             r: union_overlap(v) for r, v in ((role, request_pairs[role]) for role in costs)
         },
         parent_eager_native_overlap=union_overlap(parent_pairs),
+        cross_request_overlap_steps=cross_counts,
+        recovery_coverage_by_other_requests=coverage,
         all_Draft_GPU_union_not_hidden_by_any_Target=not_hidden(native),
         association="native internal IDs -> scheduler stable IDs -> authoritative claim "
         "proposal/version; Draft physical binding and parent dependency; then home; "

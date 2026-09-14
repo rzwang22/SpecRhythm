@@ -448,6 +448,7 @@ def analyze(runtime, backend, light):
         committed_tokens=light["committed_window_tokens"],
         throughput_tok_s=light["decode_throughput_tok_s"],
         tokens_per_step=light["committed_window_tokens"] / len(steps),
+        window_average_cadence_ms=(end - start) / 1e6 / len(steps),
         complete_step_wall_ms=stats([(s["end_ns"] - s["start_ns"]) / 1e6 for s in steps]),
         outside_complete_steps_ms=(end - start) / 1e6
         - duration([(s["start_ns"], s["end_ns"]) for s in steps]),

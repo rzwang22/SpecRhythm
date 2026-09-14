@@ -107,6 +107,8 @@ def test_native_request_proposal_rank_dependency_loss_is_not_zero(monkeypatch, f
     assert value["cross_request_native_overlap"]["rejection_recovery"] is None
     assert value["parent_eager_native_overlap"] is None
     assert value["cross_request_pipeline_behavior"] == "INCOMPLETE"
+    assert value["recovery_coverage_by_other_requests"]["fraction"] is None
+    assert value["cross_request_overlap_steps"]["definite"] is None
 
 
 def test_other_request_overlap_precedes_home_classification_and_is_not_double_counted(monkeypatch):
@@ -153,6 +155,15 @@ def test_other_request_overlap_precedes_home_classification_and_is_not_double_co
     assert result["cross_cohort_pipeline_behavior"] == "NOT_DEMONSTRATED"
     # Two TP ranks and mixed role participants never multiply wall-clock overlap.
     assert overlap["lower_ms"] == overlap["upper_ms"]
+    coverage = result["recovery_coverage_by_other_requests"]
+    assert coverage["status"] == "COMPLETE"
+    assert coverage["covered_ms"] == overlap
+    assert coverage["fraction"]["lower"] == (
+        overlap["lower_ms"] / coverage["denominator_ms"]["upper_ms"]
+    )
+    assert 0 < coverage["fraction"]["lower"] <= coverage["fraction"]["upper"] <= 1
+    assert result["cross_request_overlap_steps"]["definite"] == 1
+    assert result["cross_request_overlap_steps"]["total_measured_Target_steps"] == 5
 
 
 def test_target_claim_must_match_actual_owner_proposal(monkeypatch):

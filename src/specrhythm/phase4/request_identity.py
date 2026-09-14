@@ -7,7 +7,23 @@ the frozen prompt-token prefix; internal request-ID strings are opaque.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, Mapping, Sequence, Tuple
+
+
+@dataclass(frozen=True, init=False)
+class _NormalizedTokenRow:
+    """Call-local binding input, never a cache or evidence of a prior visit.
+
+    Construction executes the legacy int conversion on EVERY token, including
+    the generated suffix. Only the resident K3 caller opts into this internal
+    type; ordinary sequences retain the original public matching path.
+    """
+
+    tokens: Tuple[int, ...]
+
+    def __init__(self, raw: Sequence[int]) -> None:
+        object.__setattr__(self, "tokens", tuple(int(item) for item in raw))
 
 
 class FrozenPromptIdentityMap:
@@ -44,6 +60,10 @@ class FrozenPromptIdentityMap:
         """Return the only stable prompt that prefixes the physical token row."""
 
         tokens = tuple(int(item) for item in physical_token_prefix)
+        return self._match_normalized_tokens(tokens)
+
+    def _match_normalized_tokens(self, tokens: Tuple[int, ...]) -> str:
+        """Internal content comparison; caller must normalize this current row first."""
         matches = [
             stable_id
             for stable_id, prompt in self.stable_prompts.items()
@@ -74,6 +94,8 @@ class FrozenPromptIdentityMap:
 
     def _match_for_binding(self, internal_id: str, physical_token_prefix: Sequence[int]) -> str:
         """Default full matching; fixed diagnostics may specialize pure prompt lookup."""
+        if type(physical_token_prefix) is _NormalizedTokenRow:
+            return self._match_normalized_tokens(physical_token_prefix.tokens)
         return self.match(physical_token_prefix)
 
     def stable_id(self, internal_request_id: str) -> str:
