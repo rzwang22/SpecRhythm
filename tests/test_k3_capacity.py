@@ -69,7 +69,7 @@ def test_production_k3_capacity_reaches_drive_with_real_capacity_function(
 
     actual = read_json(tmp_path / "actual-capacity.json")
     assert [r["reserved_speculative_positions"] for r in actual["checks"]] == (
-        [4, 4, 6] if mode == MODES[-1] else [4, 4, 4])
+        [4, 4, 6] if "eager" in mode else [4, 4, 4])
     assert all(r["candidate_length"] == 3 for r in actual["checks"])
     assert h.llm.llm_engine.vllm_config.speculative_config.num_speculative_tokens == 3
 
@@ -127,9 +127,27 @@ def test_candidate_configuration_invalid_or_missing(value, monkeypatch):
 def test_static_contract_is_not_physical_capacity():
     result = preflight()
     assert result["static_contract"] == "PASS" and result["GPU_capacity"] == "PENDING"
-    assert len(result["reservations"]) == 6
-    assert [r["required_speculative_positions"] for r in result["reservations"]] == [3] * 5 + [6]
-    assert [r["reserved_speculative_positions"] for r in result["reservations"]] == [4] * 5 + [6]
+    assert len(result["reservations"]) == 8
+    assert [r["required_speculative_positions"] for r in result["reservations"]] == [
+        3,
+        3,
+        3,
+        6,
+        3,
+        3,
+        3,
+        6,
+    ]
+    assert [r["reserved_speculative_positions"] for r in result["reservations"]] == [
+        4,
+        4,
+        4,
+        6,
+        4,
+        4,
+        4,
+        6,
+    ]
 
 
 @pytest.mark.parametrize("eager", [False, True])
@@ -144,7 +162,7 @@ def test_live_kv_and_correction_fit_declared_positions(eager, early_steps, rejec
     from specrhythm.phase4.serial import token_prefix_hash
 
     m = machine(eager, ids=("a",))
-    required = reservation(MODES[-1] if eager else MODES[1], "draft")[
+    required = reservation(MODES[-1] if eager else MODES[0], "draft")[
         "required_speculative_positions"]
     try:
         p = admit(m)["claims"][0]["proposal"]

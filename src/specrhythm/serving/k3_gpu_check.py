@@ -35,12 +35,13 @@ def coverage(runtime, backend):
     if not restored:
         missing.append("actual rejection followed by complete K3 READY")
     homes = {c["home_cohort"] for e in events if e["event"] == "admission" for c in e["claims"]}
-    if homes != {"A", "B"}:
+    if homes != set(ping.get("geometry", {}).get("home_capacities", {"A": 8, "B": 8})):
         missing.append("both homes verified")
     for step in runtime["target_steps"]:
         if not step["B"]:
             continue
-        require(0 < step["B"] <= 8, "K3 Target request ceiling violated")
+        require(0 < step["B"] <= ping["target_batch_ceiling"],
+                "K3 Target request ceiling violated")
         for c in step["ping_admission"]["claims"]:
             r = ready.get((c["request_id"], c["prefix_version"]))
             require(r is not None, "K3 actual claim lacks READY evidence")

@@ -12,7 +12,7 @@ from test_rolling_eager_gpu_backend import greedy_tokens
 from test_serial_eager_owner import OwnerWorker, verify_row
 
 from specrhythm.phase4.serial import token_prefix_hash
-from specrhythm.serving.k3 import MODES
+from specrhythm.serving.k3 import MODES, geometry
 from specrhythm.serving.prepost_target import install
 
 runner_class = _runner_class
@@ -29,30 +29,35 @@ def test_complete_output_against_independent_target_oracle(
             return [t + int(t % 3 == 0) for t in values]  # deterministic imperfect Draft
 
     monkeypatch.setenv("SR_S2_MODE", mode)
-    m = machine(mode == "pingpong-eager-k3", ids=("a", "x", "b", "y"), budget=20, worker=Draft())
+    g = geometry(mode)
+    m = machine(g["eager"], ids=tuple(str(i) for i in range(16)), budget=31,
+                worker=Draft(), mode=mode)
     seen_rejection = False
     try:
         for cycle in range(80):
             active = [rid for rid, s in m.requests.items() if not s.finished]
             if not active:
                 break
-            claims = admit(m, "A" if cycle % 2 == 0 else "B", 2, active)["claims"]
+            claims = admit(m, "A" if g["serial_idle_gate"] or cycle % 2 == 0 else "B",
+                           g["target_request_ceiling"], active)["claims"]
             ids = [c["request_id"] for c in claims]
-            assert len(ids) == 2
+            assert 0 < len(ids) <= g["target_request_ceiling"]
             m.verify_start([verify_row(c["proposal"]) for c in claims])
             if not feedback_first:
                 run_work(m)
             runner = make_runner(runner_class)
             runner.max_model_len = 128
             runner.drafter.eos_token_ids = ()
+            runner.input_batch.num_reqs = len(ids)
+            runner.discard_request_mask.np = np.array([False] * len(ids))
             runner.input_batch.req_ids = ids
             runner.input_batch.req_id_to_index = {rid: i for i, rid in enumerate(ids)}
-            runner.input_batch.token_ids_cpu = np.zeros((2, 128), int)
-            runner.input_batch.is_token_ids = np.ones((2, 128), bool)
+            runner.input_batch.token_ids_cpu = np.zeros((len(ids), 128), int)
+            runner.input_batch.is_token_ids = np.ones((len(ids), 128), bool)
             runner.requests = {
                 rid: NS(
                     output_token_ids=list(m.requests[rid].committed_token_ids[1:]),
-                    sampling_params=NS(max_tokens=21),
+                    sampling_params=NS(max_tokens=32),
                 )
                 for rid in ids
             }
@@ -93,16 +98,16 @@ def test_complete_output_against_independent_target_oracle(
                         round_id=m.requests[rid].next_round_id,
                         committed_delta=delta,
                         committed_prefix_hash=token_prefix_hash(final),
-                        terminal=len(final) == 22,
+                        terminal=len(final) == 33,
                     )
                 )
                 assert runner.requests[rid].output_token_ids == list(final[1:])
             m.feedback(feedback)
             run_work(m)
         assert seen_rejection and all(s.finished for s in m.requests.values())
-        expected = (10, 20) + greedy_tokens((10, 20), 20)
+        expected = (10, 20) + greedy_tokens((10, 20), 31)
         assert all(s.committed_token_ids == expected for s in m.requests.values())
-        assert m.counters["committed_tokens"] == 80
+        assert m.counters["committed_tokens"] == 16 * 31
         assert (
             m.counters["committed_tokens"]
             == m.counters["accepted_tokens"] + m.counters["correction_tokens"]

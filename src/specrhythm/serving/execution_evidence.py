@@ -277,14 +277,14 @@ def qualify(report):
             errors.append("prepost protocol/forward evidence incomplete: "
                           + str(prepost.get("errors")))
     if report.get("mode") in ("pingpong-prepost3", "pingpong-eager-prepost3",
-                              "serial-k3", "pingpong-k3", "pingpong-eager-k3"):
+                              "serial-k3", "serial-eager-k3", "pingpong-k3", "pingpong-eager-k3"):
         ping = report.get("pingpong", {})
         if ping.get("status") != "COMPLETE":
             errors.append("PingPong protocol evidence incomplete: " + str(ping.get("errors")))
         if any(c.get("latencies_ms", {}).get("service_receive_to_owner_dequeue") is None
                for c in cycles):
             errors.append("per-cycle PingPong owner feedback landmarks incomplete")
-    if report.get("mode") in ("serial-k3", "pingpong-k3", "pingpong-eager-k3"):
+    if report.get("mode") in ("serial-k3", "serial-eager-k3", "pingpong-k3", "pingpong-eager-k3"):
         resident = report.get("pingpong", {}).get("pipeline", {}).get(
             "dispatch", {}).get("resident_schedule", {})
         if resident.get("status") != "COMPLETE":

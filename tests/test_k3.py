@@ -23,11 +23,11 @@ class Backend(K3BackendMixin, VllmBatchedDraftBackend):
         }
 
 
-def machine(eager=True, ids=("a", "b"), budget=100, eos=(), worker=None, complete=True):
+def machine(eager=True, ids=("a", "b"), budget=100, eos=(), worker=None, complete=True, mode=None):
     m = K3Machine(
         Backend(NS(max_model_len=4096), worker=worker or OwnerWorker()),
         request_ids=ids,
-        eager=eager,
+        eager=eager, mode=mode,
     )
     for rid in ids:
         m.initialize(rid, (10, 20), token_prefix_hash((10, 20)))
@@ -35,7 +35,7 @@ def machine(eager=True, ids=("a", "b"), budget=100, eos=(), worker=None, complet
         [
             {
                 **proposal_row(rid, remaining=budget),
-                "home_cohort": "A" if i % 2 == 0 else "B",
+                "home_cohort": "A" if (mode and mode.startswith("serial-")) or i % 2 == 0 else "B",
                 "eos_token_ids": eos,
             }
             for i, rid in enumerate(ids)

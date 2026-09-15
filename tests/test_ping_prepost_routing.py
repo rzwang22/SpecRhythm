@@ -37,8 +37,9 @@ def test_true_service_factory_and_target_engine_classes(
         3 if mode.endswith("-k3") else 4)
     assert cfg["tensor_parallel_size"] == 2 and not cfg["async_scheduling"]
     cap = capacity_metadata(mode, active_limit=16, resident_requirement=360)
-    assert cap["active_request_limit"] == 16 and cap["max_requests_per_target_forward"] == 8
-    assert cap["per_cohort_capacity"] == 8 and cap["resident_request_requirement"] == 360
+    ceiling = 16 if mode in ("serial-k3", "serial-eager-k3") else 8
+    assert cap["active_request_limit"] == 16 and cap["max_requests_per_target_forward"] == ceiling
+    assert cap["per_cohort_capacity"] == ceiling and cap["resident_request_requirement"] == 360
     with pytest.raises(ValueError, match="B16"):
         selected_point(mode, 32)
     owners = []
@@ -58,7 +59,9 @@ def test_true_service_factory_and_target_engine_classes(
         assert isinstance(server.machine, PingPrePostOwner)
         assert isinstance(server.machine.machine, PingPrePostMachine)
         assert isinstance(server.machine.machine.backend, PingPrePostBackendMixin)
-        assert server.machine.machine.enabled == (mode in (MODES[1], "pingpong-eager-k3"))
+        assert server.machine.machine.enabled == (
+            mode in (MODES[1], "serial-eager-k3", "pingpong-eager-k3")
+        )
         assert server.machine.commands.maxsize == 256
         if mode.endswith("-k3"):
             from specrhythm.continuation.k3_backend import K3BackendMixin

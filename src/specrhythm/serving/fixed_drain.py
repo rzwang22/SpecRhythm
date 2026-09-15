@@ -52,12 +52,12 @@ def settle(
     try:
         update("wait_owner")
         if runtime_mode in ("pingpong-prepost3", "pingpong-eager-prepost3",
-                          "serial-k3", "pingpong-k3", "pingpong-eager-k3"):
+                          "serial-k3", "serial-eager-k3", "pingpong-k3", "pingpong-eager-k3"):
             client.call("pp_stop", {"deadline_ns":deadline})
         if runtime_mode in ("pingpong", "serial-eager",
                             "serial-prepost3", "serial-eager-prepost3",
                           "pingpong-prepost3", "pingpong-eager-prepost3",
-                          "serial-k3", "pingpong-k3", "pingpong-eager-k3"):
+                          "serial-k3", "serial-eager-k3", "pingpong-k3", "pingpong-eager-k3"):
             wait_draft(client, remaining(deadline), deadline_ns=deadline)
         llm.collective_rpc(target_fence, timeout=update("target_fence"))
         devices = llm.collective_rpc(target_report, timeout=update("target_evidence"))
@@ -115,7 +115,8 @@ def settle(
             "shutdown", {"deadline_ns": deadline}
             if runtime_mode in ("serial-eager", "serial-prepost3", "serial-eager-prepost3",
                           "pingpong-prepost3", "pingpong-eager-prepost3",
-                          "serial-k3", "pingpong-k3", "pingpong-eager-k3") else {}
+                          "serial-k3", "serial-eager-k3",
+                          "pingpong-k3", "pingpong-eager-k3") else {}
         )
         require(draft_shutdown.get("shutdown") is True, "Draft shutdown incomplete")
         final = llm.collective_rpc(target_snapshot, timeout=update("target_final_evidence"))

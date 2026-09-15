@@ -54,7 +54,11 @@ class PingPrePostScheduler(FixedBatch, S2SerialScheduler):
         admission = packet.get("pp_admission", {})
         claims = admission.get("claims", [])
         self.pp_claims = {r["request_id"]: r for r in claims}
-        require(len(self.pp_claims) == len(claims) <= 8, "invalid Target claim batch")
+        from specrhythm.serving.k3 import MODES, geometry
+
+        mode = os.environ.get("SR_S2_MODE")
+        ceiling = geometry(mode)["target_request_ceiling"] if mode in MODES else 8
+        require(len(self.pp_claims) == len(claims) <= ceiling, "invalid Target claim batch")
         if packet["barrier_ns"] is not None:
             self.selected_cohort = admission["opportunity_cohort"]
             require(

@@ -10,7 +10,7 @@ from test_eager_latency_runbook import executable
 
 SCRIPT = Path("scripts/run_k3_b16.sh")
 SHA = "a" * 40
-MODES = ("serial-k3", "pingpong-k3", "pingpong-eager-k3")
+MODES = ("serial-k3", "serial-eager-k3", "pingpong-k3", "pingpong-eager-k3")
 
 
 @pytest.mark.parametrize(

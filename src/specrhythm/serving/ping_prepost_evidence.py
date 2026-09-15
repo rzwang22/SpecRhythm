@@ -48,7 +48,10 @@ def mechanism(runtime, backend):
     parameters = K3_PARAMETERS if uniform else PARAMETERS
     protocol, physical = backend.get("prepost", {}), backend.get("prepost_physical", {})
     ping, errors = protocol.get("pingpong", {}), []
-    if ping.get("protocol") != expected_protocol or physical.get("parameters") != parameters:
+    if ping.get("protocol") != expected_protocol or physical.get("parameters") not in (
+        parameters,
+        {**parameters, "target_request_ceiling": 8},
+    ):
         errors.append("protocol parameters/binding missing")
     if uniform and not accounting_complete(protocol.get("candidate_accounting")):
         errors.append("K3 final lifetime candidate accounting missing/inconsistent")
@@ -125,7 +128,7 @@ def mechanism(runtime, backend):
     if any(g not in mapped for g in window_native if g.get("purpose") in PURPOSES):
         mapping_complete = False
         errors.append("native forward lacks role mapping")
-    eager = runtime["point"]["mode"] in (MODES[1], "pingpong-eager-k3")
+    eager = runtime["point"]["mode"] in (MODES[1], "serial-eager-k3", "pingpong-eager-k3")
     cycles = []
     targets = [g for d in runtime["target_devices"] for g in d["device"].get("forwards", [])]
     for step in runtime["target_steps"]:
@@ -137,7 +140,7 @@ def mechanism(runtime, backend):
         if (
             len(step_claims) != step["B"]
             or len(lengths) != step["B"]
-            or step["B"] > 8
+            or step["B"] > ping.get("target_batch_ceiling", 8)
             or {c["request_id"] for c in step_claims} != set(lengths)
         ):
             errors.append("Target claim/actual batch mismatch")
@@ -430,6 +433,8 @@ def analyze(runtime, backend, light):
             ping["errors"].extend(ping["pipeline"]["errors"])
     return dict(
         mode=light["mode"],
+        execution_geometry=backend.get("prepost", {}).get("pingpong", {}).get("geometry"),
+        actual_target_batch=dict(Counter(s["B"] for s in steps)),
         draft_audit=backend["draft_audit"],
         original_qualification={
             k: light[k]

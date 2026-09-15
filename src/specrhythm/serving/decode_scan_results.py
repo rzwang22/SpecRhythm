@@ -95,8 +95,10 @@ def full_load_fraction(rows, start, end, batch):
     return full / (end - start)
 
 
-def rotations(steps, expected, mode):
+def rotations(steps, expected, mode, geometry=None):
     """Pair opposite cohorts using actual disjoint request sets; retain partial rotations."""
+    if geometry is not None and geometry["serial_idle_gate"]:
+        return len(steps), 0
     if mode in PING_MODES:
         return len(steps)//2, len(steps)%2
     complete, partial, pending = 0, 0, None
@@ -116,7 +118,11 @@ def warmup_boundary(runtime, point, opts):
     retained = scan.get("warmup_boundary")
     require(isinstance(retained, dict), "scan mandatory warmup boundary evidence missing",
             field="decode_scan.warmup_boundary", artifact="runtime.json")
-    if point["mode"] in PING_MODES:
+    if retained.get("schema_version") == "specrhythm.k3-request-opportunities.v1":
+        from specrhythm.serving.k3_window import K3Window
+
+        replay = K3Window(opts, point["batch"], point["mode"])
+    elif point["mode"] in PING_MODES:
         from specrhythm.serving.ping_prepost_window import PingPrePostWindow
 
         replay = PingPrePostWindow(opts, point["batch"], True)
@@ -162,6 +168,12 @@ def timing(runtime, backend, point, opts):
     nonempty = [s for s in measured if s["B"]]
     expected = (point["batch"] // 2 if point["mode"] in ("pingpong", *PING_MODES)
                 else point["batch"])
+    execution_geometry = runtime.get("capacity", {}).get("execution_geometry")
+    if execution_geometry is not None:
+        from specrhythm.serving.k3 import geometry
+
+        require(execution_geometry == geometry(point["mode"]), "K3 runtime geometry mismatch")
+        expected = execution_geometry["target_request_ceiling"]
     devices = runtime["target_devices"]
     require(
         len(devices) == 2 and {d["device"]["identity"]["global_rank"] for d in devices} == {0, 1},
@@ -285,7 +297,7 @@ def timing(runtime, backend, point, opts):
         actual=tokens,
     )
     scan = runtime["decode_scan"]
-    complete, partial = rotations(nonempty, expected, point["mode"])
+    complete, partial = rotations(nonempty, expected, point["mode"], execution_geometry)
     require(
         complete == len(scan["complete_rotations"]) and partial == len(scan["partial_rotations"]),
         "scan rotation evidence differs",

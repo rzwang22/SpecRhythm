@@ -46,7 +46,7 @@ for _mode in ("serial-prepost3", "serial-eager-prepost3"):
 
 
 for _mode in ("pingpong-prepost3", "pingpong-eager-prepost3",
-                          "serial-k3", "pingpong-k3", "pingpong-eager-k3"):
+                          "serial-k3", "serial-eager-k3", "pingpong-k3", "pingpong-eager-k3"):
     CLASSES[_mode] = ("specrhythm.serving.ping_prepost_scheduler.PingPrePostScheduler",
                       "specrhythm.serving.ping_prepost_proposer.PingPrePostProposer")
 
@@ -157,7 +157,7 @@ def commit_outputs(clock, outputs, packet, client, runtime_mode):
                 payload = {"request_id": rid}
                 if runtime_mode in ("serial-eager", "serial-prepost3", "serial-eager-prepost3",
                                     "pingpong-prepost3", "pingpong-eager-prepost3",
-                          "serial-k3", "pingpong-k3", "pingpong-eager-k3"):
+                          "serial-k3", "serial-eager-k3", "pingpong-k3", "pingpong-eager-k3"):
                     from specrhythm.phase4.serial import token_prefix_hash
 
                     final = (*clock.definitions[rid].prompt_token_ids, *tokens)
@@ -209,13 +209,15 @@ def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5, 
     active = manifest["active_limit"] if scan or point.get("prepost_correctness") else (
         point["batch"] if initial and runtime_mode != "pingpong" else 64)
     ping_prepost = runtime_mode in ("pingpong-prepost3", "pingpong-eager-prepost3",
-                          "serial-k3", "pingpong-k3", "pingpong-eager-k3")
+                          "serial-k3", "serial-eager-k3", "pingpong-k3", "pingpong-eager-k3")
     grouped = runtime_mode == "pingpong" or ping_prepost
     if ping_prepost:
         from specrhythm.serving.ping_prepost_controller import PingPrePostController
 
-        ping_controller = PingPrePostController()
+        ping_controller = PingPrePostController(mode)
     cohort_capacity = active // 2 if scan or ping_prepost else 32
+    if mode in ("serial-k3", "serial-eager-k3"):
+        cohort_capacity = active
     maximum_batch = cohort_capacity if grouped else active
     trace = copy.deepcopy(manifest["trace"])
     if initial and point["half"] == "B":
@@ -227,6 +229,8 @@ def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5, 
 
         trace = sealed(trace)
     assignment = {rid: c for c, ids in diag["cohorts"].items() for rid in ids} if grouped else {}
+    if mode in ("serial-k3", "serial-eager-k3"):
+        assignment = {}  # ServingClock enforces single immutable A home, including refill.
     clock = ServingClock(
         definitions,
         trace,
@@ -257,7 +261,12 @@ def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5, 
         if ping_prepost:
             from specrhythm.serving.ping_prepost_window import PingPrePostWindow
 
-            window = PingPrePostWindow(window_options, active, True)
+            if mode.endswith("-k3"):
+                from specrhythm.serving.k3_window import K3Window
+
+                window = K3Window(window_options, active, mode)
+            else:
+                window = PingPrePostWindow(window_options, active, True)
         else:
             window = ScanWindow(window_options, active, grouped)
         window.readiness = ReadinessEvidence()
@@ -351,7 +360,7 @@ def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5, 
                 publish_control()
             # This is the only serial-split execution difference. No Target step
             # can begin with any owner work pending, including terminal materialization.
-            if mode == "serial-k3":
+            if mode in ("serial-k3", "serial-eager-k3"):
                 with TIMERS.span("serial_k3_idle_gate"):
                     while not client.call("k3_idle", {})["idle"]:
                         remaining(int(observation_deadline * 1e9))

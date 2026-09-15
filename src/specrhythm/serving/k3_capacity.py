@@ -6,11 +6,12 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from specrhythm.serving.common import require
-from specrhythm.serving.k3 import MODES, PARAMETERS
+from specrhythm.serving.k3 import MODES, PARAMETERS, geometry
 from specrhythm.serving.s1_workload import write_once
 from specrhythm.serving.s2_plan import capacity_for
 
-SCHEMA = "specrhythm.k3-capacity.v1"
+SCHEMA = "specrhythm.k3-capacity.v2"
+LEGACY_SCHEMA = "specrhythm.k3-capacity.v1"
 LEGACY_MINIMUM_RESERVE = 4
 
 
@@ -19,7 +20,7 @@ def reservation(mode, role):
     k, eager = PARAMETERS.get("candidate_length"), PARAMETERS.get("eager_candidate_limit")
     require(type(k) is int and k == 3 and type(eager) is int and eager == 3,
             "K3 capacity requires explicit integer candidate_length/eager_candidate_limit=3")
-    look = eager if mode == "pingpong-eager-k3" and role == "draft" else 0
+    look = eager if mode in ("serial-eager-k3", "pingpong-eager-k3") and role == "draft" else 0
     required = k + look
     return dict(candidate_length=k, eager_continuation_candidates=look,
                 required_speculative_positions=required,
@@ -41,7 +42,7 @@ def budgets(definitions):
     return rows
 
 
-def check(definitions, rank, *, mode, active_limit, metadata):
+def check(definitions, rank, *, mode, active_limit, metadata, legacy=False):
     require(isinstance(rank, dict) and isinstance(metadata, dict),
             "K3 raw rank capacity/metadata missing", mode=mode)
     require(type(active_limit) is int and active_limit > 0, "invalid K3 active capacity")
@@ -67,6 +68,18 @@ def check(definitions, rank, *, mode, active_limit, metadata):
             and metadata.get("draft_speculative_capacity_tokens")
             == reservation(mode, "draft")["reserved_speculative_positions"],
             "K3 capacity metadata/required/reserved positions differ", mode=mode, role=role)
+    plan = geometry(mode)
+    declared_geometry = metadata.get("execution_geometry")
+    if not legacy or declared_geometry is not None:
+        require(declared_geometry == plan and active_limit == 16
+                and metadata["max_requests_per_target_forward"] == plan["target_request_ceiling"],
+                "K3 physical batch declaration differs")
+        batch = plan["target_request_ceiling"] if role == "target" else 16
+        require(
+            metadata[role + "_sequence_limit"] >= batch
+            and metadata[role + "_query_token_limit"] >= batch * (4 if role == "target" else 1),
+            "K3 physical batch/query capacity insufficient",
+        )
     budgets(definitions)
     value = capacity_for(definitions, rank, active_limit=active_limit,
                          speculative_tokens=policy["reserved_speculative_positions"])
@@ -79,7 +92,8 @@ def check(definitions, rank, *, mode, active_limit, metadata):
 
 def qualify(actual, mode, definitions=None):
     """Offline replay from original budgets/rank data, never hardware queries."""
-    require(actual.get("capacity_schema") == SCHEMA, "K3 capacity schema missing", mode=mode)
+    require(actual.get("capacity_schema") in (SCHEMA, LEGACY_SCHEMA),
+            "K3 capacity schema missing", mode=mode)
     rows = actual.get("capacity_request_budgets")
     require(isinstance(rows, list) and all(isinstance(r, dict) for r in rows),
             "K3 raw capacity request budgets missing", mode=mode)
@@ -98,7 +112,8 @@ def qualify(actual, mode, definitions=None):
     for rank, recorded in zip(ranks, checks):
         require(isinstance(recorded, dict), "K3 capacity check record missing", mode=mode)
         expected = check(reconstructed, rank, mode=mode,
-                         active_limit=meta.get("active_request_limit"), metadata=meta)
+                         active_limit=meta.get("active_request_limit"), metadata=meta,
+                         legacy=actual["capacity_schema"] == LEGACY_SCHEMA)
         for key, value in expected.items():
             require(type(recorded.get(key)) is type(value) and recorded[key] == value,
                     "K3 capacity arithmetic/record differs", mode=mode, role=rank["role"],
@@ -127,7 +142,7 @@ def preflight():
             require(value["extra_speculative_tokens"] >= 0
                     if "extra_speculative_tokens" in value else True,
                     "negative legacy capacity increment")
-            rows.append(dict(mode=mode, role=role, **policy))
+            rows.append(dict(mode=mode, role=role, geometry=geometry(mode), **policy))
     return dict(schema_version=SCHEMA, static_contract="PASS", GPU_capacity="PENDING",
                 scope="synthetic arithmetic only; no model, device, allocation or UUID query",
                 reservations=rows)

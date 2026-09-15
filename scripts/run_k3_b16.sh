@@ -65,7 +65,7 @@ test "$(git rev-parse HEAD)" = "$FINAL_SHA"
 STAGE=static_capacity_contract
 "$SR_FIXED_PYTHON" -m specrhythm.serving.k3_capacity \
   --output "$SR_PING_DELIVERY/k3-capacity-contract.json"
-MODES=(serial-k3 pingpong-k3 pingpong-eager-k3)
+MODES=(serial-k3 serial-eager-k3 pingpong-k3 pingpong-eager-k3)
 for POINT in "${MODES[@]}"; do
   STAGE=prepare
   export SR_AUDIT_SERVING_MODE="$POINT" SR_FIXED_ROOT="$SR_PING_DELIVERY/points/$POINT"
@@ -85,7 +85,10 @@ assert o['identity_matching']=='bound-prefix' and o['samples'] is None
 assert (o['warmup_steps'],o['window_seconds'],o['repeats'],o['setup_timeout'],o['drain_timeout'])==(2,30,1,900,60)
 m=read_json(root/'inputs/execution-B16.json')
 c=m['fixed_diagnostic']['capacity'][os.environ['SR_AUDIT_SERVING_MODE']]
-assert (m['active_limit'],c['per_cohort_capacity'],c['max_requests_per_target_forward'])==(16,8,8)
+from specrhythm.serving.k3 import geometry
+g=geometry(os.environ['SR_AUDIT_SERVING_MODE'])
+assert c['execution_geometry']==g
+assert (m['active_limit'],c['per_cohort_capacity'],c['max_requests_per_target_forward'])==(16,max(g['home_capacities'].values()),g['target_request_ceiling'])
 assert c['proposal_budget']==3
 PY_CONFIG
   STAGE=capacity

@@ -121,6 +121,7 @@ def comparison(directory, *, modes=MODES):
                 **{
                     k: r.get(k)
                     for k in (
+                        "execution_geometry", "actual_target_batch",
                         "throughput_tok_s",
                         "window_ms",
                         "committed_tokens",
@@ -147,6 +148,11 @@ def comparison(directory, *, modes=MODES):
         reports[0][k] == r[k] for r in reports[1:]
         for k in ("source_commit", "options", "workload_sha256")
     )
+    if "serial-eager-k3" in modes:
+        from specrhythm.serving.k3 import geometry
+
+        matched = matched and all(r.get("execution_geometry") == geometry(r["mode"])
+                                  for r in reports)
     valid = matched and all(
         qualify(r)["diagnostic_integrity"] == "COMPLETE"
         and all(

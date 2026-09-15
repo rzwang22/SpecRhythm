@@ -14,6 +14,9 @@ from specrhythm.serving.prepost_machine import PrePostMachine
 
 
 class PingPrePostMachine(PrePostMachine):
+    target_batch_ceiling = 8
+    home_capacities = {"A": 8, "B": 8}
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.homes, self.ready, self.claims, self.normal = {}, {}, {}, {}
@@ -50,7 +53,7 @@ class PingPrePostMachine(PrePostMachine):
         require(not self.draining, "registration after stop")
         for r in rows:
             rid, home = r["request_id"], r["home_cohort"]
-            require(home in ("A", "B") and rid not in self.homes, "duplicate/moved home")
+            require(home in self.home_capacities and rid not in self.homes, "duplicate/moved home")
         for r in rows:
             state = self._state(r["request_id"])
             require(
@@ -104,8 +107,10 @@ class PingPrePostMachine(PrePostMachine):
         )
         capacity, normal = payload["capacity"], payload["normal_cohort"]
         require(
-            type(capacity) is int and 0 < capacity <= 8 and normal in ("A", "B"),
-            "PingPong B16 has Target ceiling eight",
+            type(capacity) is int
+            and 0 < capacity <= self.target_batch_ceiling
+            and normal in self.home_capacities,
+            "Target claim exceeds configured home/ceiling",
         )
         active = payload["active_request_ids"]
         unique_ids(active)
@@ -113,7 +118,9 @@ class PingPrePostMachine(PrePostMachine):
         views = self.views(active)
         selected = select_target_admissions(views, normal_cohort=normal, capacity=capacity)
         fallback = None
-        if not selected:  # A busy home must not hide legal ordinary work in the other home.
+        if (
+            not selected and len(self.home_capacities) == 2
+        ):  # A busy home must not hide legal ordinary work in the other home.
             fallback = "B" if normal == "A" else "A"
             selected = select_target_admissions(views, normal_cohort=fallback, capacity=capacity)
         self.opportunity = payload["opportunity"]
@@ -455,6 +462,6 @@ class PingPrePostMachine(PrePostMachine):
             ready=list(self.ready),
             home_cohorts=dict(self.homes),
             active_limit=16,
-            target_batch_ceiling=8,
+            target_batch_ceiling=self.target_batch_ceiling,
         )
         return result

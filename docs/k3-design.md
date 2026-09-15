@@ -361,3 +361,30 @@ multiply an interval. Lower/upper fractions use opposite denominator bounds; mis
 bounds yield null, a no-recovery window is explicit. OBSERVED means any positive lower
 bound, not sufficiently hidden recovery. Neither CPU savings nor audit costs are
 subtracted from measured throughput.
+
+## Four-mode matrix (2026-09-15)
+
+The new `specrhythm.k3-four-mode.v1` execution geometry distinguishes Serial and
+PingPong. `serial-k3` and `serial-eager-k3` have one immutable A home of 16,
+Target ceiling16, and the all-Draft-idle gate before the next claim. Serial-eager
+uses the same K3 owner/backend, enabling conditional lookahead only during its
+own parent verification. It has no B home and no cross-home pipeline.
+`pingpong-k3` and `pingpong-eager-k3` retain A8/B8 and Target ceiling8. All four
+permit compatible Draft rows to form physical B16; home capacity is not a Draft
+batch limit. Controller, owner claim, live Target scheduler and capacity metadata
+all use this geometry. No `post_prepost()` or READY publication order changes.
+
+All use seed + two extensions for ordinary K3, three reusable eager candidates,
+no fourth candidate and no Target bonus commit. Capacity v2 records geometry and
+checks actual maximum sequence/query demand: Target up to 16*(root+K3)=64 query
+positions for Serial versus32 for PingPong; Draft token-step up to16 positions.
+Resident KV/logits/workspace arithmetic still charges active16, with ordinary
+required3/reserved4 and eager Draft required6/reserved6. No B8 fallback. Legacy
+capacity v1 can still be replayed using its recorded geometry; old Serial K3 B8
+runs remain B8 and are not the new matched baseline.
+
+Warmup uses 16 completed request-verification opportunities per unit, two units
+(32 opportunities), with per-request counts and unique coverage retained. Thus
+full Serial needs two Target steps and full PingPong four. Partial steps contribute
+only their actual B; no padding or invented opportunities. Window starts only with
+full active population, preserving live pipeline state and the unchanged deadline.

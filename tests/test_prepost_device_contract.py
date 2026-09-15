@@ -46,7 +46,10 @@ def produced(tmp_path, monkeypatch, hardware):
         # Reuse existing validated process/backend evidence for the simulated model lifecycle.
         _, directory, _ = native_fixture(base_path / "base", monkeypatch, "serial")
         runtime, _, point, opts = evidence(
-            "pingpong" if (mode.startswith("pingpong") or mode == "serial-k3") else "serial")
+            "pingpong"
+            if (mode.startswith("pingpong") or mode in ("serial-k3", "serial-eager-k3"))
+            else "serial"
+        )
         opts.update(observation="original-live", identity_matching="linear")
         point.update(mode=mode, runtime_mode=mode, probe=probe)
         rows = [replace(request(i, 512), request_id=str(i)) for i in range(360)]
@@ -79,12 +82,12 @@ def produced(tmp_path, monkeypatch, hardware):
                     )
                 )
             row["resources_released"] = True
-        if (mode.startswith("pingpong-") or mode == "serial-k3") and not probe:
+        if (mode.startswith("pingpong-") or mode in (
+                "serial-k3", "serial-eager-k3")) and not probe:
             w = PingPrePostWindow(opts, 16, True)
             for s in runtime["target_steps"]:
-                w.ready(
-                    s["start_ns"], population=runtime["decode_scan"]["window_initial_population"]
-                )
+                w.ready(s["start_ns"],
+                        population=runtime["decode_scan"]["window_initial_population"])
                 w.step_completed(s, s["end_ns"])
             w.end_ns = runtime["measurement_end_ns"]
             runtime["decode_scan"] = w.evidence()
@@ -123,8 +126,11 @@ def produced(tmp_path, monkeypatch, hardware):
             setattr(hardware.cuda, name, lambda device=None: 1024)
         hardware.cuda.Event = Event
         hardware.cuda.mem_get_info = lambda: (8 * 1024**3, 80 * 1024**3)
-        cls = (PingPrePostProposer if (mode.startswith("pingpong-") or mode == "serial-k3")
-               else PrePostProposer)
+        cls = (
+            PingPrePostProposer
+            if (mode.startswith("pingpong-") or mode in ("serial-k3", "serial-eager-k3"))
+            else PrePostProposer
+        )
         workers, startup = [], []
         for rank in (0, 1):
             monkeypatch.setenv("CUDA_VISIBLE_DEVICES", str(rank + 1))

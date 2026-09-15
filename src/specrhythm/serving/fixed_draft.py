@@ -19,7 +19,7 @@ def serve(config, directory, socket_path, mode, *, backend_class=None):
     """Only the fixed diagnostic service opts into the explicit stop protocol."""
     if mode in ("serial-eager", "serial-prepost3", "serial-eager-prepost3",
                           "pingpong-prepost3", "pingpong-eager-prepost3",
-                          "serial-k3", "pingpong-k3", "pingpong-eager-k3"):
+                          "serial-k3", "serial-eager-k3", "pingpong-k3", "pingpong-eager-k3"):
         from specrhythm.serving.eager_draft import serve as serve_eager
 
         return serve_eager(config, directory, socket_path, backend_class=backend_class,

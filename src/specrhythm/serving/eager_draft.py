@@ -110,11 +110,19 @@ def serve(config, directory, socket_path, *, backend_class=None, prepost_mode=No
                 from specrhythm.serving.k3_machine import K3Machine
 
                 PrePostMachine = K3Machine
-            return PrePostMachine(backend, request_ids=tuple(control()["requests"]),
-                                  eager=prepost_mode in (
-                                      "serial-eager-prepost3", "pingpong-eager-prepost3",
-                                      "pingpong-eager-k3"),
-                                  report_path=report)
+            return PrePostMachine(
+                backend,
+                request_ids=tuple(control()["requests"]),
+                eager=prepost_mode
+                in (
+                    "serial-eager-prepost3",
+                    "pingpong-eager-prepost3",
+                    "serial-eager-k3",
+                    "pingpong-eager-k3",
+                ),
+                report_path=report,
+                **({"mode": prepost_mode} if prepost_mode.endswith("-k3") else {}),
+            )
         return EagerSerialMachine(
             backend, request_ids=tuple(control()["requests"]), report_path=report
         )

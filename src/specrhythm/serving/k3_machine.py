@@ -7,13 +7,31 @@ from specrhythm.continuation.prepost import PrePostState
 from specrhythm.phase4.draft_batch import DraftProposalPlan, unique_ids
 from specrhythm.phase4.serial import token_prefix_hash
 from specrhythm.serving.common import require
-from specrhythm.serving.k3 import PARAMETERS, PROTOCOL
+from specrhythm.serving.k3 import PARAMETERS, PROTOCOL, geometry
 from specrhythm.serving.ping_prepost_machine import PingPrePostMachine
 
 
 class K3Machine(PingPrePostMachine):
     protocol, parameters = PROTOCOL, PARAMETERS
     uniform_candidate_length = 3
+
+    def __init__(self, *args, mode=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Explicit production mode; historical CPU callers retain two-home defaults.
+        mode = mode or ("pingpong-eager-k3" if self.enabled else "pingpong-k3")
+        self.geometry = geometry(mode)
+        require(self.geometry["eager"] == self.enabled, "K3 mode/eager mismatch")
+        self.target_batch_ceiling = self.geometry["target_request_ceiling"]
+        self.home_capacities = self.geometry["home_capacities"]
+
+    def admit(self, payload):
+        if self.geometry["serial_idle_gate"]:
+            require(not self.has_work(), "Serial K3 claim before all Draft work is idle")
+        active = payload["active_request_ids"]
+        require(all(sum(self.homes.get(r) == home for r in active) <= limit
+                    for home, limit in self.home_capacities.items()), "K3 active home capacity")
+        return super().admit(payload)
+
 
     def batch_propose(self, rows):
         """Only cached seeds here; all extensions run in preemptible owner steps."""
@@ -98,6 +116,7 @@ class K3Machine(PingPrePostMachine):
 
     def eager_report(self):
         result = super().eager_report()
+        result["pingpong"]["geometry"] = self.geometry
         c = self.counters
         generated = sum(c[k] for k in (
             "initial_seed_candidates", "normal_extension_candidates",
