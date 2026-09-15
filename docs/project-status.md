@@ -33,7 +33,7 @@ claims.
 
 - 保留 `d007dce448bd2a7d510172222ae166d7bb6f299e` 和入口 `3a2ffde4cd4350392b7c6f9e98ebe2cd1d1d1315`。独立矩阵提交 `ed6ff9703765e2c36b9ec4b3d0cb91edc1125d8f` 实现 Serial/Serial-eager 单组16、PingPong/eager A8+B8；实际 Target ceiling16/8，兼容 Draft 物理合批上限16。
 - 四模式保持真实K3、no-bonus、需求3/预留4和 eager Draft6/6、runtime审计、buffered-live、resident360与原窗口预算。预热统一32次实际请求验证机会，记录逐请求分布，B16两步/B8四步。旧 Serial B8 数据不重命名。
-- 独立CPU改动只合并当次 admission 的共享标量字段，并复用一次 canonical 编码完成原校验和行。360逻辑记录仍完整输出；不改变双向身份绑定、当次全prompt/后缀检查、两次全KV审计、fence、owner边界或READY发布顺序。
+- CPU执行SHA `fca2118b89d21b11f18f5de43d69657e820087ab`；后续固定入口提交只绑定此执行版本并更新交付文档。独立CPU改动只合并当次 admission 的共享标量字段，并复用一次 canonical 编码完成原校验和行。360逻辑记录仍完整输出；不改变双向身份绑定、当次全prompt/后缀检查、两次全KV审计、fence、owner边界或READY发布顺序。
 - 最新旧包145文件/106对象校验通过，普通77/124跨组重叠、恢复覆盖3.76–3.88%；eager1/134、0.144–0.147%，自身父轮重叠7.75–7.79秒另计。不能声称恢复已充分隐藏。原运行与负/单窗口性能结论保留。
 - 四点入口：静态契约→四容量→Target-only+四完整输出→四runtime30s，只回传一个总包。源SHA、模型/数值/资源与公共配置一致，允许模式规定的Target16/8差异，不比较跨次UUID。
 - 最终本地全量2612通过/3跳过；Python3.9和3.12相关各351通过，Ruff/compileall/216源文件3.9语法/21脚本Bash/diff检查通过。首次失败记录见 `docs/k3-validation.md`；3.12监督器测试首次启动超时原因尚未确定，隔离复查通过不等于已确定根因。最终CI以GitHub实际状态为准。

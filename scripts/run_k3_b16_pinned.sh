@@ -2,7 +2,7 @@
 # Execute with bash, never source into the interactive terminal.
 if bash <<'SR_K3_CHILD'
 set -Eeuo pipefail
-FINAL_SHA=d007dce448bd2a7d510172222ae166d7bb6f299e
+FINAL_SHA=fca2118b89d21b11f18f5de43d69657e820087ab
 REPO="${SR_K3_REPO:-/root/autodl-tmp/src/SpecRhythm}"
 git -C "$REPO" fetch origin codex/rolling-eager-v0.1
 git -C "$REPO" cat-file -e "${FINAL_SHA}^{commit}"
@@ -12,7 +12,7 @@ export SR_EXEC_REPO="$RUN_TREE"
 bash "$RUN_TREE/scripts/run_k3_b16.sh" "$FINAL_SHA"
 SR_K3_CHILD
 then
-  printf 'K3 three-point run finished. Return only the archive printed by the runner.\n'
+  printf 'K3 four-point run finished. Return only the archive printed by the runner.\n'
 else
   rc=$?
   printf 'K3 stopped (original rc=%s); later points stopped. Interactive terminal remains open.\n' "$rc"

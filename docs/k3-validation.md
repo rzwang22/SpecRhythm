@@ -348,8 +348,8 @@ synthetic native intervals are not GPU overlap evidence.
 Final local gate for the implementation: **2612 passed, 3 skipped** with the pinned
 vLLM source audit enabled (349.13s). Affected Python3.9 and Python3.12 suites each:
 **351 passed**. Ruff, compileall(src), Python3.9 grammar for216 source files, all21
-tracked Bash scripts and git diff --check pass. The three skips are retained platform/
-source-specific tests, not disabled assertions. Initial failures above remain part
+tracked Bash scripts and git diff --check pass. The three skips are the opt-in CUDA test and two Linux exit-status/subreaper tests
+on macOS, not disabled assertions. Initial failures above remain part
 of the validation record; CI is reported separately after push.
 
 The [CPU framing microbenchmark](k3-admission-cpu-benchmark.json) uses360 logical rows

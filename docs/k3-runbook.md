@@ -1,151 +1,128 @@
-# Unified K3: three fixed runtime points, one upload
+# K3 four-mode comparison: one foreground entry, one upload
 
-This is an explicit new protocol, not a reinterpretation of old P1/P4 or Serial/B16
-results. The returned778d run passed capacity/joint output/execution/measurement/cleanup,
-but normal/recovery cross-request native overlap remained zero. This follow-up changes
-only repeated Target immutable-prompt digest work and offline dispatch evidence; new
-GPU output correctness, pipeline/native overlap and performance remain PENDING.
-Only the operator runs GPUs. The implementation and token/forward accounting are in
-[k3-design.md](k3-design.md).
+Execution SHA: `fca2118b89d21b11f18f5de43d69657e820087ab`.
+Configuration commit: `ed6ff9703765e2c36b9ec4b3d0cb91edc1125d8f`.
+The following entry runs both changes. Draft PR5 remains Draft; no merge or other PR
+changes. Only the operator runs GPUs. New capacity, correctness, cleanup, native
+pipeline overlap and performance are **PENDING**.
 
-`serial-k3`, `pingpong-k3`, `pingpong-eager-k3` share active16, home8/8, Target ceiling8,
-Draft GPU0 and a single TP2 Target on GPU1/2, frozen resident360 workload/seed1666,
-no-bonus commits, actual K=min(3,remaining), runtime audit and buffered-live recording.
-The source S1 config retains its historical K4 capacity envelope; the new mode's
-actual engine num_speculative_tokens and proposal budget are explicitly3. GPU capacity
-checks require3 Target/ordinary Draft positions but conservatively reserve4; eager
-Draft requires and reserves6. `legacy_minimum_reserve=4` is unchanged. The report
-records both demand and allocation; reserving4 does not generate a fourth candidate.
-No model, sampling, control/drain budget, graph setting or measurement boundary changes.
+| Mode | Total active | Homes | Target request ceiling | Draft physical merge ceiling |
+|---|---:|---|---:|---:|
+| serial-k3 |16|A16|16|16|
+| serial-eager-k3 |16|A16|16|16|
+| pingpong-k3 |16|A8/B8|8|16|
+| pingpong-eager-k3 |16|A8/B8|8|16|
 
-`scripts/run_k3_b16.sh <full SHA>` first runs the no-GPU static capacity interface
-check (`k3-capacity-contract.json`, GPU_capacity=PENDING), then three fresh real
-capacity points, then one shared
-Target-only + all three modes complete-output check (16 requests, at most32 output
-fixture tokens), then three runtime performance points. Each point genuinely prefills
-all360, warms up two rotations (four nonempty admissions), measures continuous30s,
-and retains setup900s/drain60s. Workload SHA256 remains
+All modes use trueK3 (seed+two extensions), no extra bonus commit, the same model
+and sampling configuration, resident360 workload/seed1666, Draft GPU0 and one TP2
+Target on GPU1/2, runtime audit and buffered-live recording. Serial's all-Draft-idle
+gate remains; Serial-eager permits only own-parent speculation. PingPong's claim,
+feedback priority, owner token-step boundary and READY publication are unchanged.
+A short tail must have an EOS/output-budget reason. Refusal or insufficient capacity
+never silently lowers B16 toB8. Demand3/reserve4 and eager Draft6/6 remain distinct
+from actual candidates and query positions. Capacity v2 checks each mode's geometry.
+
+This is not a relabelling of the old `d007dce448bd2a7d510172222ae166d7bb6f299e`
+Serial B8 result. That three-mode run and its original PASS/single-window conclusions
+remain historical. See [validation](k3-validation.md) and [design](k3-design.md).
+
+The flow is fixed:
+
+1. No-model static four-mode capacity/interface check.
+2. Four independent fresh capacity points, with three physical rank observations each.
+3. One Target-only reference and all four complete-output correctness runs:16 requests,
+   up to32 output tokens/request, nominal512 per mode, exact per-request comparison.
+4. Four independent runtime performance points. Each genuinely prefills all360, warms
+   up32 actual request-verification opportunities, then measures continuous30s.
+5. Strict report/diagnostic/configuration comparison and a single bounded archive.
+
+Full Serial warmup is two Target steps; full PingPong is four. Actual request opportunity
+counts, per-request distribution and unique coverage are retained. A partial step
+contributes only its real B. No sample12 cutoff, automatic retry, model change or grid.
+Setup900s/drain60s stay unchanged. Workload SHA256:
 `cdaf71adace15d229f5087b98f9fd162a958456226a660184fe03f5d6ebd8ff4`.
-Correctness and mechanism coverage must pass before performance. It never retries or
-expands B/load grids. All points use independent roots inside a fresh tagged delivery.
 
-The script retains the first error. Before any point starts, failure attribution uses
-the new delivery/not_started directory, never an inherited historical SR_FIXED_ROOT. `joint/failure.json` names the actual mode and
-run, the original report/process layer, process exit and command exit; subsequent
-summary/export errors are separate. `inventory.json` includes logical_paths, unique
-objects, SHA256/byte counts, missing fields, first code and export validation code.
-The actual exporter process code is printed separately. Export COMPLETE is not
-execution or correctness PASS. Disk failure after archive close cannot rewrite that
-archive; it is reported separately, never relabelled success.
-
-Upload only the absolute path printed once as:
-
-```
-UPLOAD ONLY: .../pingpong-k3-delivery-<tag>.tar.gz
-```
-
-One package contains comparison, joint output checks, first-failure, manifests,
-startup/final TP/Draft identities, original runtime/native/owner reports and bounded
-point analyses. The existing192-file/512MiB-file/1GiB-total bounds and phased trace
-budgets stay in force; omissions/truncation remain explicit failures. There are no
-nested subpackages to collect manually. Capacity reports retain the three raw rank
-observations, per-request budgets and demand/reserve schema for offline recomputation.
-Pre-drive failures also retain startup-cleanup.json, original/secondary errors and
-process exit codes; returned cleanup APIs alone never override supervisor qualification. If no archive can be created, the terminal
-reports that export failure and retained source directory instead of inventing a path.
-
-Read each point's `pingpong.cycles` for actual P lengths, short reasons, batches,
-committed tokens, feedback→READY, READY→admission, admission→native Target, and work
-reuse/discard. `pingpong.pipeline` separates physical normal/recovery/lookahead/KV
-forwards, B histograms and GPU sums. Mixed-role forwards participate in each role;
-those role sums must not be added. Native associations first verify actual request/proposal/version and TP identity, then
-classify other-request and other-home work. `cross_request_native_overlap` separates
-ordinary and rejection recovery from `parent_eager_native_overlap`. These are interval
-unions, not sums of per-request or TP event times.
-Recovery GPU union outside any Target is bounded separately; it is not subtracted
-from throughput. Full-step wall distributions and outside-step time remain reported.
-
-`pipeline.dispatch` reports actual owner READY publication→claim, claim→native Target,
-pre-pool/stock-resident/post-pool phase spans, hash/proof counts, and GPU-idle intervals
-while subsequently claimed READY work exists. The original `ready_ns` is physical
-proposal completion; the actual publication timestamp is separately named. A GPU-idle
-interval is not proof that CPU sampling or Target dispatch was already available.
-Scheduler child spans are nested; unknown fields remain null. Proof policy
-`k3-current-prompt-proof.v1` records live row count, newly hashed prompts, reused
-immutable digests and current tokens compared. Both full live block checks remain.
-
-`pipeline.rejection_cycle` adds READY/publication/claim, both native TP forwards,
-validated owner feedback, physical ordinary/recovery work and next READY (at most128
-rows). Target/Draft forward IDs name original producer array indices with rank,
-request/proposal versions and calibrated bounds. Comparison embeds only aggregates;
-point reports hold detailed rows once, and the projected raw records remain complete.
-Its missing/omitted counts are explicit; the previous compact Draft timeline is
-retained for compatibility. That bounded example timeline starts16 rows before the first measured recovery,
-retains up to128 rows, and reports omissions. Its forward IDs explicitly name array
-indices in the original producer (not invented hardware event IDs); raw phased
-records retain all request/proposal/version joins. No recorded recovery is labelled
-NO_RECORDED_RECOVERY, not fabricated. A zero-overlap point must be read with owner
-waiting_inventory, ready_inventory and raw coordinator/owner spans. Output correctness,
-execution/measurement/cleanup, evidence integrity, cross-cohort pipeline, native overlap
-and performance are separate conclusions. `cross_request_pipeline_behavior` remains
-NOT_DEMONSTRATED if only same-parent eager overlaps; INCOMPLETE native evidence is not
-zero. If the new ordinary point still has zero overlap, inspect READY eligibility,
-one-step admission wait and the three scheduler phases before proposing another
-change. Do not relabel it achieved based on throughput. First single windows cannot establish small
-stable speedup; a later authorized repeat can use a fresh SR_PING_RUN_TAG.
-
-## Foreground command
-
-Execution SHA: `d007dce448bd2a7d510172222ae166d7bb6f299e`. The delivery commit updates
-`scripts/run_k3_b16_pinned.sh` and this command; it does not change execution source.
-Never source a strict runner into the interactive shell. Default repository is
-`/root/autodl-tmp/src/SpecRhythm`, Python is
-`/root/autodl-tmp/envs/specrhythm-phase4-vllm-0.25.1/bin/python3.11`, S1 is
-`/root/autodl-tmp/SpecRhythm-data/results/phase-s1/s1p-5a00049-20260909T144802Z-1469`.
+Copy this **complete block** into the server's foreground terminal. Do not source the
+script. Strict mode and exit handling stay inside the child; the parent shell remains
+open on failure. A fresh detached worktree and new result root are created.
 
 ```bash
-if bash <<'SR_K3_CHILD'
+if bash <<'SR_K3_FRONTEND'
 set -Eeuo pipefail
-FINAL_SHA=d007dce448bd2a7d510172222ae166d7bb6f299e
 REPO=/root/autodl-tmp/src/SpecRhythm
+EXECUTION_SHA=fca2118b89d21b11f18f5de43d69657e820087ab
 git -C "$REPO" fetch origin codex/rolling-eager-v0.1
-git -C "$REPO" cat-file -e "${FINAL_SHA}^{commit}"
-RUN_TREE="${REPO}-k3-${FINAL_SHA:0:12}-$(date -u +%Y%m%dT%H%M%SZ)-$$"
-git -C "$REPO" worktree add --detach "$RUN_TREE" "$FINAL_SHA"
+git -C "$REPO" cat-file -e "${EXECUTION_SHA}^{commit}"
+RUN_TREE="${REPO}-k3-four-${EXECUTION_SHA:0:12}-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+git -C "$REPO" worktree add --detach "$RUN_TREE" "$EXECUTION_SHA"
 export SR_EXEC_REPO="$RUN_TREE"
-bash "$RUN_TREE/scripts/run_k3_b16.sh" "$FINAL_SHA"
-SR_K3_CHILD
+bash "$RUN_TREE/scripts/run_k3_b16.sh" "$EXECUTION_SHA"
+SR_K3_FRONTEND
 then
-  printf 'K3 completed; upload only the archive printed as UPLOAD ONLY.\n'
+  printf 'Four-mode run finished; upload only the archive named by the runner.\n'
 else
   rc=$?
-  printf 'K3 stopped, original rc=%s; later points stopped; terminal remains open.\n' "$rc"
+  printf 'Stopped with original rc=%s; later points stopped; terminal remains open.\n' "$rc"
 fi
 ```
 
-## Resident CPU decomposition in this follow-up
+The repository also provides `scripts/run_k3_b16_pinned.sh` with this exact execution
+SHA. It fetches, creates a new worktree, then calls the execution commit's actual
+four-mode runner. The source commit contains `run_k3_b16.sh`, `k3_capacity`, joint
+correctness, analysis and single-package exporter; the entry does not depend on an
+uncommitted file on the Mac.
 
-The fixed three-mode flow and all model/workload/budget/observation parameters remain
-unchanged. The execution diagnostic gate additionally requires all six resident
-subphase spans and their policy/work metadata, on the same PID/thread and cycle.
-No additional GPU point or retry is introduced. Six bounded records per dispatch
-use the existing phased trace budgets and are retained once in the raw runtime host
-trace. Missing fields are INCOMPLETE, never zero-filled. The previous run's original
-qualification is not revised by the new diagnostic contract.
+Defaults remain the existing S1 root and Python environment in the runner. Optional
+`SR_FIXED_PYTHON`, `SR_FIXED_S1`, `SR_PING_RESULTS` and a new `SR_PING_RUN_TAG` can select
+existing server locations; they do not change the frozen workload/model requirements.
+Do not reuse a historical tag. No AutoDL connection or GPU invocation was made locally.
 
-Read `comparison.json` for window/steps cadence alongside complete_step_wall_ms and
-outside_complete_steps_ms. `dispatch.resident_schedule` aggregates binding/readiness/
-decisions/stock/initial_finish/admission-record phases and work scales; detailed
-per-step records are only in the referenced point audit report. Work totals count
-full current-row int visits and normalized rows, including the generated suffix.
-The stock child is the actual pinned Scheduler.schedule call with dynamic predicate
-callbacks; it is distinct from the inclusive target_resident_stock_schedule wrapper.
+Only upload the single path printed once by the runner:
 
-`pipeline.cross_request_overlap_steps` reports definite/uncertainty-only counts over
-measured Target steps. `recovery_coverage_by_other_requests` gives the clipped native
-physical recovery union denominator, covered interval union and conservative fraction
-bounds. A mixed physical batch or two TP ranks are not additive copies. OBSERVED only
-means some positive overlap; low coverage remains low even if throughput improves.
-The numerator/denominator/window semantics are embedded in the report. All raw
-request/proposal/version/forward evidence remains in the same single total archive.
-GPU correctness, coverage and performance for the new SHA are PENDING until this run.
+```text
+UPLOAD ONLY: .../pingpong-k3-delivery-<tag>.tar.gz
+```
+
+`comparison.json`, `joint/result.json` (or the real joint failure), per-mode reports,
+capacity, startup/final device identity, native/owner timelines, original runtime,
+first-failure and `inventory.json` all live in that package. Inventory logical_paths
+map to deduplicated objects with byte counts/SHA256. The192-file/512MiB-file/1GiB-total
+limits and phased trace budgets remain bounded. Extending the previous145 logical
+files by the corresponding fourth-mode42 files gives187; actual inventory, missing
+fields or size overflow still decide export integrity, not this estimate. There are
+no nested subpackages or additional collection commands.
+
+On first failure, no later point runs. The actual phase/mode/run, process code,
+report qualification, cleanup and command code are retained; summary/export failures
+are secondary. A closed engine API is not proof of process cleanup. Export COMPLETE
+means archive integrity, not execution correctness or speedup. If disk failure prevents
+archive creation, the runner reports that failure/source directory instead of inventing
+an upload path. A later exporter error does not replace the original nonzero code.
+
+The comparison requires the same source, options, workload, models, config/patch,
+numerical mode, engine/launch settings and resource limits. Its four-mode geometry
+contract explicitly permits Target16 versus8. Runtime UUID checks are within-run only.
+Missing common fields do not become zero/PASS. Read the results separately as output
+correctness; execution/measurement/cleanup; evidence integrity; cross-home pipeline;
+native GPU overlap; and measured performance.
+
+Per-mode reports retain actual batch histograms, tokens/steps/throughput, window/steps
+cadence, complete-step distributions and outside-step time, READY publication→claim,
+claim→Target, six resident phases, normalization scale, admission records/encoding count,
+role-specific physical forwards/B/GPU time and promotion/reuse/discard. The `stock`
+child is the actual pinned scheduler call; its parent includes wrapper work. Hash,
+JSON and fsync are children, not additive wall-clock columns.
+
+`pipeline.cross_request_overlap_steps`, `cross_home_native_overlap`,
+`recovery_coverage_by_other_requests` and `parent_eager_native_overlap` retain distinct
+meanings. Recovery denominator is a union of physical Draft intervals with recovery
+participants whose host launches are inside the window, device bounds clipped to it.
+Numerator is the union intersecting TP verification for other requests, with duplicate
+bindings/roles/ranks removed. Lower coverage divides lower intersection by upper
+recovery union; upper divides upper by lower, capped at1. Raw home/proposal/version
+joins and bounded rejection timelines are retained. Missing endpoints remain missing.
+
+OBSERVED means some nonzero native overlap, not adequate recovery hiding. A single
+window's difference is not stable speedup, and CPU audit/record time is never subtracted
+from measured throughput. Earlier READY publication remains a separate future change,
+to be decided after this package returns.
