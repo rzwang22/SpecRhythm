@@ -646,6 +646,10 @@ class RemoteDraftProposer:
         sampled_token_ids: Sequence[Sequence[int]],
         scheduled_spec_token_ids: Mapping[str, Sequence[int]],
     ) -> None:
+        from specrhythm.continuation.trace import TRACE
+
+        if self.tp_rank == 0:
+            TRACE.event("target_sampled_results_received")
         del sampled_token_ids
         self.torch.cuda.synchronize()
         self.tp_group.barrier()
@@ -767,6 +771,10 @@ class RemoteDraftProposer:
             "proposals": proposal_rows,
         }
         _assert_target_information_isolated(outgoing)
+        from specrhythm.continuation.trace import TRACE, references
+
+        if TRACE.enabled:
+            TRACE.event("target_feedback_payload_ready", requests=references(synchronizations))
         response = self.client.call("synchronize_and_batch_propose", outgoing)
         for stable_id in finish_without_pending:
             self.client.call("finish_request", {"request_id": stable_id})
@@ -899,6 +907,10 @@ class RemoteDraftProposer:
             generated and generated[-1] in self.eos_token_ids
         )
 
+    def _gpu_qualification_report(self) -> dict[str, Any]:
+        """Preserve baseline qualification; extensions must state their own evidence."""
+        return {"gpu_correctness_result": True, "gpu_performance_result": False}
+
     def _write_report(self) -> None:
         if self.tp_rank != 0:
             return
@@ -926,8 +938,7 @@ class RemoteDraftProposer:
                     }
                     for request_id, state in self.requests.items()
                 },
-                "gpu_correctness_result": True,
-                "gpu_performance_result": False,
+                **self._gpu_qualification_report(),
                 "decode_ready_provider": (
                     "resident-warm-start" if self.resident_mode else None
                 ),

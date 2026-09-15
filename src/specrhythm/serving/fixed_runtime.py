@@ -6,6 +6,7 @@ import copy
 import os
 import time
 
+from specrhythm.continuation.trace import TRACE
 from specrhythm.phase4.stock_vllm import validate_worker_ranks
 from specrhythm.serving.common import read_json, require
 from specrhythm.serving.fixed_artifacts import checkpoint, record_error
@@ -35,6 +36,19 @@ CLASSES = {
     )
     for m, c in (("target", "Target"), ("serial", "Serial"), ("pingpong", "Ping"))
 }
+CLASSES["serial-eager"] = (
+    "specrhythm.serving.fixed_scheduler.FixedSerialScheduler",
+    "specrhythm.serving.eager_proposer.EagerSerialProposer",
+)
+for _mode in ("serial-prepost3", "serial-eager-prepost3"):
+    CLASSES[_mode] = ("specrhythm.serving.fixed_scheduler.FixedSerialScheduler",
+                      "specrhythm.serving.prepost_proposer.PrePostProposer")
+
+
+for _mode in ("pingpong-prepost3", "pingpong-eager-prepost3",
+                          "serial-k3", "serial-eager-k3", "pingpong-k3", "pingpong-eager-k3"):
+    CLASSES[_mode] = ("specrhythm.serving.ping_prepost_scheduler.PingPrePostScheduler",
+                      "specrhythm.serving.ping_prepost_proposer.PingPrePostProposer")
 
 
 def population(clock, inflight=()):
@@ -140,14 +154,42 @@ def commit_outputs(clock, outputs, packet, client, runtime_mode):
                     finish_reason=output.outputs[0].finish_reason,
                 )
             if output.finished and runtime_mode != "pingpong":
-                client.call("finish_request", {"request_id": rid})
+                payload = {"request_id": rid}
+                if runtime_mode in ("serial-eager", "serial-prepost3", "serial-eager-prepost3",
+                                    "pingpong-prepost3", "pingpong-eager-prepost3",
+                          "serial-k3", "serial-eager-k3", "pingpong-k3", "pingpong-eager-k3"):
+                    from specrhythm.phase4.serial import token_prefix_hash
+
+                    final = (*clock.definitions[rid].prompt_token_ids, *tokens)
+                    payload.update(committed_prefix=list(final),
+                                   committed_prefix_hash=token_prefix_hash(final), terminal=True,
+                                   eos_token_ids=packet["eos_token_ids"])
+                client.call("finish_request", payload)
                 clock.released([rid], time.monotonic_ns())
         else:
             require(not output.finished, "diagnostic terminal output lacks commit")
 
 
+def execution_point(point, probe):
+    """Bind report metadata to the actual invocation, before any model work."""
+    require(type(probe) is bool, "execution probe parameter must be a boolean")
+    if "probe" in point:
+        require(type(point["probe"]) is bool and point["probe"] == probe,
+                "point probe differs from execution parameter")
+    for key in ("scan", "prepost_correctness"):
+        require(type(point.get(key, False)) is bool, key + " must be a boolean")
+    require(not point.get("prepost_correctness") or (not probe and not point.get("scan")),
+            "correctness must be non-probe and non-scan")
+    return {**point, "probe": probe}
+
+
 def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5, probe=False):
+    point = execution_point(point, probe)
     mode, runtime_mode = point["mode"], point["runtime_mode"]
+    from specrhythm.serving.k3 import configuration_fields, configuration_of
+
+    configuration = configuration_of(manifest)
+    require(configuration_of(point) == configuration, "K3 runtime configuration mismatch")
     scan = point.get("scan", False)
     setup_timeout = options["setup_timeout"]
     if scan and os.environ.get("SR_FIXED_SCAN_SETUP_DEADLINE_NS"):
@@ -168,10 +210,18 @@ def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5, 
     if scan:
         require(not getattr(scheduler, "defer_block_free", False),
                 "scan pre-forward stop requires synchronous allocator without deferred frees")
-    active = manifest["active_limit"] if scan else (
+    active = manifest["active_limit"] if scan or point.get("prepost_correctness") else (
         point["batch"] if initial and runtime_mode != "pingpong" else 64)
-    grouped = runtime_mode == "pingpong"
-    cohort_capacity = active // 2 if scan else 32
+    ping_prepost = runtime_mode in ("pingpong-prepost3", "pingpong-eager-prepost3",
+                          "serial-k3", "serial-eager-k3", "pingpong-k3", "pingpong-eager-k3")
+    grouped = runtime_mode == "pingpong" or ping_prepost
+    if ping_prepost:
+        from specrhythm.serving.ping_prepost_controller import PingPrePostController
+
+        ping_controller = PingPrePostController(mode, configuration)
+    cohort_capacity = active // 2 if scan or ping_prepost else 32
+    if mode in ("serial-k3", "serial-eager-k3"):
+        cohort_capacity = active
     maximum_batch = cohort_capacity if grouped else active
     trace = copy.deepcopy(manifest["trace"])
     if initial and point["half"] == "B":
@@ -183,6 +233,8 @@ def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5, 
 
         trace = sealed(trace)
     assignment = {rid: c for c, ids in diag["cohorts"].items() for rid in ids} if grouped else {}
+    if mode in ("serial-k3", "serial-eager-k3"):
+        assignment = {}  # ServingClock enforces single immutable A home, including refill.
     clock = ServingClock(
         definitions,
         trace,
@@ -193,6 +245,7 @@ def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5, 
         fixed_assignment=assignment,
     )
     packet = {
+        **configuration_fields(configuration),
         "initial_proposals": {},
         "initial_enqueues": {},
         "eos_token_ids": manifest["execution"]["eos_token_ids"],
@@ -201,7 +254,7 @@ def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5, 
     if scan:
         clock.observe(clock.barrier_ns)
     window_options = dict(options)
-    if grouped and not initial and not scan:
+    if grouped and not initial and not scan and not ping_prepost:
         # A requested sample unit is one 64-request rotation (two Target steps).
         # Actual partial/cohort-incomplete rotations remain separately labelled.
         window_options["samples"] *= 2
@@ -210,7 +263,17 @@ def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5, 
         from specrhythm.serving.decode_scan_readiness import ReadinessEvidence, ScanBatchWait
         from specrhythm.serving.decode_scan_window import ScanShapeStop, ScanWindow
 
-        window = ScanWindow(window_options, active, grouped)
+        if ping_prepost:
+            from specrhythm.serving.ping_prepost_window import PingPrePostWindow
+
+            if mode.endswith("-k3"):
+                from specrhythm.serving.k3_window import K3Window
+
+                window = K3Window(window_options, active, mode, configuration)
+            else:
+                window = PingPrePostWindow(window_options, active, True)
+        else:
+            window = ScanWindow(window_options, active, grouped)
         window.readiness = ReadinessEvidence()
     else:
         window = Window(window_options, initial_state=initial)
@@ -227,7 +290,7 @@ def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5, 
             **clock.control(),
             **packet,
             "max_requests_per_target_forward": maximum_batch,
-            **({"decode_scan_full_batch": maximum_batch,
+            **({"decode_scan_full_batch": None if ping_prepost else maximum_batch,
                 "decode_scan_deadline_ns": (window.start_ns + int(
                     options["window_seconds"] * 1e9)) if window.start_ns is not None else None
                 } if scan else {}),
@@ -253,11 +316,22 @@ def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5, 
                 window.reason = "operator_stop"
                 break
             if not scan:
+                entering = window.start_ns is None
                 window.ready(now)
+                if entering and window.start_ns is not None:
+                    publish(directory / "drain-state.json", {
+                        "phase": "scan_window_and_atomic_step", "status": "RUNNING",
+                        "mode": runtime_mode, "run_directory": str(directory.resolve()),
+                        "start_ns": window.start_ns,
+                        "deadline_ns": window.start_ns + int(
+                            (options["window_seconds"] + options["drain_timeout"]) * 1e9),
+                    })
             if window.time_expired(now):
                 break
             clock.observe(now)
-            status = client.call("status", {}) if grouped else {}
+            status = (client.call("status", {})
+                      if grouped or mode in ("serial-eager", "serial-prepost3",
+                                             "serial-eager-prepost3") else {})
             require(
                 not status.get("failures"),
                 "diagnostic asynchronous Draft failed",
@@ -277,7 +351,8 @@ def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5, 
                 break
             with TIMERS.span("refill"):
                 admitted = clock.admit(
-                    time.monotonic_ns(), busy_cohorts={clock.rows[r]["cohort"] for r in inflight}
+                    time.monotonic_ns(), busy_cohorts=() if ping_prepost else
+                    {clock.rows[r]["cohort"] for r in inflight}
                 )
             publish_control(inflight)
             if scan:
@@ -299,7 +374,11 @@ def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5, 
                 publish_control()
             # This is the only serial-split execution difference. No Target step
             # can begin with any owner work pending, including terminal materialization.
-            if mode == "serial-split":
+            if mode in ("serial-k3", "serial-eager-k3"):
+                with TIMERS.span("serial_k3_idle_gate"):
+                    while not client.call("k3_idle", {})["idle"]:
+                        remaining(int(observation_deadline * 1e9))
+            elif mode == "serial-split":
                 status = wait_draft(client, options["drain_timeout"])
             elif grouped:
                 status = client.call("status", {})
@@ -331,6 +410,7 @@ def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5, 
                         (options["window_seconds"] + options["drain_timeout"]) * 1e9)
                     publish(directory / "drain-state.json", {
                         "phase": "scan_window_and_atomic_step", "status": "RUNNING",
+                        "mode": runtime_mode, "run_directory": str(directory.resolve()),
                         "start_ns": window.start_ns, "deadline_ns": deadline,
                     })
                     publish_control(inflight)
@@ -349,8 +429,18 @@ def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5, 
                                             for k, v in phase_row.items()
                                             if k != "timestamp_ns"):
                 phases.append(phase_row)
+            if ping_prepost:
+                packet["pp_admission"] = ping_controller.select(clock, client)
+                publish_control(inflight)
+                if not packet["pp_admission"]["claims"]:
+                    if window.time_expired(time.monotonic_ns()):
+                        break
+                    with TIMERS.span("wait_ready", reason="no legal ready PingPong proposal"):
+                        time.sleep(0.0005)
+                    continue
             before = len(scheduler.s2_steps)
             start = time.monotonic_ns()
+            TRACE.event("coordinator_step_start", step_index=len(steps))
             if scan and window.time_expired(start):
                 break
             try:
@@ -393,6 +483,8 @@ def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5, 
                 committed = True
             finally:
                 end = time.monotonic_ns()
+                TRACE.event("coordinator_output_committed", step_index=len(steps),
+                            committed=committed, start_ns=end, end_ns=end)
                 # Preserve a completed engine step even if output/drain RPC fails.
                 steps.append(
                     {
@@ -463,14 +555,16 @@ def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5, 
         return {
             "schema_version": "specrhythm.fixed-runtime.v2",
             "point": point,
+            "probe": probe,
             "capacity": {
-                **(diag["capacity"][mode] if scan else capacity_metadata(mode)),
+                **(diag["capacity"][mode] if scan or point.get("prepost_correctness")
+                   else capacity_metadata(mode)),
                 "resident_request_count": sum(not b["terminal"] for b in bootstrap.values()),
                 "active_request_limit": active,
                 "max_requests_per_target_forward": maximum_batch,
             },
-            **({"decode_scan": {**window.evidence(), "prefill_complete_ns": prefill_complete_ns},
-                "probe": probe} if scan else {}),
+            **({"decode_scan": {**window.evidence(), "prefill_complete_ns": prefill_complete_ns}}
+               if scan else {}),
             "measurement_start_ns": window.start_ns,
             "measurement_end_ns": window.end_ns,
             "warmup_start_ns": window.warmup_start_ns,
@@ -537,12 +631,17 @@ def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5, 
 
 
 def run(root, manifest_path, directory, point, *, probe=False):
+    point = execution_point(point, probe)
     mode = point["runtime_mode"]
     config, manifest, definitions = configure(root, manifest_path, directory, mode)
+    from specrhythm.serving.k3 import validate_point
+
+    validate_point(point, manifest)
     require("fixed_diagnostic" in manifest, "missing explicit fixed diagnostic manifest")
     scan = point.get("scan", False)
     capacity_spec = (manifest["fixed_diagnostic"]["capacity"][point["mode"]]
-                     if scan else capacity_metadata(point["mode"]))
+                     if scan or point.get("prepost_correctness")
+                     else capacity_metadata(point["mode"]))
     active = capacity_spec["active_request_limit"]
     os.environ["SR_PHASE4_DUAL_MICROBATCH_SIZE"] = str(
         capacity_spec["max_requests_per_target_forward"] if scan else 32)
@@ -550,6 +649,7 @@ def run(root, manifest_path, directory, point, *, probe=False):
     llm = None
     failure = None
     started = time.monotonic_ns()
+    drive_entered = False
     try:
         llm = make_engine(config, mode, classes=CLASSES,
                           sequence_limit=capacity_spec["target_sequence_limit"], query_limit=4096)
@@ -568,9 +668,23 @@ def run(root, manifest_path, directory, point, *, probe=False):
             and not cfg.cache_config.enable_prefix_caching,
             "fixed effective engine limits/config differ from requested values",
         )
+        if mode.endswith("-k3"):
+            require(cfg.speculative_config.num_speculative_tokens == 3,
+                    "K3 effective Target candidate capacity differs")
         draft = read_json(directory / "draft-startup.json")
         capacity = [r["s2_capacity"] for r in ranks] + [draft["s2_capacity"]]
-        checks = [capacity_for(definitions, r, active_limit=active) for r in capacity]
+        if mode.endswith("-k3"):
+            from specrhythm.serving.k3_capacity import check
+
+            checks = [check(definitions, r, mode=mode, active_limit=active,
+                            metadata=capacity_spec) for r in capacity]
+        else:
+            checks = [capacity_for(
+                definitions, r, active_limit=active,
+                speculative_tokens=(9 if mode == "serial-eager" else 7)
+                if mode in ("serial-eager", "serial-eager-prepost3", "pingpong-eager-prepost3")
+                and r["role"] == "draft" else 4,
+            ) for r in capacity]
         for check in checks:
             check["block_deficit"] = max(0, check["required_blocks"] - check["num_gpu_blocks"])
             check["workspace_deficit_bytes"] = max(
@@ -590,7 +704,15 @@ def run(root, manifest_path, directory, point, *, probe=False):
             "target_effective_by_rank": [r["s1_effective_capacity"] for r in ranks],
             "draft_effective": draft.get("fixed_engine_limits"),
         }
+        if mode.endswith("-k3"):
+            from specrhythm.serving.k3_capacity import SCHEMA, budgets
+
+            actual.update(capacity_schema=SCHEMA, capacity_request_budgets=budgets(definitions))
         write_once(directory / "actual-capacity.json", actual)
+        if mode.endswith("-k3"):
+            from specrhythm.serving.k3_capacity import effective_capacity
+
+            effective_capacity(actual)
         require(
             all(r["valid"] for r in checks),
             "scan resident360 capacity insufficient" if scan else
@@ -610,6 +732,7 @@ def run(root, manifest_path, directory, point, *, probe=False):
                     and 5 * maximum <= cfg.scheduler_config.max_num_batched_tokens,
                     "scan actual sequence/query-position capacity insufficient", actual=effective)
             # Every scan point (including capacity-only probes) prepares all360 KV.
+            drive_entered = True
             result = drive(llm, manifest, definitions, directory, point, options,
                            logprobs=config.logprobs, probe=probe)
         elif probe:
@@ -641,6 +764,7 @@ def run(root, manifest_path, directory, point, *, probe=False):
                 "deadline_ns": probe_deadline,
                 "status": "RUNNING",
                 "phase": "capacity_shutdown",
+                "mode": mode, "run_directory": str(directory.resolve()),
                 "settled_requests": 0,
                 "receipts": [],
             }
@@ -651,7 +775,7 @@ def run(root, manifest_path, directory, point, *, probe=False):
             result = {
                 "probe": True,
                 "capacity": capacity_metadata(point["mode"], 0),
-                "draft_shutdown": probe_client.call("shutdown", {}),
+                "draft_shutdown": probe_client.call("shutdown", {"deadline_ns": probe_deadline}),
                 "target_devices": llm.collective_rpc(
                     target_report, timeout=remaining(probe_deadline)
                 ),
@@ -668,6 +792,7 @@ def run(root, manifest_path, directory, point, *, probe=False):
             )
             publish(directory / "drain-state.json", probe_drain)
         else:
+            drive_entered = True
             result = drive(
                 llm, manifest, definitions, directory, point, options, logprobs=config.logprobs
             )
@@ -690,7 +815,13 @@ def run(root, manifest_path, directory, point, *, probe=False):
         record_error(directory, error, "runtime")
         raise
     finally:
-        if llm is not None:
+        if failure is not None and not drive_entered and mode.endswith("-k3"):
+            from specrhythm.serving.k3_startup_cleanup import StartupCleanup
+
+            deadline = time.monotonic_ns() + int(options["drain_timeout"] * 1e9)
+            StartupCleanup(directory, mode, failure, deadline).finish(
+                llm, lambda: client_for(mode))
+        elif llm is not None:
             try:
                 llm.llm_engine.engine_core.shutdown()
             except Exception as error:

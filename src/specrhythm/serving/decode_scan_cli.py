@@ -11,6 +11,7 @@ from pathlib import Path
 from specrhythm.serving.common import DataError, require
 from specrhythm.serving.decode_scan_plan import (
     BATCHES,
+    EXPLICIT_MODES,
     MODES,
     load,
     options,
@@ -50,6 +51,15 @@ COLUMNS = (
     "diagnostic_cancelled_requests",
     "effective_exit_code",
     "artifact",
+    "eager_started",
+    "eager_completed",
+    "eager_promotions",
+    "eager_verified_candidates",
+    "eager_accepted_candidates",
+    "eager_recovery_jobs",
+    "eager_unhidden_wait_ms",
+    "eager_gpu_overlap_status",
+    "eager_cleanup_status",
 )
 
 
@@ -91,6 +101,12 @@ def successful(root, config):
 
 def run(root, *, batch=None, mode=None, remaining=False, probe=False, single_point=False):
     config = load(root)
+    require(config["options"].get("draft_audit", "full") == "full"
+            or (mode in ("serial", "serial-eager", "serial-prepost3", "serial-eager-prepost3",
+                          "pingpong-prepost3", "pingpong-eager-prepost3",
+                          "serial-k3", "serial-eager-k3", "pingpong-k3", "pingpong-eager-k3")
+                and single_point),
+            "runtime Draft audit requires an explicit Serial/Serial-eager single point")
     require(not single_point or (mode is not None and batch in BATCHES and not remaining),
             "single-point diagnostic requires explicit mode/batch and no --remaining")
     with root_lock(root):
@@ -109,9 +125,16 @@ def run(root, *, batch=None, mode=None, remaining=False, probe=False, single_poi
                 ),
                 "first finish all three B16 modes before the remaining scan",
             )
+        available = config["points"] + (
+            config.get("optional_points", [])
+            if mode in ("serial-eager", "serial-prepost3", "serial-eager-prepost3",
+                          "pingpong-prepost3", "pingpong-eager-prepost3",
+                          "serial-k3", "serial-eager-k3",
+                          "pingpong-k3", "pingpong-eager-k3") else []
+        )
         points = [
             p
-            for p in config["points"]
+            for p in available
             if (remaining or p["batch"] == batch) and (mode is None or p["mode"] == mode)
         ]
         require(not single_point or len(points) == 1,
@@ -154,14 +177,20 @@ def summary(root):
     indexed = {key(r["point"]): r for r in reports if is_probe(r) and not r.get("valid")}
     indexed.update({key(r["point"]): r for r in reports if not is_probe(r)})
     rows = []
-    for p in config["points"]:
+    displayed = config["points"] + [
+        p for p in config.get("optional_points", []) if key(p) in indexed
+    ]
+    for p in displayed:
         r = indexed.get(key(p), {})
         row = {k: r.get(k) for k in COLUMNS}
         row.update(
             mode=p["mode"],
             batch=p["batch"],
             repeat=p["repeat"],
-            sub_batch=p["batch"] // 2 if p["mode"] == "pingpong" else None,
+            sub_batch=p["batch"] // 2 if p["mode"] in (
+                "pingpong", "pingpong-prepost3", "pingpong-eager-prepost3",
+                          "serial-k3", "serial-eager-k3",
+                          "pingpong-k3", "pingpong-eager-k3") else None,
             pool_size=config["pool_size"],
             workload_sha256=config["workload_sha256"],
             git_commit=config["execution"]["git_commit"],
@@ -184,6 +213,10 @@ def summary(root):
         row["actual_target_batch"] = r.get("actual_target_batch")
         row["prepared_pool"] = r.get("prepared_pool")
         row["primary_error"] = r.get("primary_error")
+        if "rolling_eager" in r:
+            row["rolling_eager"] = r["rolling_eager"]
+        if "rolling_eager_retained" in r:
+            row["rolling_eager_retained"] = r["rolling_eager_retained"]
         rows.append(row)
     result = {
         "schema_version": "specrhythm.decode-scan-summary.v1",
@@ -259,6 +292,9 @@ def bundle(root, output):
     files += list(root.glob("scan-summary-*.json"))
     files += list(root.glob("scan-summary-*.csv"))
     files += list(root.glob("inputs/execution-B*.json"))
+    files += [p for name in ("result.json", "state.json", "diagnostic-primary-error.json",
+                            "diagnostic-secondary-errors.json")
+              if (p := root / "rolling-eager-gpu-check" / name).is_file()]
     require(not output.exists(), "scan bundle already exists")
     total, hashes = 0, []
     with tarfile.open(output, "x:gz") as tar:
@@ -312,12 +348,16 @@ def main(argv=None):
     p.add_argument("--s1", type=Path)
     p.add_argument("--s0", type=Path)
     p.add_argument("--batch", type=int, choices=BATCHES, default=16)
-    p.add_argument("--mode", choices=MODES)
+    p.add_argument("--mode", choices=EXPLICIT_MODES)
     p.add_argument("--remaining", action="store_true")
     p.add_argument("--single-point", action="store_true",
                    help="explicit one-point diagnostic: waive only the B16 order prerequisite")
+    p.add_argument("--draft-audit", choices=("full", "runtime"), default="full")
     p.add_argument("--observation", choices=("buffered-live",), default="buffered-live")
     p.add_argument("--identity-matching", choices=("bound-prefix",), default="bound-prefix")
+    from specrhythm.serving.k3 import B16, CONFIGURATIONS
+
+    p.add_argument("--k3-configuration", choices=CONFIGURATIONS, default=B16)
     p.add_argument("--selection-seed", type=int, default=1666)
     p.add_argument("--warmup-steps", type=int, default=2)
     p.add_argument("--window-seconds", type=float, default=30)
@@ -335,6 +375,7 @@ def main(argv=None):
                 root,
                 args.s1.resolve(),
                 options(
+                    draft_audit=args.draft_audit,
                     warmup_steps=args.warmup_steps,
                     repeats=args.repeats,
                     window_seconds=args.window_seconds,
@@ -342,7 +383,7 @@ def main(argv=None):
                     drain_timeout=args.drain_timeout,
                 ),
                 seed=args.selection_seed,
-                s0=args.s0,
+                s0=args.s0, k3_configuration=args.k3_configuration,
             )
         elif args.command in ("run", "capacity"):
             value = run(

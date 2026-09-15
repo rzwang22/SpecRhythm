@@ -1,0 +1,11 @@
+import os,pathlib
+from specrhythm.serving.fixed_artifacts import point_reports
+rows=[r for r in point_reports(pathlib.Path(os.environ['SR_FIXED_ROOT'])) if not r['point'].get('probe')]
+assert len(rows)==1
+r=rows[0]
+assert r['mode']==os.environ['SR_AUDIT_SERVING_MODE'] and r['batch']==16
+assert all(r[k]=='PASS' for k in ('capacity_status','execution_status','measurement_status','cleanup_status'))
+assert r['formal_comparison_eligible'] and r['effective_exit_code']==0
+assert r['stop_reason']=='time_budget' and r['measured_window_ms']>=30000
+assert 1 <= r['actual_target_batch']['min'] <= r['actual_target_batch']['max'] <= 8
+print('Original execution/measurement/cleanup PASS; real Target ceiling8, active16.')

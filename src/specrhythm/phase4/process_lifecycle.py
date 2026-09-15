@@ -16,11 +16,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
 
+from specrhythm.io_context import file_context
 from specrhythm.phase4.owned_processes import (
     OwnedProcesses,
     set_subreaper,
     socket_owned_by_pid,
 )
+from specrhythm.phase4.state_snapshot import PHASES, PhaseSnapshotReader
 
 LIFECYCLE_SCHEMA = "specrhythm.phase4b-process-lifecycle.v1"
 
@@ -82,6 +84,7 @@ def _run_owned_target(
     timeout_seconds: Optional[float] = None,
     ownership_journal: Optional[Path] = None,
     phase_deadline_path: Optional[Path] = None,
+    run_mode: Optional[str] = None,
 ) -> tuple[int, dict[str, Any]]:
     """Run one Target in an owned session and fail on leaked descendants."""
 
@@ -124,6 +127,12 @@ def _run_owned_target(
         and draft_socket_before is not None and socket_owned_by_pid(draft_socket, draft_pid)
     )
     failure_monitor = _RuntimeFailureMonitor(target_log)
+    phase_reader = (PhaseSnapshotReader(phase_deadline_path, mode=run_mode,
+                    absolute_limit_ns=started_ns + int(timeout_seconds * 1e9)
+                    if timeout_seconds is not None else None)
+                    if phase_deadline_path is not None else None)
+    decision = None
+    decision_recording_error = None
     with target_log.open("w", encoding="utf-8") as target_handle:
         try:
             process = subprocess.Popen(
@@ -155,24 +164,17 @@ def _run_owned_target(
                 if draft_owner is not None:
                     draft_owner.snapshot()
                 failure_detection = failure_monitor.detect(rows, process.pid)
-                if phase_deadline_path is not None and phase_deadline_path.exists():
-                    # Fixed diagnostics publish one absolute deadline before drain.
-                    # The supervisor can terminate blocked RPC/CUDA/coordinator work.
-                    with phase_deadline_path.open() as handle:
-                        phase = json.load(handle)
-                    deadline = phase.get("deadline_ns")
-                    if type(deadline) is not int or deadline <= 0:
-                        failure_detection = {"reason": "invalid owned phase deadline",
-                                             "artifact": str(phase_deadline_path)}
-                    elif time.monotonic_ns() >= deadline:
-                        failure_detection = {"reason": "owned Target execution timeout",
-                                             "phase": phase.get("phase"),
-                                             "deadline_ns": deadline,
-                                             "artifact": str(phase_deadline_path)}
+                # Do not sleep/retry inside the reader: every iteration still checks
+                # live children, fatal worker logs and both unchanged absolute limits.
+                if phase_reader is not None:
+                    state_failure = phase_reader.poll(time.monotonic_ns())
+                    failure_detection = failure_detection or state_failure
                 if (timeout_seconds is not None
                         and (time.monotonic_ns() - started_ns) / 1e9 >= timeout_seconds):
-                    failure_detection = {"reason": "owned Target execution timeout",
-                                         "timeout_seconds": timeout_seconds}
+                    failure_detection = failure_detection or {
+                        "reason": "owned Target execution timeout",
+                        "timeout_seconds": timeout_seconds,
+                        "timestamp_ns": time.monotonic_ns()}
                 if failure_detection is not None:
                     break
                 time.sleep(poll_seconds)
@@ -181,9 +183,16 @@ def _run_owned_target(
                 coordinator_reaped = True
             _record_members(observed, owner.snapshot())
         except Exception as error:
-            launch_error = str(error)
-            if process is not None and coordinator_status is None:
-                coordinator_status = process.poll()
+            if process is None:
+                launch_error = str(error)
+            else:
+                failure_detection = failure_detection or {
+                    "reason": "supervisor observation exception", "error": str(error),
+                    "exception_type": type(error).__name__,
+                    "artifact": getattr(error, "filename", None),
+                    "timestamp_ns": time.monotonic_ns()}
+                if coordinator_status is None:
+                    coordinator_status = process.poll()
 
     remaining = owner.snapshot() if owner is not None else []
     post_coordinator_descendants_observed = coordinator_reaped and bool(remaining)
@@ -203,10 +212,48 @@ def _run_owned_target(
         natural_teardown_ended_ns = time.monotonic_ns()
         natural_teardown_completed = not remaining and failure_detection is None
         leaked_after_coordinator_exit = bool(remaining) and failure_detection is None
+    # A shutdown RPC reply is not the final report. Let a clean Draft finish its
+    # publication/exit under the already published drain deadline, not a new grace.
+    if (coordinator_reaped and coordinator_status == 0 and not remaining
+            and failure_detection is None and phase_reader is not None
+            and draft_owner is not None):
+        while True:
+            failure_detection = phase_reader.poll(time.monotonic_ns())
+            draft_rows = draft_owner.snapshot()
+            failed = next((r for r in draft_rows if r.get("exit_code") not in (None, 0)), None)
+            if failed is not None:
+                failure_detection = failure_detection or {
+                    "reason": "owned-draft-nonzero-exit", "child": failed,
+                    "timestamp_ns": time.monotonic_ns()}
+            if failure_detection or not any(not r["state"].startswith("Z") for r in draft_rows):
+                break
+            if phase_reader.last is None or PHASES.get(phase_reader.last["phase"], -1) < 2:
+                break  # No drain transaction authorizes any extra wait.
+            time.sleep(poll_seconds)
     failed_coordinator_descendants = post_coordinator_descendants_observed and bool(
         coordinator_status != 0 or failure_detection is not None or launch_error is not None
     )
     if coordinator_status not in {0, None} or remaining or launch_error or failure_detection:
+        # Persist the cause BEFORE signals can create socket/report follow-on failures.
+        now = time.monotonic_ns()
+        cause = failure_detection or {"reason": launch_error or
+                "owned coordinator exit/descendant cleanup", "timestamp_ns": now}
+        decision = dict(schema_version="specrhythm.supervisor-decision.v1",
+                        mode=run_mode, run_directory=str(artifact_path.parent.resolve()),
+                        failure_layer="supervisor", timestamp_ns=cause.get("timestamp_ns", now),
+                        decision_ns=now, trigger=cause,
+                        phase_state=phase_reader.report() if phase_reader is not None else None,
+                        observed_processes=remaining, coordinator_status=coordinator_status,
+                        observed_draft_processes=draft_owner.snapshot() if draft_owner else [],
+                        planned_signals=["SIGTERM", "SIGKILL if still owned after existing grace"],
+                        total_deadline_ns=(started_ns + int(timeout_seconds * 1e9))
+                        if timeout_seconds is not None else None)
+        try:
+            _atomic_json(artifact_path.with_name("supervisor-decision.json"), decision)
+        except Exception as error:
+            decision_recording_error = {"error": str(error),
+                                        "exception_type": type(error).__name__,
+                                        "timestamp_ns": time.monotonic_ns()}
         if owner is not None and remaining:
             owner.signal(signal.SIGTERM, actions)
             remaining = _wait_for_owned_empty(owner, process, graceful_seconds, poll_seconds)
@@ -239,6 +286,7 @@ def _run_owned_target(
     cleanup_valid = (
         owned_cleanup_completed
         and launch_error is None
+        and failure_detection is None
         and not leaked_after_coordinator_exit
         and not failed_coordinator_descendants
     )
@@ -287,6 +335,9 @@ def _run_owned_target(
         "remaining_owned_pids": [int(row["pid"]) for row in remaining],
         "launch_error": launch_error,
         "failure_detection": failure_detection,
+        "supervisor_decision": decision,
+        "decision_recording_error": decision_recording_error,
+        "phase_state_reads": phase_reader.report() if phase_reader is not None else None,
         "ownership_tracking": "PID-start-identity-and-descendants; Linux-subreaper-launch-token",
         "owned_cleanup_completed": owned_cleanup_completed,
         "cleanup_valid": cleanup_valid,
@@ -500,7 +551,8 @@ def _atomic_json(path: Path, value: Mapping[str, Any]) -> None:
             json.dump(value, handle, indent=2, sort_keys=True)
             handle.write("\n")
             handle.flush()
-            os.fsync(handle.fileno())
+            with file_context(path, physical_path=temporary, write_kind="atomic_json"):
+                os.fsync(handle.fileno())
         os.replace(temporary, path)
     except Exception:
         Path(temporary).unlink(missing_ok=True)

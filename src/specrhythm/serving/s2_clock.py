@@ -16,7 +16,11 @@ class ServingClock:
         per_cohort_capacity=None, fixed_assignment=None
     ):
         check_seal(trace)
-        require(mode in ("target", "serial", "pingpong"), "unknown S2 mode")
+        require(mode in ("target", "serial", "pingpong", "serial-eager",
+                          "serial-prepost3", "serial-eager-prepost3",
+                          "pingpong-prepost3", "pingpong-eager-prepost3",
+                          "serial-k3", "serial-eager-k3",
+                          "pingpong-k3", "pingpong-eager-k3"), "unknown S2 mode")
         require(type(active_limit) is int and 0 < active_limit <= 128, "invalid active limit")
         self.definitions = {r.request_id: r for r in definitions}
         ids = [r["request_id"] for r in trace["rows"]]
@@ -28,7 +32,9 @@ class ServingClock:
         self.active_limit, self.mode = active_limit, mode
         require(
             per_cohort_capacity is None or (
-                mode == "pingpong" and type(per_cohort_capacity) is int
+                mode in ("pingpong", "pingpong-prepost3", "pingpong-eager-prepost3",
+                          "serial-k3", "serial-eager-k3", "pingpong-k3", "pingpong-eager-k3")
+                and type(per_cohort_capacity) is int
                 and per_cohort_capacity > 0 and 2 * per_cohort_capacity >= active_limit
             ), "invalid explicit cohort capacity",
         )
@@ -145,9 +151,11 @@ class ServingClock:
             ]
             while self.queue and len(held) < self.active_limit:
                 cohort = None
-                if self.mode == "pingpong":
+                if self.mode in ("pingpong", "pingpong-prepost3", "pingpong-eager-prepost3",
+                          "serial-k3", "serial-eager-k3", "pingpong-k3", "pingpong-eager-k3"):
                     choices = [
-                        c for c in ("A", "B") if c not in busy_cohorts
+                        c for c in (("A",) if self.mode in ("serial-k3", "serial-eager-k3")
+                                   else ("A", "B")) if c not in busy_cohorts
                         and (self.per_cohort_capacity is None or
                              sum(r["cohort"] == c for r in held) < self.per_cohort_capacity)
                         and self.fixed_assignment.get(self.queue[0], c) == c

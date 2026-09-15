@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import functools
 import os
+import threading
 import time
 from collections import defaultdict
 from contextlib import contextmanager
 
+from specrhythm.continuation.trace import TRACE, references
 from specrhythm.serving.common import require
 
 
@@ -22,7 +24,9 @@ class Timers:
             yield
         finally:
             self.rows.append(
-                dict(category=category, start_ns=start, end_ns=time.monotonic_ns(), **fields)
+                dict(category=category, start_ns=start, end_ns=time.monotonic_ns(),
+                     **({"pid": os.getpid(), "thread_id": threading.get_ident()}
+                        if TRACE.enabled else {}), **fields)
             )
 
     def report(self):
@@ -31,6 +35,7 @@ class Timers:
             counts[r["category"]]["count"] += 1
             counts[r["category"]]["inclusive_host_ms"] += (r["end_ns"] - r["start_ns"]) / 1e6
         return {
+            "causal_timeline": TRACE.report(),
             "aggregate": dict(counts),
             "intervals": list(self.rows),
             "aggregation": "inclusive/nested categories; do not add or infer critical path",
@@ -50,8 +55,32 @@ def wrap(owner, name, category):
 
     @functools.wraps(original)
     def measured(*args, **kwargs):
+        if category == "log_fsync":
+            from specrhythm.io_context import sync_attribution
+
+            with TIMERS.span(category, **sync_attribution()):
+                return original(*args, **kwargs)
+        if TRACE.enabled and category == "ipc":
+            operation = args[1] if len(args) > 1 else kwargs["operation"]
+            payload = args[2] if len(args) > 2 else kwargs["payload"]
+            with TRACE.span("transport_rpc", operation=operation, requests=references(
+                    payload.get("requests", payload.get("synchronizations", ())))):
+                with TIMERS.span(category):
+                    result = original(*args, **kwargs)
+                if isinstance(result, dict) and all(type(result.get(k)) is int for k in (
+                        "transport_start_ns", "transport_end_ns")):
+                    TRACE.event("transport_exchange", start_ns=result["transport_start_ns"],
+                                end_ns=result["transport_end_ns"],
+                                service_receive_ns=result.get("service_receive_ns"),
+                                service_send_ns=result.get("service_send_ns"))
+                return result
         with TIMERS.span(category):
-            return original(*args, **kwargs)
+            result = original(*args, **kwargs)
+        if category == "control_json_read":
+            TRACE.follow_control(result)
+        elif category == "control_json_write":
+            TRACE.follow_control(args[1] if len(args) > 1 else kwargs.get("value"))
+        return result
 
     measured._fixed_observer = True
     setattr(owner, name, measured)
@@ -68,7 +97,7 @@ def install_host_observation(role=None):
     import json
     import subprocess
 
-    from specrhythm.phase4 import dual_service, transport
+    from specrhythm.phase4 import dual_service, transport, vllm_diagnostics
     from specrhythm.phase4.dual_uuid import DualVerificationUuidQuery
     from specrhythm.phase4.vllm_draft_worker import VllmDraftWorker
     from specrhythm.serving import s2_pool
@@ -80,6 +109,7 @@ def install_host_observation(role=None):
     wrap(os, "fsync", "log_fsync")
     wrap(transport.UnixDraftClient, "call", "ipc")
     wrap(dual_service.DualDraftClient, "call", "ipc")
+    wrap(vllm_diagnostics, "capture_target_forward", "target_forward_diagnostics")
     wrap(s2_pool.ResidentPoolAudit, "check", "resident_block_audit")
     wrap(VllmDraftWorker, "fence", "draft_required_fence")
     # Wrap aliases in their defining modules before consumers import them.
@@ -147,6 +177,8 @@ class DeviceTimeline:
     def before(self, _module, _args):
         start = self.torch.cuda.Event(enable_timing=True)
         meta = self.metadata()
+        if TRACE.enabled:
+            meta["causal_context"] = dict(getattr(TRACE.local, "fields", {}))
         host = time.monotonic_ns()
         start.record()
         self.current = (start, host, meta)
@@ -203,6 +235,12 @@ def target_startup(worker):
     from specrhythm.serving.fixed_identity import install
 
     install(runner.drafter, "identity")
+    if os.environ["SR_S2_MODE"] in ("serial-prepost3", "serial-eager-prepost3",
+                          "pingpong-prepost3", "pingpong-eager-prepost3",
+                          "serial-k3", "serial-eager-k3", "pingpong-k3", "pingpong-eager-k3"):
+        from specrhythm.serving.prepost_target import install as install_prepost
+
+        install_prepost(runner)
     import torch
 
     def metadata():
@@ -220,6 +258,9 @@ def target_startup(worker):
             },
             "role": "target",
             "dtype": str(worker.vllm_config.model_config.dtype),
+            "enforce_eager": getattr(worker.vllm_config.model_config, "enforce_eager", None),
+            "cudagraph_mode": str(getattr(getattr(worker.vllm_config, "compilation_config", None),
+                                          "cudagraph_mode", "NOT_RECORDED")),
             "attention_backends": snapshot["attention_backends"],
         },
     )
@@ -239,6 +280,8 @@ def target_report(worker):
         "host": TIMERS.report(),
         "rounds": ROUNDS,
         "target_rows": TARGET_ROWS,
+        **({"prepost_samples": worker.model_runner.prepost_samples.report()}
+           if hasattr(worker.model_runner, "prepost_samples") else {}),
     }
 
 

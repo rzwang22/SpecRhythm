@@ -297,10 +297,33 @@ def summarize(manifest_path, directory, point, *, probe=False):
     try:
         runtime = read_json(directory / "runtime.json")
         base["capacity"] = runtime["capacity"]
-        require(bool(runtime.get("probe")) == probe, "capacity/execution artifact kind differs")
+        if point["mode"].endswith("-k3"):
+            from specrhythm.serving.k3_capacity import qualify as qualify_capacity
+
+            base["capacity_reservation_qualification"] = qualify_capacity(
+                read_json(directory / "actual-capacity.json"), point["mode"], definitions)
+        from specrhythm.serving.device_contract import (
+            PREPOST_MODES,
+            qualify_prepost,
+            qualify_run_kind,
+        )
+
+        stage = ("correctness" if point.get("prepost_correctness") else
+                 "capacity_probe" if probe else "performance")
+        if point["mode"] in PREPOST_MODES or point.get("prepost_correctness"):
+            qualify_run_kind(runtime, point["mode"], probe=probe, stage=stage)
+        else:
+            # Historical fixed modes retain their original report schema rules.
+            require(bool(runtime.get("probe")) == probe,
+                    "capacity/execution artifact kind differs")
         if not probe:
             require(runtime["point"] == point, "runtime mode/point identity differs")
         backend = read_json(directory / "draft-backend-report.json")
+        if point["mode"] == "serial-eager":
+            from specrhythm.serving.eager_results import eager_columns, summarize_eager
+
+            base["rolling_eager"] = summarize_eager(backend, runtime)
+            base.update(eager_columns(base))
         lifecycle = read_json(directory / "process-lifecycle.json")
         checks = execution_checks(
             runtime, definitions, backend, lifecycle, manifest["execution"]["eos_token_ids"]
@@ -316,6 +339,18 @@ def summarize(manifest_path, directory, point, *, probe=False):
             runtime, manifest["fixed_diagnostic"]["options"].get("identity_matching", "linear")
         )
         base.update(draft_backend_checks=checks, execution_status="PASS")
+        if point["mode"] in PREPOST_MODES:
+            base["device_identity_qualification"] = qualify_prepost(
+                runtime, backend, read_json(directory / "actual-capacity.json"), point["mode"],
+                probe=probe, stage=stage)
+
+        if point.get("prepost_correctness"):
+            require(runtime["stop_reason"] == "all_naturally_completed"
+                    and all(r["state"] == "FINISHED" for r in runtime["requests"]),
+                    "joint correctness did not complete every output")
+            return {**base, "valid": True, "errors": [],
+                    "measurement_status": "NOT_APPLICABLE", "performance_conclusion": "NOT_TESTED",
+                    "joint_reference_comparison": "PENDING"}
         if probe:
             return {
                 **base,
@@ -358,6 +393,9 @@ def summarize(manifest_path, directory, point, *, probe=False):
         return {
             **base,
             "valid": False,
+            "qualification_status": "FAILED",
+            "failure_layer": getattr(error, "details", {}).get(
+                "failure_layer", "report_qualification"),
             "errors": [str(error)],
             "execution_status": "FAILED",
             "measurement_status": "INVALID",
@@ -534,9 +572,18 @@ def measurements(manifest, runtime, backend, point):
     draft = [
         r for r in backend["fixed_proposals"] if r["start_ns"] >= start and r["end_ns"] <= end
     ]
-    draft_forwards = [
-        r for r in backend["fixed_device"]["forwards"] if r["purpose"] in ("proposal", "commit")
-    ]
+    purposes = ("proposal", "commit", "eager") if point["mode"] == "serial-eager" else (
+        "proposal", "commit")
+    if point["mode"] in ("serial-prepost3", "serial-eager-prepost3"):
+        from specrhythm.continuation.prepost import PURPOSES
+
+        purposes = ("proposal", "commit", *PURPOSES)
+    elif point["mode"].endswith("-k3"):
+        from specrhythm.serving.ping_prepost import PURPOSES
+
+        purposes = ("proposal", "commit", *PURPOSES)
+    draft_forwards = [r for r in backend["fixed_device"]["forwards"]
+                      if r["purpose"] in purposes]
     for p in backend["fixed_proposals"]:
         # Sorted cumulative sums avoid proposal x forward joins.
         p["wall_ms"] = (p["end_ns"] - p["start_ns"]) / 1e6
@@ -555,8 +602,10 @@ def measurements(manifest, runtime, backend, point):
         cumulative.append(cumulative[-1] + f["gpu_event_ms"])
     for p in backend["fixed_proposals"]:
         a, b = bisect.bisect_left(starts, p["start_ns"]), bisect.bisect_right(starts, p["end_ns"])
-        p["gpu_event_ms"] = cumulative[b] - cumulative[a]
-    overlap = overlap_metrics(devices, backend["fixed_device"], start, end)
+        # New pre/post rows describe request participation, not an isolated GPU batch.
+        p["gpu_event_ms"] = (None if p.get("batch_participation_only")
+                             else cumulative[b] - cumulative[a])
+    overlap = overlap_metrics(devices, backend["fixed_device"], start, end, purposes=purposes)
     if point["mode"] == "serial-split":
         require(
             overlap["event_overlap_lower_ms"] == 0,
@@ -785,13 +834,13 @@ def population_metrics(runtime, start, end):
     }
 
 
-def overlap_metrics(devices, draft, start, end):
+def overlap_metrics(devices, draft, start, end, *, purposes=("proposal", "commit")):
     def intervals(rows, inner):
         a, b = ("start_upper_ns", "end_lower_ns") if inner else ("start_lower_ns", "end_upper_ns")
         return clipped([(r[a], r[b]) for r in rows if r[b] > r[a]], start, end)
 
     targets = [f for d in devices for f in d["device"]["forwards"]]
-    drafts = [f for f in draft["forwards"] if f.get("purpose") in ("proposal", "commit")]
+    drafts = [f for f in draft["forwards"] if f.get("purpose") in purposes]
     low = duration(intersections(intervals(targets, True), intervals(drafts, True)))
     high = duration(intersections(intervals(targets, False), intervals(drafts, False)))
     return {
@@ -879,6 +928,7 @@ def stage_shape(manifest, point, target, draft):
 
 
 def emit_result(directory, report, point):
+    from specrhythm.serving.eager_results import eager_columns
     from specrhythm.serving.fixed_artifacts import retained_report
 
     report = retained_report(directory, report)
@@ -910,6 +960,7 @@ def emit_result(directory, report, point):
         "accepted_tokens",
         "verified_proposed_tokens",
         "rejected_tokens",
+        *eager_columns(report),
     )
     with (directory / "light-summary.csv").open("x", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fields)
