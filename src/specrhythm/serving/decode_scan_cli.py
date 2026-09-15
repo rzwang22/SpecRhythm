@@ -355,6 +355,9 @@ def main(argv=None):
     p.add_argument("--draft-audit", choices=("full", "runtime"), default="full")
     p.add_argument("--observation", choices=("buffered-live",), default="buffered-live")
     p.add_argument("--identity-matching", choices=("bound-prefix",), default="bound-prefix")
+    from specrhythm.serving.k3 import B16, CONFIGURATIONS
+
+    p.add_argument("--k3-configuration", choices=CONFIGURATIONS, default=B16)
     p.add_argument("--selection-seed", type=int, default=1666)
     p.add_argument("--warmup-steps", type=int, default=2)
     p.add_argument("--window-seconds", type=float, default=30)
@@ -380,7 +383,7 @@ def main(argv=None):
                     drain_timeout=args.drain_timeout,
                 ),
                 seed=args.selection_seed,
-                s0=args.s0,
+                s0=args.s0, k3_configuration=args.k3_configuration,
             )
         elif args.command in ("run", "capacity"):
             value = run(

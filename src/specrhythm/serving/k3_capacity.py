@@ -6,13 +6,52 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from specrhythm.serving.common import require
-from specrhythm.serving.k3 import MODES, PARAMETERS, geometry, matches_geometry
+from specrhythm.serving.k3 import (
+    B16,
+    CONFIGURATIONS,
+    MODES,
+    PARAMETERS,
+    configuration_of,
+    geometry,
+    matches_geometry,
+)
 from specrhythm.serving.s1_workload import write_once
 from specrhythm.serving.s2_plan import capacity_for
 
 SCHEMA = "specrhythm.k3-capacity.v2"
 LEGACY_SCHEMA = "specrhythm.k3-capacity.v1"
 LEGACY_MINIMUM_RESERVE = 4
+
+
+def effective_capacity(actual):
+    """B64 requires loaded engine limits, in addition to the raw KV/workspace ranks."""
+    from specrhythm.serving.k3 import B64
+
+    meta = actual["metadata"]
+    if configuration_of(meta) != B64:
+        return  # Historical B16 validation and evidence schema are unchanged.
+    g = meta["execution_geometry"]
+    targets, draft = actual.get("target_effective_by_rank"), actual.get("draft_effective")
+    require(isinstance(targets, list) and len(targets) == 2 and isinstance(draft, dict),
+            "B64 loaded sequence/query capacity evidence missing")
+    workers = actual.get("target_worker_ranks")
+    require(isinstance(workers, list) and len(workers) == 2
+            and targets == [r.get("s1_effective_capacity") for r in workers],
+            "B64 loaded capacity differs from raw worker snapshots")
+    prompt_query = max(r["prompt_length"] + 1 for r in actual["capacity_request_budgets"])
+    for role, row, batch, query in [
+        *(('target', r, g["target_request_ceiling"], 4 * g["target_request_ceiling"])
+          for r in targets),
+        ('draft', draft, g["draft_physical_batch_ceiling"],
+         max(prompt_query, 4 * g["draft_physical_batch_ceiling"])),
+    ]:
+        require(isinstance(row, dict)
+                and type(row.get("max_num_seqs")) is int
+                and type(row.get("max_num_batched_tokens")) is int
+                and row["max_num_seqs"] >= batch
+                and row["max_num_batched_tokens"] >= query,
+                "B64 loaded sequence/query capacity insufficient", role=role,
+                required_requests=batch, required_query_positions=query, actual=row)
 
 
 def reservation(mode, role):
@@ -68,15 +107,27 @@ def check(definitions, rank, *, mode, active_limit, metadata, legacy=False):
             and metadata.get("draft_speculative_capacity_tokens")
             == reservation(mode, "draft")["reserved_speculative_positions"],
             "K3 capacity metadata/required/reserved positions differ", mode=mode, role=role)
-    plan = geometry(mode)
+    configuration = configuration_of(metadata)
+    plan = geometry(mode, configuration)
+    if configuration != B16:
+        require(type(metadata["per_cohort_capacity"]) is int
+                and metadata["per_cohort_capacity"] == max(plan["home_capacities"].values())
+                and type(metadata["cohort_count"]) is int
+                and metadata["cohort_count"] == len(plan["home_capacities"]),
+                "B64 capacity home declaration differs")
     declared_geometry = metadata.get("execution_geometry")
     if not legacy or declared_geometry is not None:
-        require(matches_geometry(declared_geometry, mode) and active_limit == 16
+        require(matches_geometry(declared_geometry, mode, configuration)
+                and active_limit == plan["active_limit"]
+                and type(metadata["max_requests_per_target_forward"]) is int
                 and metadata["max_requests_per_target_forward"] == plan["target_request_ceiling"],
                 "K3 physical batch declaration differs")
-        batch = plan["target_request_ceiling"] if role == "target" else 16
+        batch = plan["target_request_ceiling"] if role == "target" else plan[
+            "draft_physical_batch_ceiling"]
         require(
-            metadata[role + "_sequence_limit"] >= batch
+            type(metadata.get(role + "_sequence_limit")) is int
+            and type(metadata.get(role + "_query_token_limit")) is int
+            and metadata[role + "_sequence_limit"] >= batch
             and metadata[role + "_query_token_limit"] >= batch * (4 if role == "target" else 1),
             "K3 physical batch/query capacity insufficient",
         )
@@ -122,28 +173,38 @@ def qualify(actual, mode, definitions=None):
         seen.add((rank["role"], rank["physical_gpu_id"]))
     require(seen == {("draft", 0), ("target", 1), ("target", 2)},
             "K3 capacity rank missing/duplicated")
+    effective_capacity(actual)
     return dict(schema_version=SCHEMA, status="PASS", candidate_length=3,
                 speculative_reservations=meta["speculative_reservations"],
                 scope="raw rank/budget arithmetic; output and process cleanup are separate")
 
 
-def preflight():
+def preflight(configuration=B16):
     """Static interface exercise only, before loading models; no physical PASS."""
+    from specrhythm.serving.fixed_plan import capacity_metadata
+    from specrhythm.serving.k3 import configuration_fields
+
     rows = []
     for mode in MODES:
+        active = geometry(mode, configuration)["active_limit"]
+        meta = capacity_metadata(mode, active_limit=active, resident_requirement=360,
+                                 target_sequence_limit=512, k3_configuration=configuration)
         for role in ("target", "draft"):
             policy = reservation(mode, role)
             # These explicit arithmetic fixtures are not device observations.
-            value = capacity_for([SimpleNamespace(prompt_length=16, maximum_new_tokens=32)],
-                dict(role=role, mode=mode, block_size=16, num_gpu_blocks=128,
-                     physical_gpu_id=None, gpu_uuid=None, vocab_size=16,
-                     free_memory_bytes=1024**3), active_limit=16,
-                speculative_tokens=policy["reserved_speculative_positions"])
+            value = check([SimpleNamespace(request_id=str(i), prompt_length=16,
+                                           maximum_new_tokens=32) for i in range(360)],
+                dict(role=role, mode=mode, block_size=16, num_gpu_blocks=10000,
+                     physical_gpu_id=0 if role == "draft" else 1,
+                     gpu_uuid="STATIC_ARITHMETIC_FIXTURE_NOT_DEVICE_EVIDENCE", vocab_size=16,
+                     free_memory_bytes=1024**3), mode=mode, active_limit=active, metadata=meta)
             require(value["extra_speculative_tokens"] >= 0
                     if "extra_speculative_tokens" in value else True,
                     "negative legacy capacity increment")
-            rows.append(dict(mode=mode, role=role, geometry=geometry(mode), **policy))
+            rows.append(dict(mode=mode, role=role,
+                             geometry=geometry(mode, configuration), **policy))
     return dict(schema_version=SCHEMA, static_contract="PASS", GPU_capacity="PENDING",
+                **configuration_fields(configuration),
                 scope="synthetic arithmetic only; no model, device, allocation or UUID query",
                 reservations=rows)
 
@@ -151,8 +212,9 @@ def preflight():
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--k3-configuration", choices=CONFIGURATIONS, default=B16)
     args = parser.parse_args()
-    result = preflight()
+    result = preflight(args.k3_configuration)
     write_once(args.output, result)
     print(json.dumps(result))
 

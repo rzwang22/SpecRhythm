@@ -1613,3 +1613,22 @@ compute-waste ratios.
   The persistent Draft HF adapter is still a narrow serving prototype.
 - No current result may be cited as evidence of real GPU speedup or full AdaServe/SpecRhythm
   reproduction.
+
+## 2026-09-16 — A100 K3 B64 scale implementation
+
+Draft PR#5 stays Draft; ordinary continuation from5b50529/6e07617, no other PR or
+historical result changes. Explicit `k3-b64-v1`: serial-k3/serial-eager-k3 A64 Target64;
+pingpong-k3/pingpong-eager-k3 A32/B32 Target32; Draft physical ceiling64 for all.
+B16 entry/default remains. No scheduling, READY, K3, sampling or log strategy change.
+
+Local scope: geometry propagation, actual-rank capacity and query checks,128-opportunity
+warmup,64-request complete-output fixture, single-native-forward geometry qualification,
+normalized opportunity metrics/four ratios, and explicit bounded B64 offline packaging.
+[B64 runbook](k3-b64-runbook.md) describes the fixed four-point operator flow.
+CPU validation and final pinned SHA are recorded after checks. Server capacity,
+correctness, cleanup, native overlap and performance remain PENDING.
+
+Implementation validation: full pytest2845 passed/3 skipped; Python3.9/3.12 related
+suites369 passed each plus157 final delta tests each; Ruff, three-version compileall,
+Python3.9 AST and22 Bash scripts passed. Fixed-entry SHA and actual remote CI status
+follow in the delivery commit; GPU evidence is still PENDING.

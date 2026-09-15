@@ -14,6 +14,7 @@ from specrhythm.serving.prepost_machine import PrePostMachine
 
 
 class PingPrePostMachine(PrePostMachine):
+    active_limit = 16
     target_batch_ceiling = 8
     home_capacities = {"A": 8, "B": 8}
 
@@ -114,7 +115,8 @@ class PingPrePostMachine(PrePostMachine):
         )
         active = payload["active_request_ids"]
         unique_ids(active)
-        require(len(active) <= 16 and set(active) <= set(self.homes), "invalid active inventory")
+        require(len(active) <= self.active_limit and set(active) <= set(self.homes),
+                "invalid active inventory")
         views = self.views(active)
         selected = select_target_admissions(views, normal_cohort=normal, capacity=capacity)
         fallback = None
@@ -461,7 +463,7 @@ class PingPrePostMachine(PrePostMachine):
             claims=list(self.claims),
             ready=list(self.ready),
             home_cohorts=dict(self.homes),
-            active_limit=16,
+            active_limit=self.active_limit,
             target_batch_ceiling=self.target_batch_ceiling,
         )
         return result

@@ -1,6 +1,6 @@
 """Offline device/verification contracts; snapshots reuse existing worker reads only."""
 
-from specrhythm.serving.common import DataError
+from specrhythm.serving.common import DataError, require
 
 PREPOST_MODES = (
     "serial-prepost3",
@@ -289,6 +289,19 @@ def _qualify_prepost(runtime, backend, actual, mode, *, probe, stage):
 
         try:
             qualify_capacity(actual, mode)
+            from specrhythm.serving.k3 import B64, configuration_of, matches_geometry
+
+            config = configuration_of(runtime["point"])
+            if config == B64 or configuration_of(actual["metadata"]) == B64:
+                require(config == configuration_of(actual["metadata"])
+                        == configuration_of(runtime["capacity"])
+                        and matches_geometry(runtime["capacity"]["execution_geometry"],
+                                             mode, config),
+                        "B64 runtime/capacity configuration mismatch")
+                if not probe:
+                    from specrhythm.serving.k3_acceptance import native_geometry
+
+                    native_geometry(runtime, mode, configuration=config)
         except (ValueError, TypeError, KeyError) as error:
             c.fail("actual-capacity.json", "Draft+TP0/1", "K3 capacity reservation/arithmetic",
                    "complete typed raw budgets and recomputable conservative reserve", str(error))

@@ -35,6 +35,7 @@ def pipeline(runtime, backend):
                 )
     request_pairs, parent_pairs, draft_rows = defaultdict(list), [], []
     cross_steps = defaultdict(list)
+    cross_home_steps = defaultdict(list)
     first_rows, preceding, captured_recovery = [], [], False
     for index, f in enumerate(backend["prepost_physical"]["forwards"]):
         if not start <= f["start_ns"] <= end:
@@ -135,6 +136,10 @@ def pipeline(runtime, backend):
                         c["home_cohort"] != homes[rid] for c in claims.values()
                     ):
                         pairs[role].append((g, tg))
+                        if batch["step"].get("window") and role in (
+                            "ordinary_draft", "rejection_recovery"
+                        ):
+                            cross_home_steps[batch["index"]].append((g, tg))
                 elif role == "eager_lookahead":
                     c = claims[rid]
                     if (
@@ -234,6 +239,22 @@ def pipeline(runtime, backend):
         meaning="OBSERVED means any definite nonzero other-request ordinary/recovery overlap; "
         "it does not mean recovery is sufficiently hidden",
     )
+    home_counts = dict(cross_counts,
+        definite=None if not complete else sum(
+            union_overlap(cross_home_steps[b["index"]])["lower_ms"] > 0
+            for b in measured_batches),
+        possible_only=None if not complete else sum(
+            union_overlap(cross_home_steps[b["index"]])["lower_ms"] == 0
+            and union_overlap(cross_home_steps[b["index"]])["upper_ms"] > 0
+            for b in measured_batches),
+        meaning="other-request ordinary/recovery overlap with a different immutable home; "
+        "unique Target steps, not summed TP ranks or request bindings")
+    home_covered = union_overlap(pairs["rejection_recovery"])
+    home_coverage = dict(coverage, covered_ms=home_covered,
+        fraction=None if not complete or not recovery_union["lower_ms"] else dict(
+            lower=home_covered["lower_ms"] / recovery_union["upper_ms"],
+            upper=min(1.0, home_covered["upper_ms"] / recovery_union["lower_ms"])),
+        numerator=coverage["numerator"] + "; additionally a Target claim has a different home")
     polls = [e for e in events if e["event"] == "admission" and start <= e["timestamp_ns"] <= end]
     pending = [r for e in polls for r in e.get("waiting_inventory", [])]
     observed = any(
@@ -263,7 +284,9 @@ def pipeline(runtime, backend):
         },
         parent_eager_native_overlap=union_overlap(parent_pairs),
         cross_request_overlap_steps=cross_counts,
+        cross_home_overlap_steps=home_counts,
         recovery_coverage_by_other_requests=coverage,
+        recovery_coverage_by_other_homes=home_coverage,
         all_Draft_GPU_union_not_hidden_by_any_Target=not_hidden(native),
         association="native internal IDs -> scheduler stable IDs -> authoritative claim "
         "proposal/version; Draft physical binding and parent dependency; then home; "

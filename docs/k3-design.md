@@ -587,3 +587,42 @@ satisfy the receipt, KV release, process cleanup or archive qualification checks
 Local mutable storage, verified single-package DPC copy/fallback, setup900/drain60,
 Serial ceilings16 and PingPong ceilings8, resident360 and all four performance points are
 unchanged. No A100 performance or filesystem causal claim follows from this CPU repair.
+
+## Explicit B64 scale configuration (2026-09-16)
+
+`k3-b64-v1` extends only experiment geometry: Serial A64/Target64 and PingPong
+A32/B32/Target32, all active64/Draft64. `k3.py` is the common typed source;
+configuration flows CLI→sealed manifest/point→initial and live control→controller,
+owner factory and resident scheduler→runtime/capacity/native report qualification.
+The existing B16 default and its serialized geometry remain valid. Unknown/null
+configuration values fail; missing configuration never authorizes B64.
+
+Previously independent hard limits lived in selected_point, K3Window, K3Machine,
+PingPrePostMachine.active inventory, scheduler and full_batch_receipt. These now
+consume the same scale. The Draft backend checks the configured physical ceiling
+at the actual common forward boundary, including mixed work; it adds no merging
+wait. The owner admission cap is64, homes32/64 and Target cap32/64 as appropriate.
+K3 token generation, no-bonus feedback, promotion and post_prepost READY ordering
+are unchanged. Serial still waits for all Draft work before a claim.
+
+Per request Target/ordinary Draft required3/reserved4; eager Draft required6/reserved6.
+`capacity_for` retains its legacy minimum4, active private partial/copy margin,
+5%/minimum32 free-block safety reserve,512MiB workspace and resident logits cost.
+It recomputes active growth for64 from the actual rank block counts and all360
+frozen request budgets. B64 additionally replays actual loaded Target/Draft sequence
+and query limits: Target4×ceiling (root+K3); Draft up to4×64 for compatible catch-up
+positions, and the largest singleton prefill query. Required limits are validated
+against observed engine capacity, never guessed device PASS or reduced geometry.
+
+Warmup is128 actual request verification opportunities, retaining actual IDs and
+boundary population. The correctness fixture uses first64 frozen requests capped
+at32 output tokens, and each mode/reference must naturally finish and release them.
+Qualification binds actual TP forwards, distinct request sets, mode/configuration,
+home occupancy and claim home identities. Full geometry proof requires a single
+forward at64/32, not aggregate request visits. EOS/budget tails affect candidate
+counts independently of request batch size.
+
+Reports add ΣactualB opportunities, tokens/opportunity, actual window_ms×64/ΣB,
+and the four within-B64 throughput ratios. Existing native union/intersection and
+critical-path scopes remain unchanged. READY early publication remains a separate
+future candidate, outside this change. See [B64 runbook](k3-b64-runbook.md).

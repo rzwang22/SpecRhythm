@@ -7,7 +7,7 @@ from specrhythm.continuation.prepost import PrePostState
 from specrhythm.phase4.draft_batch import DraftProposalPlan, unique_ids
 from specrhythm.phase4.serial import token_prefix_hash
 from specrhythm.serving.common import require
-from specrhythm.serving.k3 import PARAMETERS, PROTOCOL, geometry
+from specrhythm.serving.k3 import B16, PARAMETERS, PROTOCOL, geometry
 from specrhythm.serving.ping_prepost_machine import PingPrePostMachine
 
 
@@ -15,11 +15,13 @@ class K3Machine(PingPrePostMachine):
     protocol, parameters = PROTOCOL, PARAMETERS
     uniform_candidate_length = 3
 
-    def __init__(self, *args, mode=None, **kwargs):
+    def __init__(self, *args, mode=None, configuration=B16, **kwargs):
         super().__init__(*args, **kwargs)
         # Explicit production mode; historical CPU callers retain two-home defaults.
         mode = mode or ("pingpong-eager-k3" if self.enabled else "pingpong-k3")
-        self.geometry = geometry(mode)
+        self.geometry = geometry(mode, configuration)
+        self.active_limit = self.geometry["active_limit"]
+        self.backend.physical_batch_ceiling = self.geometry["draft_physical_batch_ceiling"]
         require(self.geometry["eager"] == self.enabled, "K3 mode/eager mismatch")
         self.target_batch_ceiling = self.geometry["target_request_ceiling"]
         self.home_capacities = self.geometry["home_capacities"]

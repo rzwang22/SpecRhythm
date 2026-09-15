@@ -76,7 +76,12 @@ def coverage(runtime, backend):
 
 
 def run(source, directory, *, modes=MODES, protocol=PROTOCOL,
-        coverage_check=coverage, require_mixed=True, native_check=None):
+        coverage_check=coverage, require_mixed=True, native_check=None,
+        configuration="k3-b16-v1"):
+    from specrhythm.serving.k3 import B64, configuration_fields, geometry
+
+    fields = configuration_fields(configuration)
+    count = geometry("serial-k3", configuration)["active_limit"]
     from specrhythm.serving.fixed_cli import run_point
 
     require(not directory.exists(), "joint correctness needs a fresh root")
@@ -89,12 +94,14 @@ def run(source, directory, *, modes=MODES, protocol=PROTOCOL,
             root = directory / mode
             point = None
             layer = "joint_prepare"
-            path = prepare(source, root, mode, modes=modes)
+            path = prepare(source, root, mode, modes=modes,
+                           **({"configuration": configuration} if fields else {}))
             selected = dict(
                 mode=mode,
                 runtime_mode=mode,
                 kind="joint-correctness",
-                batch=16,
+                batch=count,
+                **fields,
                 half="A",
                 repeat=0,
                 discard_warmup=False,
@@ -126,14 +133,16 @@ def run(source, directory, *, modes=MODES, protocol=PROTOCOL,
             receipts.append(dict(mode=mode, point=str(point), execution="PASS", cleanup="PASS",
                                  **proof))
         layer = "joint_output_and_mixed_verification"
-        result = compare_outputs(runtimes, modes=modes, require_mixed=require_mixed)
+        result = compare_outputs(runtimes, modes=modes, require_mixed=require_mixed,
+                                 **(dict(request_count=count, compare_termination=True)
+                                    if configuration == B64 else {}))
         output_status = "PASS"
         layer = "joint_coverage"
         cov = coverage_check(runtimes[modes[-1]], backends[modes[-1]])
         write_once(directory / "coverage.json", cov)
         require(cov["status"] == "COMPLETE", "joint real protocol coverage incomplete", **cov)
         value = dict(
-            **result,
+            **result, **fields,
             coverage=cov,
             runs=receipts,
             protocol=protocol,

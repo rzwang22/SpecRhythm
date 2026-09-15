@@ -140,6 +140,9 @@ def test_other_request_overlap_precedes_home_classification_and_is_not_double_co
     # Explicit simulated device endpoints; collection and logical claims remain real.
     for key in ("start_lower_ns", "start_upper_ns", "end_lower_ns", "end_upper_ns"):
         d[key] = gpu[key]
+    cross_home = pipeline(r, b)
+    assert cross_home["cross_home_overlap_steps"]["definite"] == 1
+    assert cross_home["recovery_coverage_by_other_homes"]["covered_ms"]["lower_ms"] > 0
     for e in b["prepost"]["pingpong"]["events"]:
         for c in e.get("claims", []):
             c["home_cohort"] = "A"
@@ -162,6 +165,8 @@ def test_other_request_overlap_precedes_home_classification_and_is_not_double_co
     )
     assert 0 < coverage["fraction"]["lower"] <= coverage["fraction"]["upper"] <= 1
     assert result["cross_request_overlap_steps"]["definite"] == 1
+    assert result["cross_home_overlap_steps"]["definite"] == 0
+    assert result["recovery_coverage_by_other_homes"]["covered_ms"]["upper_ms"] == 0
     assert result["cross_request_overlap_steps"]["total_measured_Target_steps"] == 5
 
 

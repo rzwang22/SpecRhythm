@@ -526,3 +526,57 @@ checks passed. The three platform/opt-in skips are not GPU acceptance. Baseline 
 had all eight GitHub checks SUCCESS; new execution/entry CI is reported separately.
 
 No assertions, timeouts, drain/setup budgets or diagnostic qualification were weakened.
+
+## B64 scale validation (2026-09-16; GPU pending)
+
+Based on verified A100 execution5b50529f3bd3617f29c60ee9de6bf7143f96449e,
+retaining delivery6e07617b94b27f5bc9f1ddc126c1bc18a9592bbf. No server connection
+or GPU execution in this implementation turn. Historical evidence remains unchanged.
+
+New CPU regressions exercise actual B64 configuration→capacity_for→fixed_runtime.run
+and drive→startup/native producer hooks→summarize/device/native qualification→archive
+projection→replay. GPU execution is replaced at its hardware boundary; reports and
+qualifiers are not mocked. Owner/controller/resident scheduler tests drive64 cached
+seeds through two real backend extension calls and one64/32-request Target schedule,
+retaining both physical pool audits. This proves CPU configuration/dispatch behavior,
+not native GPU geometry or overlap.
+
+Negative cases include implicit B64, inconsistent point/manifest/metadata, loaded
+sequence/query deficit, KV deficit, duplicates, missing TP rank, aggregated small
+forwards, invalid configuration types and missing geometry. Warmup partial batches
+count actual opportunities. Actual fixture construction selects64 original requests,
+caps outputs at32, preserves source bytes and seals the new manifest; complete-output
+comparison checks IDs, tokens, lengths and finish reasons including EOS. Both entries
+exercise first-error stop and one-package local/copy-failure fallback. Existing K3
+rolling/rejection/EOS/accounting/deadline tests are retained.
+
+During development the first expanded qualifier run found a missing `require`
+import; a subsequent entry-test expansion found an unparameterized test-only `batch`
+variable. Both were corrected at their source; no assertion, timeout or GPU budget
+was weakened. One initial test command referenced a nonexistent filename and collected
+no tests; the corrected affected selection passed216 tests. Validation totals and
+commit/CI status are appended after the final checks.
+
+The first full run recorded24 failures,2797 passes and19 skips.20 failures came
+from an older hardware-substitution fixture omitting the manifest's real active_limit;
+the other4 were its legacy routing error-text contract requiring B16 in the message.
+The fixture now supplies the producer field, and mismatch errors name the configured
+B16/B64. The focused capacity/startup/deadline suite then passed163 tests. This was
+not a server or CI result. Subsequent source-audit-enabled full runs are recorded below.
+
+Report adaptation also separates `cross_home_overlap_steps` and
+`recovery_coverage_by_other_homes` from other-request overlap within the same home.
+Their denominator is unchanged: unique physical recovery intervals clipped to the
+actual window. A synthetic-native regression shows one cross-home step becoming
+zero after home labels become equal while other-request overlap stays nonzero;
+these injected intervals are CPU evidence tests, not GPU overlap measurements.
+
+Final local validation: source-audit-enabled full pytest2845 passed/3 skipped
+(381.09s); the preceding completed full run2843 passed/3 skipped (411.38s).
+Python3.9 and3.12 related production-chain suites each369 passed, followed by157
+final capacity/evidence/deadline tests each. Ruff, compileall on3.9/3.11/3.12,
+221 source-file Python3.9 AST checks,22 Bash scripts and diff --check passed.
+The final B64-only warmup metadata label is covered by those157-case checks.
+No timeout/retention assertion was loosened. GPU capacity/correctness/cleanup,
+physical B64/B32 geometry, overlap and throughput remain PENDING. CI is checked
+on the pushed commit; local passes are not represented as remote CI or GPU passes.

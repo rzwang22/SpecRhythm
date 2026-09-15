@@ -2,10 +2,10 @@
 
 
 class PingPrePostController:
-    def __init__(self, mode=None):
+    def __init__(self, mode=None, configuration="k3-b16-v1"):
         from specrhythm.serving.k3 import MODES, geometry
 
-        self.geometry = geometry(mode) if mode in MODES else None
+        self.geometry = geometry(mode, configuration) if mode in MODES else None
         self.opportunity = 0
         self.admitted = 0
 

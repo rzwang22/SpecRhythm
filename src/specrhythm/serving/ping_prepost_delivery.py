@@ -34,7 +34,7 @@ NAMES = {
     "patch-manifest.json",
     "environment.json",
     "topology.json",
-    "execution-B16.json",
+    "execution-B16.json", "execution-B64.json",
     "execution-manifest.json",
     "point.json",
     "runtime.json",
@@ -108,6 +108,26 @@ BACKEND_KEYS = {
 }
 
 
+def byte_limits(directory):
+    """Explicit B64 offline evidence capacity; producer retention/logging is unchanged."""
+    from specrhythm.serving.k3 import B64, MODES, configuration_of, matches_geometry
+
+    path = directory / "k3-capacity-contract.json"
+    if not path.exists():
+        return FILE_LIMIT, TOTAL_LIMIT
+    require(path.stat().st_size < 128 * 1024, "invalid static capacity receipt size")
+    receipt = read_json(path)
+    if configuration_of(receipt) != B64:
+        return FILE_LIMIT, TOTAL_LIMIT
+    rows = receipt["reservations"]
+    require(receipt["static_contract"] == "PASS" and len(rows) == 8
+            and {(r["mode"], r["role"]) for r in rows}
+            == {(m, role) for m in MODES for role in ("target", "draft")}
+            and all(matches_geometry(r["geometry"], r["mode"], B64) for r in rows),
+            "B64 export capacity requires explicit complete static configuration")
+    return 4 * FILE_LIMIT, 4 * TOTAL_LIMIT
+
+
 def comparison(directory, *, modes=MODES):
     points = []
     missing = []
@@ -131,6 +151,9 @@ def comparison(directory, *, modes=MODES):
                     k: r.get(k)
                     for k in (
                         "execution_geometry", "actual_target_batch", "warmup_coverage",
+                        "k3_configuration", "request_verification_opportunities",
+                        "tokens_per_request_opportunity", "window_ms_per_active_opportunities",
+                        "measurement_start_ns", "measurement_end_ns",
                         "throughput_tok_s",
                         "window_ms",
                         "committed_tokens",
@@ -147,7 +170,7 @@ def comparison(directory, *, modes=MODES):
         if mode.endswith("-k3"):
             points[-1]["K3_mechanism"] = {
                 k: r["pingpong"].get(k) for k in (
-                    "outcomes", "generated", "retained", "discarded",
+                    "outcomes", "generated", "retained", "discarded", "lookahead_rates",
                     "ready_to_admission_ms", "feedback_to_ready_ms")}
             points[-1]["pipeline"] = {k: v for k, v in r["pingpong"].get("pipeline", {}).items()
                                        if k not in ("timeline", "rejection_cycle", "dispatch")}
@@ -158,10 +181,12 @@ def comparison(directory, *, modes=MODES):
         for k in ("source_commit", "options", "workload_sha256")
     )
     if "serial-eager-k3" in modes:
-        from specrhythm.serving.k3 import matches_geometry
+        from specrhythm.serving.k3 import configuration_of, matches_geometry
 
-        matched = matched and all(matches_geometry(r.get("execution_geometry"), r["mode"])
+        matched = matched and all(matches_geometry(r.get("execution_geometry"), r["mode"],
+                                                       configuration_of(r))
                                   for r in reports)
+        matched = matched and len({configuration_of(r) for r in reports}) == 1
         matched = matched and bool(reports) and bool(reports[0].get("common_execution")) and all(
             r.get("common_execution") == reports[0]["common_execution"] for r in reports)
     valid = matched and all(
@@ -187,7 +212,27 @@ def comparison(directory, *, modes=MODES):
 
         native = {r["mode"]: r.get("native_target_geometry")
                   for r in read_json(joint).get("runs", []) if r["mode"] in modes}
-        valid = valid and all(full_batch_receipt(native.get(m), m) for m in modes)
+        valid = valid and all(full_batch_receipt(native.get(m), m, configuration_of(reports[0])
+                                                          if reports else "k3-b16-v1")
+                              for m in modes)
+        if reports and configuration_of(reports[0]) == "k3-b64-v1":
+            joint_value = read_json(joint)
+            valid = valid and configuration_of(joint_value) == "k3-b64-v1"
+            valid = valid and joint_value.get("request_count") == 64
+            valid = valid and joint_value.get("termination_comparison") == "exact by request ID"
+    ratios = []
+    if "serial-eager-k3" in modes:
+        by_mode = {r["mode"]: r for r in reports}
+        for numerator, denominator in (
+            ("serial-eager-k3", "serial-k3"), ("pingpong-k3", "serial-k3"),
+            ("pingpong-eager-k3", "pingpong-k3"),
+            ("pingpong-eager-k3", "serial-eager-k3"),
+        ):
+            a, b = by_mode.get(numerator, {}), by_mode.get(denominator, {})
+            ratios.append(dict(numerator=numerator, denominator=denominator,
+                throughput_ratio=a["throughput_tok_s"] / b["throughput_tok_s"]
+                if valid and a.get("throughput_tok_s") and b.get("throughput_tok_s") else None,
+                interpretation="single-window observed ratio; stability not established"))
     return dict(
         schema_version="specrhythm.ping-prepost-delivery.v1",
         points=points,
@@ -198,6 +243,7 @@ def comparison(directory, *, modes=MODES):
         missing_points=missing,
         joint_correctness="joint/result.json" if joint.exists() else "joint/failure.json",
         joint_native_target_geometry=native,
+        paired_ratios=ratios,
         valid=valid,
         performance_conclusion="single window mechanism check; "
         "no stable speedup conclusion; use new run tags for later interleaved repeats",
@@ -206,6 +252,12 @@ def comparison(directory, *, modes=MODES):
 
 def export(directory, output, *, first_code=0, stage="complete", modes=MODES):
     require(directory.is_dir() and not output.exists(), "new delivery archive required")
+    limit_error = None
+    try:
+        file_limit, total_limit = byte_limits(directory)
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        file_limit, total_limit = FILE_LIMIT, TOTAL_LIMIT
+        limit_error = "invalid export capacity declaration: " + str(error)
     compare_path = directory / "comparison.json"
     if not compare_path.exists():
         try:
@@ -221,7 +273,7 @@ def export(directory, output, *, first_code=0, stage="complete", modes=MODES):
              or (p.name.startswith(".draft-backend-report.json.") and p.name.endswith(".partial")))
     )
     inventory, objects, emitted, total, failures = [], {}, set(), 0, []
-    evidence_errors = []
+    evidence_errors = [limit_error] if limit_error else []
     expected = ["joint/result.json", "comparison.json"]
     for mode in modes:
         root = directory / "points" / mode
@@ -278,14 +330,14 @@ def export(directory, output, *, first_code=0, stage="complete", modes=MODES):
                 failures.append(name)
                 continue
             row["source_bytes"] = before.st_size
-            if index >= LOGICAL_LIMIT or before.st_size > FILE_LIMIT:
+            if index >= LOGICAL_LIMIT or before.st_size > file_limit:
                 row["status"] = "OMITTED_LIMIT"
                 failures.append(name)
                 continue
             try:
                 with source.open("rb") as handle:
-                    raw = handle.read(FILE_LIMIT + 1)
-                require(len(raw) <= FILE_LIMIT, "source exceeded file byte budget while reading")
+                    raw = handle.read(file_limit + 1)
+                require(len(raw) <= file_limit, "source exceeded file byte budget while reading")
                 try:
                     after = source.stat()
                 except OSError as error:
@@ -353,7 +405,7 @@ def export(directory, output, *, first_code=0, stage="complete", modes=MODES):
                 object_path = "objects/" + digest + ".json"
                 if digest not in emitted:
                     require(len(emitted) < FILE_COUNT, "unique payload file budget exceeded")
-                    if total + len(data) > TOTAL_LIMIT:
+                    if total + len(data) > total_limit:
                         raise ValueError("unique payload total limit exceeded")
                     add(object_path, data)
                     emitted.add(digest)
@@ -390,7 +442,7 @@ def export(directory, output, *, first_code=0, stage="complete", modes=MODES):
                                          42 if first_code == 0 and not comparison_valid else 0),
             first_exit_code=first_code,
             failed_stage=stage,
-            limits=dict(file_bytes=FILE_LIMIT, unique_payload_bytes=TOTAL_LIMIT,
+            limits=dict(file_bytes=file_limit, unique_payload_bytes=total_limit,
                         files=FILE_COUNT, file_count_scope="unique payloads",
                         unique_files=FILE_COUNT, logical_files=LOGICAL_LIMIT),
             unique_payload_bytes=total,

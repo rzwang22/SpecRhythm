@@ -23,17 +23,22 @@ from specrhythm.serving.s1_workload import write_once
 from specrhythm.serving.s2_plan import sealed
 
 
-def prepare(source, root, mode, *, modes=MODES):
+def prepare(source, root, mode, *, modes=MODES, configuration="k3-b16-v1"):
+    from specrhythm.serving.k3 import configuration_fields, configuration_of, geometry
+
+    fields = configuration_fields(configuration)
+    count = geometry("serial-k3", configuration)["active_limit"]
     require(
         mode in ("target", *modes) and not root.exists(), "new joint correctness root required"
     )
-    base = read_json(source / "inputs/execution-B16.json")
+    base = read_json(source / f"inputs/execution-B{count}.json")
     raw = [
         json.loads(line) for line in (source / "inputs/requests.jsonl").read_text().splitlines()
     ]
     # Same frozen prompts/seeds/models, explicit bounded output fixture only here.
-    rows = [{**r, "maximum_new_tokens": min(r["maximum_new_tokens"], 32)} for r in raw[:16]]
-    require(len(rows) == 16, "joint correctness needs sixteen source requests")
+    rows = [{**r, "maximum_new_tokens": min(r["maximum_new_tokens"], 32)} for r in raw[:count]]
+    require(len(rows) == count and configuration_of(base) == configuration,
+            "joint correctness source count/configuration mismatch")
     root.mkdir(parents=True)
     for name in ("config.json", "patch-manifest.json", "environment.json", "topology.json"):
         shutil.copyfile(source / name, root / name)
@@ -47,18 +52,19 @@ def prepare(source, root, mode, *, modes=MODES):
     manifest.pop("sha256")
     manifest.update(
         request_ids=ids,
-        actual_N=16,
-        requested_N=16,
-        active_limit=16,
+        actual_N=count,
+        requested_N=count,
+        active_limit=count,
+        **fields,
         workload_sha256=sha256_file(inputs / "requests.jsonl"),
     )
     trace = dict(base["trace"])
     trace.pop("sha256")
     trace["rows"] = [r for r in trace["rows"] if r["request_id"] in ids]
     manifest["trace"] = sealed(trace)
-    manifest["execution"]["capacity"]["resident_pool"] = 16
+    manifest["execution"]["capacity"]["resident_pool"] = count
     diag = manifest["fixed_diagnostic"]
-    diag["scenario"] = "joint correctness; complete sixteen-request outputs; not performance"
+    diag["scenario"] = f"joint correctness; complete {count}-request outputs; not performance"
     diag["options"].update(
         samples=4096,
         warmup_steps=0,
@@ -67,13 +73,14 @@ def prepare(source, root, mode, *, modes=MODES):
     )
     diag["capacity"] = {
         mode: capacity_metadata(
-            mode, active_limit=16, resident_requirement=16, target_sequence_limit=512
+            mode, active_limit=count, resident_requirement=count, target_sequence_limit=512,
+            k3_configuration=configuration
         )
     }
     diag.update(initial_request_ids=ids, replacement_request_ids=[], cohorts={"A": [], "B": []})
     manifest["prepost_correctness_fixture"] = dict(
         source_workload_sha256=base["workload_sha256"],
-        request_count=16,
+        request_count=count,
         max_output_tokens=32,
         complete_outputs_required=True,
         performance_result=False,
@@ -83,21 +90,33 @@ def prepare(source, root, mode, *, modes=MODES):
     return path
 
 
-def compare_outputs(runtimes, *, modes=MODES, require_mixed=True):
+def compare_outputs(runtimes, *, modes=MODES, require_mixed=True, request_count=16,
+                    compare_termination=False):
     require(set(runtimes) == {"target", *modes}, "joint check lacks a mode/reference")
     values = {}
     for mode, runtime in runtimes.items():
         require(
             runtime["stop_reason"] == "all_naturally_completed"
-            and len(runtime["requests"]) == 16
+            and len(runtime["requests"]) == request_count
             and all(
                 r["state"] == "FINISHED" and r["resources_released"] for r in runtime["requests"]
             ),
             "joint output/cleanup incomplete",
         )
         values[mode] = {r["request_id"]: r["generated_token_ids"] for r in runtime["requests"]}
+        if compare_termination:
+            require(len(values[mode]) == request_count and all(
+                len(r["generated_token_ids"]) <= 32 and isinstance(r.get("finish_reason"), str)
+                and r["finish_reason"] for r in runtime["requests"]),
+                "B64 correctness output budget/termination evidence invalid")
+    if compare_termination:
+        terminal = {m: {r["request_id"]: r["finish_reason"] for r in v["requests"]}
+                    for m, v in runtimes.items()}
+        require(all(terminal[m] == terminal["target"] for m in modes),
+                "B64 correctness termination reasons differ")
     if not require_mixed:
-        require(all(len(v) == 16 and set(v) == set(values["target"]) for v in values.values()),
+        require(all(len(v) == request_count and set(v) == set(values["target"])
+                    for v in values.values()),
                 "K3 complete-output request identity set differs")
     comparisons = [
         dict(
@@ -124,6 +143,9 @@ def compare_outputs(runtimes, *, modes=MODES, require_mixed=True):
         require(mixed, "joint correctness coverage missing actual mixed 1/4 Target forward")
     return dict(
         valid=True,
+        request_count=request_count,
+        termination_comparison="exact by request ID" if compare_termination else "legacy",
+        lengths_compared=True,
         GPU_correctness="PASS",
         comparisons=comparisons,
         mixed_target_steps=len(mixed) if require_mixed else None,

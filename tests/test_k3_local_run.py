@@ -17,15 +17,16 @@ from specrhythm.serving.ping_prepost_delivery import export
 REPO = Path(__file__).resolve().parents[1]
 
 
+@pytest.mark.parametrize("configuration,batch", [("k3-b16-v1", 16), ("k3-b64-v1", 64)])
 @pytest.mark.parametrize("copy_fault", ["none", "write", "digest", "archive"])
 def test_actual_runner_first_error_one_archive_and_local_fallback(
-    tmp_path, monkeypatch, capsys, copy_fault
+    tmp_path, monkeypatch, capsys, copy_fault, configuration, batch
 ):
     repo, binary = tmp_path / "repo", tmp_path / "bin"
     (repo / "scripts").mkdir(parents=True)
     binary.mkdir()
     (repo / "src").symlink_to(REPO / "src", target_is_directory=True)
-    shutil.copyfile(REPO / "scripts/run_k3_b16.sh", repo / "scripts/run_k3_b16.sh")
+    shutil.copyfile(REPO / f"scripts/run_k3_b{batch}.sh", repo / f"scripts/run_k3_b{batch}.sh")
     sha = "a" * 40
     (binary / "git").write_text(
         '#!/bin/bash\nif [[ "$1" == rev-parse ]]; then echo ' + sha + "; fi\n"
@@ -66,7 +67,7 @@ exit 23
         local_base=tmp_path / "local",
         persistent=tmp_path / "durable",
         tag="case",
-        minimum_free_bytes=1,
+        minimum_free_bytes=1, configuration=configuration,
     )
     output = capsys.readouterr().out
     assert code == 23  # Not 41 (bad JSON), 43 (copy), or a synthetic success.
@@ -139,8 +140,9 @@ def test_unique_copy_never_overwrites_history(tmp_path):
     assert local.sha256_file(Path(first["path"])) == expected["sha256"]
 
 
-def test_public_entry_routes_before_any_mutable_run_directory():
-    text = (REPO / "scripts/run_k3_b16.sh").read_text()
+@pytest.mark.parametrize('batch', [16, 64])
+def test_public_entry_routes_before_any_mutable_run_directory(batch):
+    text = (REPO / f"scripts/run_k3_b{batch}.sh").read_text()
     assert text.index("specrhythm.serving.k3_local_run") < text.index(
         'mkdir -p "$SR_PING_DELIVERY'
     )

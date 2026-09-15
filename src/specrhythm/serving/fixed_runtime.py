@@ -186,6 +186,10 @@ def execution_point(point, probe):
 def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5, probe=False):
     point = execution_point(point, probe)
     mode, runtime_mode = point["mode"], point["runtime_mode"]
+    from specrhythm.serving.k3 import configuration_fields, configuration_of
+
+    configuration = configuration_of(manifest)
+    require(configuration_of(point) == configuration, "K3 runtime configuration mismatch")
     scan = point.get("scan", False)
     setup_timeout = options["setup_timeout"]
     if scan and os.environ.get("SR_FIXED_SCAN_SETUP_DEADLINE_NS"):
@@ -214,7 +218,7 @@ def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5, 
     if ping_prepost:
         from specrhythm.serving.ping_prepost_controller import PingPrePostController
 
-        ping_controller = PingPrePostController(mode)
+        ping_controller = PingPrePostController(mode, configuration)
     cohort_capacity = active // 2 if scan or ping_prepost else 32
     if mode in ("serial-k3", "serial-eager-k3"):
         cohort_capacity = active
@@ -241,6 +245,7 @@ def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5, 
         fixed_assignment=assignment,
     )
     packet = {
+        **configuration_fields(configuration),
         "initial_proposals": {},
         "initial_enqueues": {},
         "eos_token_ids": manifest["execution"]["eos_token_ids"],
@@ -264,7 +269,7 @@ def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5, 
             if mode.endswith("-k3"):
                 from specrhythm.serving.k3_window import K3Window
 
-                window = K3Window(window_options, active, mode)
+                window = K3Window(window_options, active, mode, configuration)
             else:
                 window = PingPrePostWindow(window_options, active, True)
         else:
@@ -552,7 +557,8 @@ def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5, 
             "point": point,
             "probe": probe,
             "capacity": {
-                **(diag["capacity"][mode] if scan else capacity_metadata(mode)),
+                **(diag["capacity"][mode] if scan or point.get("prepost_correctness")
+                   else capacity_metadata(mode)),
                 "resident_request_count": sum(not b["terminal"] for b in bootstrap.values()),
                 "active_request_limit": active,
                 "max_requests_per_target_forward": maximum_batch,
@@ -628,6 +634,9 @@ def run(root, manifest_path, directory, point, *, probe=False):
     point = execution_point(point, probe)
     mode = point["runtime_mode"]
     config, manifest, definitions = configure(root, manifest_path, directory, mode)
+    from specrhythm.serving.k3 import validate_point
+
+    validate_point(point, manifest)
     require("fixed_diagnostic" in manifest, "missing explicit fixed diagnostic manifest")
     scan = point.get("scan", False)
     capacity_spec = (manifest["fixed_diagnostic"]["capacity"][point["mode"]]
@@ -700,6 +709,10 @@ def run(root, manifest_path, directory, point, *, probe=False):
 
             actual.update(capacity_schema=SCHEMA, capacity_request_budgets=budgets(definitions))
         write_once(directory / "actual-capacity.json", actual)
+        if mode.endswith("-k3"):
+            from specrhythm.serving.k3_capacity import effective_capacity
+
+            effective_capacity(actual)
         require(
             all(r["valid"] for r in checks),
             "scan resident360 capacity insufficient" if scan else

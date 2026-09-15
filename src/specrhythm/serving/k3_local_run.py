@@ -148,7 +148,11 @@ def deliver(local, persistent, expected):
         lock.unlink(missing_ok=True)
 
 
-def run(repo, commit, *, local_base, persistent, tag, minimum_free_bytes=8 * 1024**3):
+def run(repo, commit, *, local_base, persistent, tag, minimum_free_bytes=8 * 1024**3,
+        configuration="k3-b16-v1"):
+    from specrhythm.serving.k3 import geometry
+
+    batch = geometry("serial-k3", configuration)["active_limit"]
     root, persistent, receipt = prepare_local(
         local_base, persistent, tag, minimum_free_bytes=minimum_free_bytes
     )
@@ -166,7 +170,7 @@ def run(repo, commit, *, local_base, persistent, tag, minimum_free_bytes=8 * 102
     print(json.dumps(receipt), flush=True)
     with (root / "runner.log").open("w") as log:
         process = subprocess.Popen(
-            ["bash", str(repo / "scripts/run_k3_b16.sh"), commit],
+            ["bash", str(repo / f"scripts/run_k3_b{batch}.sh"), commit],
             env=env,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -282,11 +286,14 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--repo", required=True, type=Path)
     p.add_argument("--commit", required=True)
+    from specrhythm.serving.k3 import B16, CONFIGURATIONS
+
+    p.add_argument("--k3-configuration", choices=CONFIGURATIONS, default=B16)
     args = p.parse_args()
     try:
         code = run(
             args.repo.resolve(),
-            args.commit,
+            args.commit, configuration=args.k3_configuration,
             local_base=Path(os.environ.get("SR_K3_LOCAL_BASE", "/tmp/specrhythm-runs")),
             persistent=Path(
                 os.environ.get(

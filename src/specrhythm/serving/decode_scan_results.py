@@ -21,6 +21,7 @@ from specrhythm.serving.fixed_results import (
     rounds_by_prefix,
     stats,
 )
+from specrhythm.serving.k3 import configuration_of
 from specrhythm.serving.ping_prepost import SCHEDULED_MODES as PING_MODES
 from specrhythm.serving.runtime_profile import load_s2
 from specrhythm.serving.s1_workload import write_once
@@ -121,7 +122,7 @@ def warmup_boundary(runtime, point, opts):
     if retained.get("schema_version") == "specrhythm.k3-request-opportunities.v1":
         from specrhythm.serving.k3_window import K3Window
 
-        replay = K3Window(opts, point["batch"], point["mode"])
+        replay = K3Window(opts, point["batch"], point["mode"], configuration_of(point))
     elif point["mode"] in PING_MODES:
         from specrhythm.serving.ping_prepost_window import PingPrePostWindow
 
@@ -172,7 +173,7 @@ def timing(runtime, backend, point, opts):
     if execution_geometry is not None:
         from specrhythm.serving.k3 import matches_geometry
 
-        require(matches_geometry(execution_geometry, point["mode"]),
+        require(matches_geometry(execution_geometry, point["mode"], configuration_of(point)),
                 "K3 runtime geometry mismatch")
         expected = execution_geometry["target_request_ceiling"]
     devices = runtime["target_devices"]
@@ -337,6 +338,11 @@ def timing(runtime, backend, point, opts):
         if start is not None and end > start
         else None,
         "target_steps": len(nonempty),
+        "request_verification_opportunities": sum(s["B"] for s in nonempty),
+        "tokens_per_request_opportunity": tokens / sum(s["B"] for s in nonempty)
+        if nonempty else None,
+        "window_ms_per_active_opportunities": wall * point["batch"] / sum(
+            s["B"] for s in nonempty) if nonempty and wall is not None else None,
         "empty_scheduler_steps": len(measured) - len(nonempty),
         "complete_rotations": complete,
         "partial_rotations": partial,
@@ -397,8 +403,9 @@ def summarize(manifest_path, directory, point, *, probe=False):
         if "execution_geometry" in meta:
             base.update(execution_geometry=meta["execution_geometry"],
                         sub_batch=meta["max_requests_per_target_forward"],
-                        boundary="resident360, active16; mode-specific Target ceiling; "
-                        "warmup in units of16 actual request opportunities")
+                        boundary=f"resident360, active{meta['active_request_limit']}; "
+                        "mode-specific Target ceiling; warmup in units of"
+                        f"{meta['active_request_limit']} actual request opportunities")
         b = read_json(directory / "draft-backend-report.json")
         if point["mode"].endswith("-k3"):
             from specrhythm.serving.k3_capacity import qualify as qualify_capacity

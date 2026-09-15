@@ -32,8 +32,9 @@ MODES = ("serial-k3", "serial-eager-k3", "pingpong-k3", "pingpong-eager-k3")
         ("none", "", False),
     ],
 )
+@pytest.mark.parametrize("script_name", ["run_k3_b16.sh", "run_k3_b64.sh"])
 def test_one_bundle_first_error_stops_points_and_parent_remains_open(
-    tmp_path, failure, point, export_error
+    tmp_path, failure, point, export_error, script_name
 ):
     repo, binary, results = (tmp_path / n for n in ("repo", "bin", "results"))
     for path in (repo / "scripts", binary, results):
@@ -77,7 +78,7 @@ if kind==os.environ['FAIL_STAGE'] and mode==os.environ['FAIL_POINT']: sys.exit(2
 """,
     )
     script = tmp_path / "run.sh"
-    script.write_text(SCRIPT.read_text())
+    script.write_text(Path("scripts", script_name).read_text())
     block = (
         'if bash "' + str(script) + '" ' + SHA + "; then echo PASSED; "
         'else echo "STOPPED=$?"; fi\necho PARENT_ALIVE\n'

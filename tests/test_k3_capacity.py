@@ -23,7 +23,8 @@ def capacity_run(tmp_path, monkeypatch):
         raw = [{**r, "mode": mode} for r in ranks()[:3]]
         raw.sort(key=lambda r: (r["role"] == "draft", r["physical_gpu_id"]))
         assert [r["role"] for r in raw] == ["target", "target", "draft"]
-        manifest = dict(fixed_diagnostic=dict(capacity={mode: metadata}, options=dict(
+        manifest = dict(active_limit=16, fixed_diagnostic=dict(
+            capacity={mode: metadata}, options=dict(
             drain_timeout=60)), sha256="execution", workload_sha256="workload")
         cfg = NS(
             scheduler_config=NS(async_scheduling=False, max_num_seqs=512,

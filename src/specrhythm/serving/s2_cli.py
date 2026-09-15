@@ -110,10 +110,18 @@ def execute(root, gate, mode, manifest_path, directory, *, probe=False, policy=N
             diagnostic=None):
     manifest, definitions = load_s2(str(manifest_path))
     validate_execution_files(root, manifest["execution"])
+    from specrhythm.serving.k3 import configuration_fields, configuration_of
+
+    configuration = configuration_of(manifest)
+    if diagnostic is not None:
+        from specrhythm.serving.k3 import validate_point
+
+        validate_point(diagnostic, manifest)
     publish(
         directory / "s2-control.json",
         {
             "schema_version": "specrhythm.s2-control.v1",
+            **configuration_fields(configuration),
             "barrier_ns": None,
             "active_limit": manifest["active_limit"],
             "requests": {

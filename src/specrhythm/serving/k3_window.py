@@ -4,13 +4,14 @@ from collections import Counter
 
 from specrhythm.serving.common import require
 from specrhythm.serving.decode_scan_window import ScanWindow, warmup_step
-from specrhythm.serving.k3 import geometry
+from specrhythm.serving.k3 import B16, geometry
 
 
 class K3Window(ScanWindow):
-    def __init__(self, options, batch, mode):
-        self.geometry = geometry(mode)
-        require(batch == 16, "K3 matrix requires active16")
+    def __init__(self, options, batch, mode, configuration=B16):
+        self.geometry = geometry(mode, configuration)
+        require(type(batch) is int and batch == self.geometry["active_limit"],
+                "K3 window active/configuration mismatch")
         super().__init__(options, batch, not self.geometry["serial_idle_gate"])
         self.opportunities = Counter()
 

@@ -64,14 +64,21 @@ def select(main, small_ids, seed=1666):
     )
 
 
-def selected_point(mode, batch, repeat=0):
+def selected_point(mode, batch, repeat=0, *, k3_configuration="k3-b16-v1"):
+    from specrhythm.serving.k3 import MODES as K3_MODES
+    from specrhythm.serving.k3 import configuration_fields, geometry
+
+    fields = configuration_fields(k3_configuration)
+    if mode in K3_MODES:
+        require(type(batch) is int and batch == geometry(mode, k3_configuration)["active_limit"],
+                "K3 point batch/configuration mismatch; configured B"
+                + str(geometry(mode, k3_configuration)["active_limit"]))
     require(mode in EXPLICIT_MODES and batch in BATCHES, "unknown decode scan mode/B")
-    require(mode not in ("pingpong-prepost3", "pingpong-eager-prepost3",
-                          "serial-k3", "serial-eager-k3",
-                          "pingpong-k3", "pingpong-eager-k3") or batch == 16,
+    require(mode not in ("pingpong-prepost3", "pingpong-eager-prepost3") or batch == 16,
             "PingPong prepost3 currently requires total active B16")
     return dict(
         mode=mode,
+        **(fields if mode in K3_MODES else {}),
         runtime_mode=mode,
         kind="decode-scan",
         batch=batch,
@@ -82,7 +89,9 @@ def selected_point(mode, batch, repeat=0):
     )
 
 
-def manifest(execution, ids, workload_sha, opts, batch):
+def manifest(execution, ids, workload_sha, opts, batch, *, k3_configuration="k3-b16-v1"):
+    from specrhythm.serving.k3 import configuration_fields
+
     require(
         batch in BATCHES and len(ids) == len(set(ids)) == POOL_SIZE,
         "invalid scan batch or resident pool",
@@ -105,6 +114,7 @@ def manifest(execution, ids, workload_sha, opts, batch):
             "workload_sha256": workload_sha,
             "trace": trace,
             "active_limit": batch,
+            **configuration_fields(k3_configuration),
             "actual_N": POOL_SIZE,
             "requested_N": POOL_SIZE,
             "fixed_diagnostic": {
@@ -116,7 +126,7 @@ def manifest(execution, ids, workload_sha, opts, batch):
                         m,
                         active_limit=batch,
                         resident_requirement=POOL_SIZE,
-                        target_sequence_limit=512,
+                        target_sequence_limit=512, k3_configuration=k3_configuration,
                     )
                     for m in EXPLICIT_MODES
                 },
@@ -134,7 +144,12 @@ def manifest(execution, ids, workload_sha, opts, batch):
     )
 
 
-def prepare(root, s1, opts, *, seed=1666, s0=None):
+def prepare(root, s1, opts, *, seed=1666, s0=None, k3_configuration="k3-b16-v1"):
+    from specrhythm.serving.k3 import B64, configuration_fields
+    from specrhythm.serving.k3 import MODES as K3_MODES
+
+    fields = configuration_fields(k3_configuration)
+    batches = (64,) if k3_configuration == B64 else BATCHES
     require(not root.exists(), "decode scan requires a new result root", artifact=str(root))
     old, _ = load_execution(s1 / "s1-mixed100/execution-manifest.json", verify_parent=True)
     require(read_json(s1 / "G3/comparison.json")["valid"] is True, "scan requires qualified S1 G3")
@@ -184,8 +199,9 @@ def prepare(root, s1, opts, *, seed=1666, s0=None):
             handle.write(json.dumps(row.to_dict(), ensure_ascii=False, sort_keys=True) + "\n")
     work_sha = sha256_file(workload)
     manifests = {}
-    for batch in BATCHES:
-        value = manifest(execution, selection["request_ids"], work_sha, opts, batch)
+    for batch in batches:
+        value = manifest(execution, selection["request_ids"], work_sha, opts, batch,
+                         k3_configuration=k3_configuration)
         name = f"execution-B{batch}.json"
         write_once(inputs / name, value)
         manifests[str(batch)] = {"path": "inputs/" + name, "sha256": value["sha256"]}
@@ -193,6 +209,7 @@ def prepare(root, s1, opts, *, seed=1666, s0=None):
         {
             "schema_version": SCHEMA,
             "source_s1": str(s1),
+            **fields,
             "parent": parent,
             "execution": execution,
             "selection": selection,
@@ -203,18 +220,19 @@ def prepare(root, s1, opts, *, seed=1666, s0=None):
             "points": [
                 selected_point(m, b, r)
                 for r in range(opts["repeats"])
-                for b in BATCHES
-                for m in MODES
+                for b in batches
+                for m in (() if k3_configuration == B64 else MODES)
             ],
             "optional_points": [
-                selected_point(m, b, r)
+                selected_point(m, b, r, k3_configuration=k3_configuration)
                 for r in range(opts["repeats"])
-                for b in BATCHES
+                for b in batches
                 for m in ("serial-eager", "serial-prepost3", "serial-eager-prepost3",
                           "pingpong-prepost3", "pingpong-eager-prepost3",
                           "serial-k3", "serial-eager-k3", "pingpong-k3", "pingpong-eager-k3")
-                if b == 16 or m not in ("pingpong-prepost3", "pingpong-eager-prepost3",
-                          "serial-k3", "serial-eager-k3", "pingpong-k3", "pingpong-eager-k3")
+                if (m in K3_MODES if k3_configuration == B64 else (b == 16 or m not in (
+                    "pingpong-prepost3", "pingpong-eager-prepost3",
+                          "serial-k3", "serial-eager-k3", "pingpong-k3", "pingpong-eager-k3")))
             ],
             "boundary": BOUNDARY,
             "capacity": "PENDING per fresh point before decode",

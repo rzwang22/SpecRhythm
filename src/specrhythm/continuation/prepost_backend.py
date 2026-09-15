@@ -76,6 +76,9 @@ class PrePostBackendMixin(GPUContinuationBackendMixin):
         self._gpu_check()
         if not rows:
             return {}, {}, None
+        ceiling = getattr(self, "physical_batch_ceiling", None)
+        require(ceiling is None or len(rows) <= ceiling,
+                "K3 physical Draft batch exceeds geometry")
         started = time.monotonic_ns()
         before = self.metrics.forwards[purpose]
         try:

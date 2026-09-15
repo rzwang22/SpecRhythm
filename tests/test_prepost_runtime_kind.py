@@ -36,7 +36,12 @@ hardware, produced = _hardware, _produced
 def driven(produced, monkeypatch, tmp_path):
     calls = []
 
-    def build(mode, stage, driver=None, *, full_run=False, admission_limit=None):
+    def build(mode, stage, driver=None, *, full_run=False, admission_limit=None,
+              configuration="k3-b16-v1"):
+        from specrhythm.serving.k3 import configuration_fields, geometry
+
+        fields = configuration_fields(configuration)
+        active = geometry("serial-k3", configuration)["active_limit"]
         base = tmp_path / str(len(calls))
         calls.append((mode, stage))
         h = produced(mode, True, root=base)  # Actual startup/snapshot, no decode hooks yet.
@@ -51,15 +56,18 @@ def driven(produced, monkeypatch, tmp_path):
         scan = not correct
         rows = [
             replace(request(i, 2 if correct else 512), request_id=str(i))
-            for i in range(16 if correct else 360)
+            for i in range(active if correct else 360)
         ]
         path, m, _ = profile(base / "drive-profile", rows=rows)
         m.pop("sha256")
-        m.update(active_limit=16, fixed_diagnostic=read_json(h.path)["fixed_diagnostic"])
+        m.update(active_limit=active, **fields,
+                 fixed_diagnostic=read_json(h.path)["fixed_diagnostic"])
         m["fixed_diagnostic"].update(cohorts={"A": [], "B": []})
         m["fixed_diagnostic"]["capacity"] = {
             mode: capacity_metadata(
-                mode, active_limit=16, resident_requirement=len(rows), target_sequence_limit=512
+                mode, active_limit=active, resident_requirement=len(rows),
+                target_sequence_limit=512,
+                k3_configuration=configuration
             )
         }
         opts = m["fixed_diagnostic"]["options"]
@@ -80,6 +88,7 @@ def driven(produced, monkeypatch, tmp_path):
         by_id = {r.request_id: r for r in definitions}
         point = dict(
             h.point,
+            batch=active, **fields,
             probe=probe,
             scan=scan,
             prepost_correctness=correct,
@@ -116,8 +125,10 @@ def driven(produced, monkeypatch, tmp_path):
                     return dict(inflight_request_ids=[], failures={})
                 if operation == "pp_admit":
                     n = payload["capacity"] if admission_limit is None else admission_limit
-                    return dict(claims=[dict(request_id=r)
-                                        for r in payload["active_request_ids"][:n]])
+                    packet = read_json(h.directory / "s2-control.json")
+                    return dict(claims=[dict(request_id=r,
+                                home_cohort=packet["requests"][r]["cohort"])
+                                for r in payload["active_request_ids"][:n]])
                 if operation in ("pp_register", "pp_stop"):
                     return {}
                 if operation == "finish_request":
@@ -242,7 +253,9 @@ def driven(produced, monkeypatch, tmp_path):
                     )
                 ticks[0] += 6_000_000_000
                 scheduler.s2_steps.append(
-                    dict(request_ids=ids, B=len(ids), rows=layout, cohort="A")
+                    dict(request_ids=ids, B=len(ids), rows=layout, cohort="A",
+                         home_cohorts={r: packet["requests"][r]["cohort"] for r in ids},
+                         ping_admission=packet["pp_admission"])
                 )
                 return output
 
@@ -280,7 +293,7 @@ def driven(produced, monkeypatch, tmp_path):
 
             h.actual["metadata"] = m["fixed_diagnostic"]["capacity"][mode]
             h.actual["capacity_request_budgets"] = budgets(definitions)
-            h.actual["checks"] = [check(definitions, r, mode=mode, active_limit=16,
+            h.actual["checks"] = [check(definitions, r, mode=mode, active_limit=active,
                                       metadata=h.actual["metadata"]) for r in h.actual["ranks"]]
             h.actual.update(execution_sha256=m["sha256"], point=point,
                             workload_sha256=m["workload_sha256"])

@@ -188,3 +188,12 @@ not the current test execution. Local validation:2756 passed/3 skipped;3.9/3.12 
 Pinned launcher, actual foreground runner and local archive/delivery regressions:24 PASS.
 The first GitHub push encountered a TLS connection error; the subsequent ordinary push
 succeeded. New GitHub CI is queried separately from local tests and may still be pending.
+
+## Separate A100 B64 scale entry
+
+The B16 fixed entry above remains available and keeps its original geometry.
+The explicit `k3-b64-v1` four-mode experiment (Serial A64; PingPong A32/B32) has a
+separate [B64 runbook](k3-b64-runbook.md) and `scripts/run_k3_b64.sh` entry. It is not
+activated by the old B16 command, legacy fixed64 or P1/P4 modes. See that runbook
+for128 actual warmup opportunities,64-request correctness/native geometry proof,
+matched four-point comparison and the one-package local-to-DPC delivery protocol.

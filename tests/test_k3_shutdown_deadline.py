@@ -32,18 +32,25 @@ class Hardware(VllmBatchedDraftBackend):
 
 
 def run_chain(directory, monkeypatch, mode, *, transform=lambda op, row: row,
-              repeat_settlement=False, before_failure=None):
+              repeat_settlement=False, before_failure=None, configuration="k3-b16-v1"):
     """Only GPU and accept-loop orchestration are substituted; all messages are real RPC."""
     from specrhythm.phase4.serial import token_prefix_hash
 
     operations, results = [], []
     monkeypatch.setenv("SR_K3_MANAGED_LOCAL", "1")
     monkeypatch.setattr(fixed_logging, "_CURRENT", None)
-    monkeypatch.setattr(eager_draft, "control", lambda: {"requests": {"r": {}}})
+    monkeypatch.setattr(eager_draft, "control", lambda: {
+        "requests": {"r": {}}, "k3_configuration": configuration})
 
     def serve(server, ready):
         machine = server.machine if mode == "target" else server.machine.machine
         assert isinstance(machine, PublishedDiagnosticSerialMachine) == (mode == "target")
+        if mode != "target":
+            from specrhythm.serving.k3 import geometry
+
+            assert machine.geometry == geometry(mode, configuration)
+            assert machine.backend.physical_batch_ceiling == machine.geometry[
+                "draft_physical_batch_ceiling"]
         with tempfile.TemporaryDirectory(prefix="sr-deadline-", dir="/tmp") as short:
             path = Path(short) / "rpc"
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
@@ -103,10 +110,11 @@ def run_chain(directory, monkeypatch, mode, *, transform=lambda op, row: row,
 
 
 @pytest.mark.parametrize("mode", ("target", *MODES))
-def test_coordinator_service_rpc_report_roundtrip(tmp_path, monkeypatch, mode):
+@pytest.mark.parametrize("configuration", ["k3-b16-v1", "k3-b64-v1"])
+def test_coordinator_service_rpc_report_roundtrip(tmp_path, monkeypatch, mode, configuration):
     from specrhythm.phase4.report_publication import qualify_final_report
 
-    operations, results = run_chain(tmp_path, monkeypatch, mode)
+    operations, results = run_chain(tmp_path, monkeypatch, mode, configuration=configuration)
     state = json.loads((tmp_path / "drain-state.json").read_text())
     assert state["status"] == "COMPLETE"
     deadline = state["deadline_ns"]

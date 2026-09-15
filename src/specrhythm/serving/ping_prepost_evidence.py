@@ -54,9 +54,10 @@ def mechanism(runtime, backend):
     ):
         errors.append("protocol parameters/binding missing")
     if uniform and physical.get("parameters") == K3_PARAMETERS:
-        from specrhythm.serving.k3 import matches_geometry
+        from specrhythm.serving.k3 import configuration_of, matches_geometry
 
-        if not matches_geometry(ping.get("geometry"), runtime["point"]["mode"]):
+        if not matches_geometry(ping.get("geometry"), runtime["point"]["mode"],
+                                configuration_of(runtime["point"])):
             errors.append("K3 actual owner execution geometry missing/different")
     if uniform and not accounting_complete(protocol.get("candidate_accounting")):
         errors.append("K3 final lifetime candidate accounting missing/inconsistent")
@@ -332,6 +333,7 @@ def mechanism(runtime, backend):
         r for r in events if r["event"] == "admission" and start <= r["timestamp_ns"] <= end
     ]
     flat = [r for c in cycles for r in c["requests"]]
+    generated = sum(r["generated"] for r in flat)
     return dict(
         protocol=expected_protocol,
         candidate_accounting=protocol.get("candidate_accounting") if uniform else None,
@@ -362,9 +364,16 @@ def mechanism(runtime, backend):
             else "UNCERTAIN"
         ),
         outcomes=dict(Counter(r["parent_outcome"] for r in flat)),
-        generated=sum(r["generated"] for r in flat),
+        generated=generated,
         retained=sum(r["retained"] for r in flat),
         discarded=sum(r["discarded"] for r in flat),
+        lookahead_rates=dict(
+            denominator_generated_candidates=generated,
+            reuse_fraction=sum(r["retained"] for r in flat) / generated if generated else None,
+            discard_fraction=sum(r["discarded"] for r in flat) / generated if generated else None,
+            parent_request_opportunities=len(flat),
+            scope="measured Target parent request cycles, including their later settlement; "
+            "zero generated means fractions not applicable, distinct from GPU launch window"),
         ready_to_admission_ms=stats([r["ready_to_admission_ms"] for r in flat]),
         feedback_to_ready_ms=stats(
             [r["feedback_to_ready_ms"] for r in flat if r["feedback_to_ready_ms"] is not None]
@@ -438,6 +447,14 @@ def analyze(runtime, backend, light):
             ping["errors"].extend(ping["pipeline"]["errors"])
     return dict(
         mode=light["mode"],
+        **({"k3_configuration": runtime["point"]["k3_configuration"]}
+           if "k3_configuration" in runtime["point"] else {}),
+        request_verification_opportunities=sum(s["B"] for s in steps),
+        tokens_per_request_opportunity=light["committed_window_tokens"]
+        / sum(s["B"] for s in steps),
+        window_ms_per_active_opportunities=(end - start) / 1e6 * runtime["point"]["batch"]
+        / sum(s["B"] for s in steps),
+        measurement_start_ns=start, measurement_end_ns=end,
         execution_geometry=backend.get("prepost", {}).get("pingpong", {}).get("geometry"),
         actual_target_batch=dict(Counter(s["B"] for s in steps)),
         warmup_coverage={k: light.get("scan_warmup_boundary", {}).get(k) for k in (

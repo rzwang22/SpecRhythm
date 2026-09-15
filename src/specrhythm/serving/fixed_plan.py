@@ -80,8 +80,8 @@ def settings(
 
 
 def capacity_metadata(mode, resident_count=None, *, active_limit=64, resident_requirement=100,
-                      target_sequence_limit=128):
-    from specrhythm.serving.k3 import geometry
+                      target_sequence_limit=128, k3_configuration="k3-b16-v1"):
+    from specrhythm.serving.k3 import configuration_fields, geometry
     from specrhythm.serving.k3_capacity import reservation
 
     require(mode in EXPLICIT_MODES, "unknown fixed diagnostic mode", actual=mode)
@@ -162,7 +162,10 @@ def capacity_metadata(mode, resident_count=None, *, active_limit=64, resident_re
                 "pingpong_protocol": "specrhythm.uniform-k3.v1",
                 "candidate_length": 3,
                 "serial_extension_steps": 2,
-                "execution_geometry": geometry(mode),
+                "execution_geometry": geometry(mode, k3_configuration),
+                **configuration_fields(k3_configuration),
+                **({"warmup_rotation": geometry(mode, k3_configuration)["warmup_unit"]}
+                   if k3_configuration != "k3-b16-v1" else {}),
                 "draft_speculative_capacity_tokens": reservation(mode, "draft")[
                     "reserved_speculative_positions"
                 ],

@@ -64,7 +64,7 @@ def coverage(runtime, backend):
     )
 
 
-def run(source, directory):
+def run(source, directory, configuration="k3-b16-v1"):
     return joint_run(
         source,
         directory,
@@ -72,7 +72,7 @@ def run(source, directory):
         protocol=PROTOCOL,
         coverage_check=coverage,
         require_mixed=False,
-        native_check=native_geometry,
+        native_check=native_geometry, configuration=configuration,
     )
 
 
@@ -80,9 +80,12 @@ def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--source", type=Path, required=True)
     p.add_argument("--output", type=Path, required=True)
+    from specrhythm.serving.k3 import B16, CONFIGURATIONS
+
+    p.add_argument("--k3-configuration", choices=CONFIGURATIONS, default=B16)
     args = p.parse_args(argv)
     try:
-        print(json.dumps(run(args.source, args.output)))
+        print(json.dumps(run(args.source, args.output, args.k3_configuration)))
     except Exception as error:
         traceback.print_exc()
         code = getattr(error, "details", {}).get("returncode", 1)

@@ -24,26 +24,70 @@ def accounting_complete(value):
 SERIAL_MODES = ("serial-k3", "serial-eager-k3")
 EAGER_MODES = ("serial-eager-k3", "pingpong-eager-k3")
 GEOMETRY_VERSION = "specrhythm.k3-four-mode.v1"
+B16 = "k3-b16-v1"
+B64 = "k3-b64-v1"
+CONFIGURATIONS = (B16, B64)
 
 
-def geometry(mode):
+def configuration_of(record):
+    """Absent declarations retain B16 only. Explicit invalid values never fall back."""
+    from specrhythm.serving.common import require
+
+    value = record.get("k3_configuration", B16)
+    require(type(value) is str and value in CONFIGURATIONS, "invalid K3 configuration")
+    return value
+
+
+def configuration_fields(configuration):
+    configuration_of({"k3_configuration": configuration})
+    return {"k3_configuration": configuration} if configuration != B16 else {}
+
+
+def validate_point(point, manifest):
+    """Fail before engine creation if any declaration along the launch chain differs."""
+    from specrhythm.serving.common import require
+
+    config = configuration_of(manifest)
+    require(configuration_of(point) == config, "K3 point/manifest configuration mismatch")
+    mode = point["mode"]
+    if mode not in MODES:
+        return
+    g = geometry(mode, config)
+    meta = manifest["fixed_diagnostic"]["capacity"][mode]
+    require(point["runtime_mode"] == mode
+            and type(point["batch"]) is int and point["batch"] == g["active_limit"]
+            and type(manifest["active_limit"]) is int
+            and manifest["active_limit"] == g["active_limit"]
+            and configuration_of(meta) == config
+            and matches_geometry(meta.get("execution_geometry"), mode, config)
+            and type(meta["active_request_limit"]) is int
+            and meta["active_request_limit"] == g["active_limit"]
+            and type(meta["max_requests_per_target_forward"]) is int
+            and meta["max_requests_per_target_forward"] == g["target_request_ceiling"],
+            "K3 launch point/manifest/capacity geometry mismatch")
+
+
+def geometry(mode, configuration=B16):
     from specrhythm.serving.common import require
 
     require(mode in MODES, "unknown K3 execution geometry", mode=mode)
+    configuration_of({"k3_configuration": configuration})
+    active = 64 if configuration == B64 else 16
     serial = mode in SERIAL_MODES
-    return dict(schema_version=GEOMETRY_VERSION, active_limit=16,
-                home_capacities={"A": 16} if serial else {"A": 8, "B": 8},
-                target_request_ceiling=16 if serial else 8,
-                draft_physical_batch_ceiling=16, eager=mode in EAGER_MODES,
+    return dict(schema_version=GEOMETRY_VERSION, active_limit=active,
+                **configuration_fields(configuration),
+                home_capacities={"A": active} if serial else {"A": active // 2, "B": active // 2},
+                target_request_ceiling=active if serial else active // 2,
+                draft_physical_batch_ceiling=active, eager=mode in EAGER_MODES,
                 serial_idle_gate=serial,
-                warmup_unit="16 completed request verification opportunities")
+                warmup_unit=f"{active} completed request verification opportunities")
 
 
-def matches_geometry(value, mode):
+def matches_geometry(value, mode, configuration=B16):
     """Typed structural equality: booleans/floats cannot stand in for capacities."""
     def same(a, b):
         return type(a) is type(b) and (
             set(a) == set(b) and all(same(a[k], b[k]) for k in b)
             if isinstance(b, dict) else a == b)
 
-    return same(value, geometry(mode))
+    return same(value, geometry(mode, configuration))

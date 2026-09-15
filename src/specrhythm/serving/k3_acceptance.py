@@ -4,21 +4,21 @@ import math
 
 from specrhythm.serving.common import require
 from specrhythm.serving.fixed_results import device_batches, stats
-from specrhythm.serving.k3 import geometry, matches_geometry
+from specrhythm.serving.k3 import B16, B64, configuration_of, geometry, matches_geometry
 
 
-def full_batch_receipt(proof, mode):
+def full_batch_receipt(proof, mode, configuration=B16):
     """Compact comparison check; raw correctness records remain the source of truth."""
     if not isinstance(proof, dict) or proof.get("mode") != mode:
         return False
-    if not matches_geometry(proof.get("execution_geometry"), mode):
+    if not matches_geometry(proof.get("execution_geometry"), mode, configuration):
         return False
     if type(proof.get("full_batch_steps")) is not int or proof["full_batch_steps"] < 1:
         return False
     first = proof.get("first_full_batch")
     if not isinstance(first, dict) or not isinstance(first.get("ranks"), dict):
         return False
-    n = geometry(mode)["target_request_ceiling"]
+    n = geometry(mode, configuration)["target_request_ceiling"]
     ids = first.get("request_ids")
     if (not isinstance(ids, list) or not all(isinstance(r, str) for r in ids)
             or len(ids) != n or len(set(ids)) != n):
@@ -36,20 +36,35 @@ def full_batch_receipt(proof, mode):
             ranks["1"]["internal_request_ids"])
 
 
-def native_geometry(runtime, mode, *, full_fixture=False):
-    g = geometry(mode)
+def native_geometry(runtime, mode, *, full_fixture=False, configuration=None):
+    declared = configuration_of(runtime["point"])
+    require(configuration is None or configuration == declared,
+            "K3 native configuration mismatch")
+    configuration = declared
+    g = geometry(mode, configuration)
     point, capacity = runtime["point"], runtime["capacity"]
     require(point["mode"] == point["runtime_mode"] == mode, "K3 native report mode mismatch")
     require(type(point["batch"]) is int and point["batch"] == g["active_limit"],
             "K3 native active batch mismatch")
-    require(matches_geometry(capacity["execution_geometry"], mode), "K3 native geometry mismatch")
+    require(configuration_of(capacity) == configuration
+            and matches_geometry(capacity["execution_geometry"], mode, configuration),
+            "K3 native geometry mismatch")
     ceiling = g["target_request_ceiling"]
+    if configuration == B64:
+        require(type(capacity["active_request_limit"]) is int
+                and capacity["active_request_limit"] == g["active_limit"]
+                and type(capacity["per_cohort_capacity"]) is int
+                and capacity["per_cohort_capacity"] == max(g["home_capacities"].values())
+                and type(capacity["cohort_count"]) is int
+                and capacity["cohort_count"] == len(g["home_capacities"]),
+                "B64 runtime capacity/home geometry mismatch")
     require(type(capacity["max_requests_per_target_forward"]) is int
             and capacity["max_requests_per_target_forward"] == ceiling,
             "K3 native capacity/geometry ceiling mismatch")
     steps = runtime["target_steps"]
     by_step = device_batches(runtime["target_devices"], steps)
     full, partial = [], []
+    seen_homes = set()
     for i, step in enumerate(steps):
         b, ids, rows = step["B"], step["request_ids"], step["rows"]
         require(type(b) is int and 0 <= b <= ceiling, "K3 actual Target batch exceeds geometry")
@@ -57,6 +72,20 @@ def native_geometry(runtime, mode, *, full_fixture=False):
                 and set(ids) == {r["request_id"] for r in rows}
                 and len({r["internal_request_id"] for r in rows}) == b,
                 "K3 scheduled Target request cardinality mismatch")
+        if configuration == B64:
+            pop = step["population"]
+            require(type(pop["active_requests"]) is int and 0 <= pop["active_requests"] <= 64
+                    and type(pop["held_slots"]) is int and 0 <= pop["held_slots"] <= 64
+                    and all(type(pop["cohort_held"][h]) is int
+                            and 0 <= pop["cohort_held"][h] <= g["home_capacities"].get(h, 0)
+                            for h in ("A", "B")), "B64 active/home occupancy exceeds geometry")
+            homes = step["home_cohorts"]
+            claims = step["ping_admission"]["claims"]
+            require(set(homes) == set(ids) and len(claims) == b
+                    and {c["request_id"]: c["home_cohort"] for c in claims} == homes
+                    and set(homes.values()) <= set(g["home_capacities"]),
+                    "B64 native request/home/claim association mismatch")
+            seen_homes.update(homes.values())
         if not b:
             continue
         for f in by_step[i].values():
@@ -75,6 +104,8 @@ def native_geometry(runtime, mode, *, full_fixture=False):
     require(not full_fixture or bool(full),
             "K3 fixed full-batch fixture lacks one native Target forward at configured ceiling",
             mode=mode, expected_distinct_requests=ceiling)
+    require(not full_fixture or configuration != B64
+            or seen_homes == set(g["home_capacities"]), "B64 fixture missing home coverage")
     first = full[0] if full else None
     return dict(mode=mode, execution_geometry=g, full_batch_steps=len(full),
                 first_full_batch=None if first is None else dict(
@@ -89,9 +120,11 @@ def native_geometry(runtime, mode, *, full_fixture=False):
                 "request lifecycle retained without reconstruction")
 
 
-def measurement(report, runtime, mode):
+def measurement(report, runtime, mode, configuration=B16):
     """The foreground runner's gate. No hardware, timing or historical report mutation."""
-    g = geometry(mode)
+    g = geometry(mode, configuration)
+    require(configuration_of(report["point"]) == configuration,
+            "K3 measurement requested configuration mismatch")
     require(report["mode"] == report["point"]["mode"] == mode,
             "K3 measurement report mode mismatch")
     require(report["point"] == runtime["point"], "K3 measurement/runtime point mismatch")
@@ -101,7 +134,7 @@ def measurement(report, runtime, mode):
             "K3 measurement active batch mismatch")
     require(report["probe"] is False and report["point"]["probe"] is False
             and runtime["probe"] is False, "K3 measurement must be an explicit non-probe")
-    require(matches_geometry(report["execution_geometry"], mode),
+    require(matches_geometry(report["execution_geometry"], mode, configuration),
             "K3 measurement geometry mismatch")
     require(type(report["sub_batch"]) is int
             and report["sub_batch"] == g["target_request_ceiling"],
@@ -113,7 +146,7 @@ def measurement(report, runtime, mode):
             "K3 original run qualification failed")
     require(report["stop_reason"] == "time_budget" and report["measured_window_ms"] >= 30000,
             "K3 measurement did not complete the fixed window")
-    proof = native_geometry(runtime, mode)
+    proof = native_geometry(runtime, mode, configuration=configuration)
     values = [s["B"] for s in runtime["target_steps"] if s["window"] and s["B"]]
     require(type(report["target_steps"]) is int and report["target_steps"] == len(values),
             "K3 reported measured step count mismatch")
