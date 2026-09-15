@@ -31,6 +31,8 @@ claims.
 
 ### PR #5 — A100 状态读取、本地运行目录与单包交付（2026-09-15）
 
+- 实现SHA `ae5be9a6b318b31931808fd1523064b33e2f0975`；随后固定入口仅绑定此SHA。
+
 - 从当前HEAD `3b8a8db96563e8cd23951448503b308ba11e3089` 继续；保留 c663cb3 的四模式geometry与原生B16验收。只改基础设施，不改K3/no-bonus/READY/调度/KV或setup900/drain60。
 - 只读核验 bitahub-retry 总包18个逻辑对象。监督器运行中读取drain-state ENOENT后提前终止，后续Broken pipe和不完整报告为次生事件；三个物理rank容量通过，不代表完整cleanup通过。原历史标签保留，DPC可见性仍是假设，overlay不等于NVMe。
 - 新入口默认 `/tmp/specrhythm-runs/<tag>` 保存所有本轮可变文件；完成后本地封包、哈希，再向DPC唯一临时目标复制/复核/发布。默认保留本地目录，失败包包含损坏JSON原始字节。原运行码、导出和交付错误分列，外层唯一UPLOAD ONLY。

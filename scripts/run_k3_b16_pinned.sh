@@ -2,7 +2,7 @@
 # Execute with bash, never source into the interactive terminal.
 if bash <<'SR_K3_CHILD'
 set -Eeuo pipefail
-FINAL_SHA=c663cb30f470ed9bf24465d07af7ea3a6991c73e
+FINAL_SHA=ae5be9a6b318b31931808fd1523064b33e2f0975
 REPO="${SR_K3_REPO:-/root/autodl-tmp/src/SpecRhythm}"
 git -C "$REPO" fetch origin codex/rolling-eager-v0.1
 git -C "$REPO" cat-file -e "${FINAL_SHA}^{commit}"
