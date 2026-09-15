@@ -411,3 +411,6 @@ Ruff, compileall on3.9/3.11/3.12,217 source-file Python3.9 AST checks and21 trac
 Bash scripts passed. Full suite:2645 passed,3 skipped in366.87s (opt-in CUDA and two macOS-inapplicable
 Linux process cases). No assertion or timeout was relaxed. Pinned execution is
 recorded in the runbook/project status. No AutoDL or GPU was invoked; new GPU qualification and performance PENDING.
+
+Fixed execution for this entry repair: `c663cb30f470ed9bf24465d07af7ea3a6991c73e`. The later entry-only
+commit points to this source and does not alter tested execution code.

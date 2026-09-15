@@ -1,8 +1,8 @@
 # K3 four-mode comparison: one foreground entry, one upload
 
-Execution SHA: `fca2118b89d21b11f18f5de43d69657e820087ab`.
+Execution SHA: `c663cb30f470ed9bf24465d07af7ea3a6991c73e`.
 Configuration commit: `ed6ff9703765e2c36b9ec4b3d0cb91edc1125d8f`.
-The following entry runs both changes. Draft PR5 remains Draft; no merge or other PR
+The following entry includes the configuration, CPU optimization and acceptance repair. Draft PR5 remains Draft; no merge or other PR
 changes. Only the operator runs GPUs. New capacity, correctness, cleanup, native
 pipeline overlap and performance are **PENDING**.
 
@@ -60,7 +60,7 @@ open on failure. A fresh detached worktree and new result root are created.
 if bash <<'SR_K3_FRONTEND'
 set -Eeuo pipefail
 REPO=/root/autodl-tmp/src/SpecRhythm
-EXECUTION_SHA=fca2118b89d21b11f18f5de43d69657e820087ab
+EXECUTION_SHA=c663cb30f470ed9bf24465d07af7ea3a6991c73e
 git -C "$REPO" fetch origin codex/rolling-eager-v0.1
 git -C "$REPO" cat-file -e "${EXECUTION_SHA}^{commit}"
 RUN_TREE="${REPO}-k3-four-${EXECUTION_SHA:0:12}-$(date -u +%Y%m%dT%H%M%SZ)-$$"
