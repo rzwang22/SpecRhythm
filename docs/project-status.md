@@ -1,6 +1,6 @@
 # SpecRhythm project status
 
-Last updated: 2026-09-15
+Last updated: 2026-09-16
 
 Maintenance rule: every code-changing PR updates this file with its scope, status, evidence,
 known limitations, and next gate before that PR is considered complete.
@@ -1625,10 +1625,23 @@ Local scope: geometry propagation, actual-rank capacity and query checks,128-opp
 warmup,64-request complete-output fixture, single-native-forward geometry qualification,
 normalized opportunity metrics/four ratios, and explicit bounded B64 offline packaging.
 [B64 runbook](k3-b64-runbook.md) describes the fixed four-point operator flow.
-CPU validation and final pinned SHA are recorded after checks. Server capacity,
+Execution SHA `f6f67aa1e1d7aea2a81665ec628d0ae857c148ee`; the separate delivery commit
+adds `scripts/run_k3_b64_pinned.sh`, fixed to this execution SHA. An isolated archive
+of the committed source passed the eight-role static check and contained the actual
+B64 runner. Server capacity,
 correctness, cleanup, native overlap and performance remain PENDING.
 
 Implementation validation: full pytest2845 passed/3 skipped; Python3.9/3.12 related
 suites369 passed each plus157 final delta tests each; Ruff, three-version compileall,
-Python3.9 AST and22 Bash scripts passed. Fixed-entry SHA and actual remote CI status
-follow in the delivery commit; GPU evidence is still PENDING.
+Python3.9 AST and23 Bash scripts passed. Final entry/runner/local-delivery regressions:
+46 passed; fixed foreground entry tests also passed6 each on Python3.9/3.12.
+
+Implementation push CI35000694509 has a failed Python3.11 legacy PingPong scan
+drain test: `diagnostic owner settlement deadline expired`. Its five-second test
+deadline expired while awaiting an owner receipt for a staged resident. The test,
+fixed_drain and fixed_settle are unchanged by B64; the same commit's PR CI35000697681
+passed that job. This does not identify why the first run exhausted its deadline;
+no retry, assertion relaxation or budget increase was made. Other jobs were still
+running at this documentation snapshot. Final delivery CI is reported separately;
+neither local passes nor the other job's success erase this recorded failure.
+GPU evidence is still PENDING.

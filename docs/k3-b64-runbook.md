@@ -1,8 +1,9 @@
 # A100 K3 B64 four-mode check
 
 This is the explicit `k3-b64-v1` configuration, not legacy fixed64 or prepost3/P1–P4.
-The B16 entry and `k3-b16-v1` default remain unchanged. The pinned entry and complete
-execution SHA are filled after local validation and the implementation commit.
+The B16 entry and `k3-b16-v1` default remain unchanged. Execution SHA: `f6f67aa1e1d7aea2a81665ec628d0ae857c148ee`.
+Repository fixed entry: `scripts/run_k3_b64_pinned.sh`; it pins that implementation
+and creates a fresh detached worktree before executing `scripts/run_k3_b64.sh`.
 No GPU execution has been performed by the local agent.
 
 | Mode | Active | Immutable homes | Target requests/forward | Draft physical ceiling |
@@ -84,3 +85,38 @@ For the new comparison specifically, inspect `pipeline.cross_home_overlap_steps`
 metrics. Same-home parallel work must not be labelled A/B pipeline coverage.
 `K3_mechanism.lookahead_rates` records the generated-candidate denominator and measured
 parent-request scope; fractions are null when no lookahead was generated.
+
+## Foreground command pinned to the implementation
+
+This equivalent standalone command reads the actual B64 runner from the immutable
+implementation commit. The fixed-entry script in the delivery commit performs the
+same worktree/runner selection. All strict mode/exit behavior stays in a child Bash;
+the parent `if` keeps the interactive terminal open.
+
+```bash
+if bash <<'SR_B64_CHILD'
+set -Eeuo pipefail
+REPO="${SR_K3_REPO:-/root/autodl-tmp/src/SpecRhythm}"
+EXEC_SHA=f6f67aa1e1d7aea2a81665ec628d0ae857c148ee
+git -C "$REPO" fetch origin codex/rolling-eager-v0.1
+git -C "$REPO" cat-file -e "${EXEC_SHA}:scripts/run_k3_b64.sh"
+RUN_TREE="${REPO}-k3-b64-${EXEC_SHA:0:12}-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+git -C "$REPO" worktree add --detach "$RUN_TREE" "$EXEC_SHA"
+unset SR_K3_MANAGED_LOCAL SR_K3_LOCAL_DELIVERY SR_PING_DELIVERY
+export SR_EXEC_REPO="$RUN_TREE"
+export SR_PING_RUN_TAG="${SR_PING_RUN_TAG:-a100-k3-b64-$(date -u +%Y%m%dT%H%M%SZ)-$$}"
+bash "$RUN_TREE/scripts/run_k3_b64.sh" "$EXEC_SHA"
+SR_B64_CHILD
+then
+  printf 'B64 flow finished; return only the archive named by UPLOAD ONLY.\n'
+else
+  rc=$?
+  printf 'B64 stopped (rc=%s); later points stopped; terminal remains open.\n' "$rc"
+fi
+```
+
+No extra model installation, mount change, CUDA reinstallation, retries or parameter
+search is included. Optional existing `SR_FIXED_PYTHON`, `SR_FIXED_S1`, `SR_K3_REPO`,
+`SR_K3_LOCAL_BASE` and `SR_PING_RESULTS` overrides retain their previous meaning;
+resolved storage paths, filesystem types and free space are recorded by the local
+supervisor. Preserve the same workload/model/numerical settings on this A100 host.

@@ -580,3 +580,21 @@ The final B64-only warmup metadata label is covered by those157-case checks.
 No timeout/retention assertion was loosened. GPU capacity/correctness/cleanup,
 physical B64/B32 geometry, overlap and throughput remain PENDING. CI is checked
 on the pushed commit; local passes are not represented as remote CI or GPU passes.
+
+Fixed delivery validation: execution `f6f67aa1e1d7aea2a81665ec628d0ae857c148ee`
+was read with `git archive` into an isolated directory. Its production static
+B64 contract passed all eight mode/role cases and its runner passed Bash syntax;
+GPU status stayed NOT_RUN/PENDING. Entry/runner/local-delivery tests passed46;
+the foreground entry tests additionally passed6 each on Python3.9/3.12. All23
+repository Bash scripts passed syntax checks after adding the pinned B64 entry.
+
+The implementation's [first push CI](https://github.com/rzwang22/SpecRhythm/actions/runs/35000694509/job/104488053926)
+failed `test_real_owner_dispatch_initial_work_wait_and_window_drain[pingpong-True]`:
+the original five-second deadline expired in `DiagnosticDualController.execute`
+while waiting for a `diagnostic_settle` response. This is the legacy PingPong
+resident360 scan fixture, not B64 execution. The test, fixed_drain and fixed_settle
+have no diff against6e07617. The same SHA's independent PR job passed. Logs establish
+the owner-response timeout but do not establish the cost that exhausted its budget;
+CPU/IO scheduling is only a hypothesis. No timeout, assertion or implementation was
+changed to turn this result green, and the workflow was not rerun. Other CI jobs were
+still running at this snapshot; final delivery status is reported from GitHub.

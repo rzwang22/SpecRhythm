@@ -8,11 +8,13 @@ from pathlib import Path
 import pytest
 
 
+@pytest.mark.parametrize("batch", [16, 64])
 @pytest.mark.parametrize("failure", ["fetch", "runner", "none"])
-def test_k3_pinned_foreground_child(tmp_path, failure):
-    script = Path("scripts/run_k3_b16_pinned.sh").resolve()
+def test_k3_pinned_foreground_child(tmp_path, failure, batch):
+    script = Path(f"scripts/run_k3_b{batch}_pinned.sh").resolve()
     sha = re.search(r"^FINAL_SHA=([0-9a-f]{40})$", script.read_text(), re.M)[1]
-    assert sha in Path("docs/k3-runbook.md").read_text()
+    runbook = "docs/k3-b64-runbook.md" if batch == 64 else "docs/k3-runbook.md"
+    assert sha in Path(runbook).read_text()
     git = tmp_path / "git"
     git.write_text('''#!/bin/bash
 printf '%s\\n' "$*" >> "$CALLS"
@@ -25,7 +27,7 @@ if [[ "$3" == worktree ]]; then
 if [[ "$FAIL_AT" == runner ]]; then exit 23; fi
 RUNNER
 fi
-''')
+'''.replace('run_k3_b16.sh', f'run_k3_b{batch}.sh'))
     git.chmod(0o755)
     log = tmp_path / "calls"
     result = subprocess.run(
