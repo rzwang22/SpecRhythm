@@ -1,6 +1,6 @@
 # K3 four-mode comparison: one foreground entry, one upload
 
-Execution SHA: `ae5be9a6b318b31931808fd1523064b33e2f0975`.
+Execution SHA: `5b50529f3bd3617f29c60ee9de6bf7143f96449e`.
 Configuration commit: `ed6ff9703765e2c36b9ec4b3d0cb91edc1125d8f`.
 The following entry includes the configuration, CPU optimization and acceptance repair. Draft PR5 remains Draft; no merge or other PR
 changes. Only the operator runs GPUs. New capacity, correctness, cleanup, native
@@ -60,7 +60,7 @@ open on failure. A fresh detached worktree and new result root are created.
 if bash <<'SR_K3_FRONTEND'
 set -Eeuo pipefail
 REPO=/root/autodl-tmp/src/SpecRhythm
-EXECUTION_SHA=ae5be9a6b318b31931808fd1523064b33e2f0975
+EXECUTION_SHA=5b50529f3bd3617f29c60ee9de6bf7143f96449e
 git -C "$REPO" fetch origin codex/rolling-eager-v0.1
 git -C "$REPO" cat-file -e "${EXECUTION_SHA}^{commit}"
 RUN_TREE="${REPO}-k3-four-${EXECUTION_SHA:0:12}-$(date -u +%Y%m%dT%H%M%SZ)-$$"
@@ -176,3 +176,15 @@ timeout. Error/receipt details and partial bytes remain in the same archive. A f
 protocol cannot be repaired into PASS by a later response. The new fixed entry is pinned
 in a separate delivery commit to the tested implementation; no new GPU run has occurred.
 See the dated sections in [validation](k3-validation.md) and [design](k3-design.md).
+
+Current deadline-repair execution: `5b50529f3bd3617f29c60ee9de6bf7143f96449e`. The pinned launcher resolves exactly
+this commit in a new worktree; it contains both runners, the deadline contract, real
+service/RPC/publication code, joint correctness, comparison and local single-package
+delivery modules. The earlier ae5be9a source is a historical storage-repair baseline,
+not the current test execution. Local validation:2756 passed/3 skipped;3.9/3.12 related
+432 each and final owner/deadline regression96 each on3.9/3.11/3.12; Ruff, compileall,
+3.9 syntax,21 Bash scripts and diff PASS. GPU acceptance still PENDING.
+
+Pinned launcher, actual foreground runner and local archive/delivery regressions:24 PASS.
+The first GitHub push encountered a TLS connection error; the subsequent ordinary push
+succeeded. New GitHub CI is queried separately from local tests and may still be pending.
