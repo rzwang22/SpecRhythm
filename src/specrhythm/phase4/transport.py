@@ -64,11 +64,16 @@ class CheckpointJsonl:
         path.parent.mkdir(parents=True, exist_ok=True)
 
     def append(self, value: Mapping[str, Any]) -> None:
-        payload = dict(value)
-        if "record_sha256" in payload:
-            raise ValueError("record_sha256 is reserved for checkpoint framing")
-        payload["record_sha256"] = payload_sha256(payload)
-        line = canonical_json_bytes(payload) + b"\n"
+        from specrhythm.phase4.admission_record import PreparedAdmission
+
+        if type(value) is PreparedAdmission:
+            line = value.line
+        else:
+            payload = dict(value)
+            if "record_sha256" in payload:
+                raise ValueError("record_sha256 is reserved for checkpoint framing")
+            payload["record_sha256"] = payload_sha256(payload)
+            line = canonical_json_bytes(payload) + b"\n"
         with self.path.open("ab") as handle:
             handle.write(line)
             handle.flush()

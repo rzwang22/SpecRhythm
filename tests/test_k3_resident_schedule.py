@@ -101,6 +101,10 @@ def test_old_and_new_real_schedule_have_identical_admission_semantics(
         candidate.kv_cache_manager = s.kv_cache_manager
         candidate._resident_ready = s._resident_ready
         if not optimized:
+            from specrhythm.phase4.resident_scheduler import ResidentSetupScheduler
+
+            candidate._resident_record_factory = lambda shared, candidate=candidate: (
+                ResidentSetupScheduler._resident_record_factory(candidate, shared))
             candidate._binding_input = lambda: lambda raw: tuple(int(t) for t in raw)
         candidate._bind_requests()
         prepare(candidate, packet, path)

@@ -183,13 +183,18 @@ class DiagnosticLogs:
                     self.streams[key]["written"] += 1
                     self.fsyncs += 1
                     return
-                payload = dict(value)
-                require(
-                    "record_sha256" not in payload,
-                    "record_sha256 is reserved for checkpoint framing",
-                )
-                payload["record_sha256"] = payload_sha256(payload)
-                line = canonical_json_bytes(payload) + b"\n"
+                from specrhythm.phase4.admission_record import PreparedAdmission
+
+                if type(value) is PreparedAdmission:
+                    line = value.line
+                else:
+                    payload = dict(value)
+                    require(
+                        "record_sha256" not in payload,
+                        "record_sha256 is reserved for checkpoint framing",
+                    )
+                    payload["record_sha256"] = payload_sha256(payload)
+                    line = canonical_json_bytes(payload) + b"\n"
                 if self.pending and (
                     len(self.pending) >= self.max_records
                     or self.pending_bytes + len(line) > self.max_bytes

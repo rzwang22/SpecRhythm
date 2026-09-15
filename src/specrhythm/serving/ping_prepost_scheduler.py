@@ -41,6 +41,19 @@ class PingPrePostScheduler(FixedBatch, S2SerialScheduler):
                 work["decision_rows"] = len(self._resident_decisions)
                 if name == "admission_records":
                     work["admission_records"] = len(self._resident_decisions)
+                    work["checkpoint_payload_encodings"] = len(self._resident_decisions)
+                    work["shared_field_snapshots"] = 1
+
+    def _resident_record_factory(self, shared):
+        if not os.environ.get("SR_S2_MODE", "").endswith("-k3"):
+            return super()._resident_record_factory(shared)
+        from functools import partial
+        from types import MappingProxyType
+
+        from specrhythm.phase4.admission_record import PreparedAdmission
+
+        # Owned scalar snapshot for this call only. No request/claim/KV cache.
+        return partial(PreparedAdmission, MappingProxyType(shared))
 
     def physical_rows(self):
         if os.environ.get("SR_S2_MODE", "").endswith("-k3"):

@@ -2,7 +2,7 @@
 
 MODES = ("serial-k3", "serial-eager-k3", "pingpong-k3", "pingpong-eager-k3")
 PROTOCOL = "specrhythm.uniform-k3.v1"
-RESIDENT_POLICY = "k3-normalize-once-v1"
+RESIDENT_POLICY = "k3-normalize-once-frame-once-v2"
 PARAMETERS = dict(
     candidate_length=3, eager_candidate_limit=3, serial_extension_steps=2
 )
@@ -37,3 +37,13 @@ def geometry(mode):
                 draft_physical_batch_ceiling=16, eager=mode in EAGER_MODES,
                 serial_idle_gate=serial,
                 warmup_unit="16 completed request verification opportunities")
+
+
+def matches_geometry(value, mode):
+    """Typed structural equality: booleans/floats cannot stand in for capacities."""
+    def same(a, b):
+        return type(a) is type(b) and (
+            set(a) == set(b) and all(same(a[k], b[k]) for k in b)
+            if isinstance(b, dict) else a == b)
+
+    return same(value, geometry(mode))

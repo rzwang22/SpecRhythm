@@ -118,6 +118,17 @@ class ResidentSetupScheduler(Scheduler):
                     cycle_id=self._resident_cycle_id,
                 )
         with self._resident_span("admission_records"):
+            shared = {
+                "schema_version": ADMISSION_EVENT_SCHEMA,
+                "cycle_id": self._resident_cycle_id,
+                "consumer": self._resident_consumer,
+                "global_decode_ready": self._resident_ready is not None,
+                "measurement_start_ns": self._resident_ready.get("measurement_start_ns")
+                if self._resident_ready is not None else None,
+                "explicit_request_predicate": True,
+                "current_step_arithmetic": False,
+            }
+            record = self._resident_record_factory(shared)
             scheduled = output.num_scheduled_tokens
             for internal_id, (admissible, reason, timestamp_ns, stable_id) in sorted(
                 self._resident_decisions.items()
@@ -125,21 +136,12 @@ class ResidentSetupScheduler(Scheduler):
                 request = self.requests.get(internal_id)
                 scheduled_count = int(scheduled.get(internal_id, 0))
                 self._resident_events.append(
-                    {
-                        "schema_version": ADMISSION_EVENT_SCHEMA,
-                        "cycle_id": self._resident_cycle_id,
+                    record({
                         "timestamp_ns": timestamp_ns,
-                        "consumer": self._resident_consumer,
                         "request_id": stable_id,
                         "internal_request_id": internal_id,
                         "num_output_tokens": (
                             int(request.num_output_tokens) if request is not None else None
-                        ),
-                        "global_decode_ready": self._resident_ready is not None,
-                        "measurement_start_ns": (
-                            self._resident_ready.get("measurement_start_ns")
-                            if self._resident_ready is not None
-                            else None
                         ),
                         "s1_initial_target_tail": initial_target_tail(
                             stable_id, int(request.num_output_tokens) if request is not None else 0
@@ -157,12 +159,13 @@ class ResidentSetupScheduler(Scheduler):
                         "reason": reason,
                         "scheduled": scheduled_count > 0,
                         "scheduled_token_count": scheduled_count,
-                        "explicit_request_predicate": True,
-                        "current_step_arithmetic": False,
-                    }
+                    })
                 )
         self._resident_cycle_id += 1
         return output
+
+    def _resident_record_factory(self, shared):
+        return lambda dynamic: {**shared, **dynamic}
 
     def _request_admissible_for_schedule(self, request: Any) -> bool:
         internal_id = str(request.request_id)

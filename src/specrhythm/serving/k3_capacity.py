@@ -6,7 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from specrhythm.serving.common import require
-from specrhythm.serving.k3 import MODES, PARAMETERS, geometry
+from specrhythm.serving.k3 import MODES, PARAMETERS, geometry, matches_geometry
 from specrhythm.serving.s1_workload import write_once
 from specrhythm.serving.s2_plan import capacity_for
 
@@ -71,7 +71,7 @@ def check(definitions, rank, *, mode, active_limit, metadata, legacy=False):
     plan = geometry(mode)
     declared_geometry = metadata.get("execution_geometry")
     if not legacy or declared_geometry is not None:
-        require(declared_geometry == plan and active_limit == 16
+        require(matches_geometry(declared_geometry, mode) and active_limit == 16
                 and metadata["max_requests_per_target_forward"] == plan["target_request_ceiling"],
                 "K3 physical batch declaration differs")
         batch = plan["target_request_ceiling"] if role == "target" else 16

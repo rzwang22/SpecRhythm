@@ -121,7 +121,7 @@ def comparison(directory, *, modes=MODES):
                 **{
                     k: r.get(k)
                     for k in (
-                        "execution_geometry", "actual_target_batch",
+                        "execution_geometry", "actual_target_batch", "warmup_coverage",
                         "throughput_tok_s",
                         "window_ms",
                         "committed_tokens",
@@ -149,10 +149,12 @@ def comparison(directory, *, modes=MODES):
         for k in ("source_commit", "options", "workload_sha256")
     )
     if "serial-eager-k3" in modes:
-        from specrhythm.serving.k3 import geometry
+        from specrhythm.serving.k3 import matches_geometry
 
-        matched = matched and all(r.get("execution_geometry") == geometry(r["mode"])
+        matched = matched and all(matches_geometry(r.get("execution_geometry"), r["mode"])
                                   for r in reports)
+        matched = matched and bool(reports) and bool(reports[0].get("common_execution")) and all(
+            r.get("common_execution") == reports[0]["common_execution"] for r in reports)
     valid = matched and all(
         qualify(r)["diagnostic_integrity"] == "COMPLETE"
         and all(
@@ -172,6 +174,9 @@ def comparison(directory, *, modes=MODES):
         schema_version="specrhythm.ping-prepost-delivery.v1",
         points=points,
         matched_configuration=matched,
+        common_execution=reports[0].get("common_execution") if reports else None,
+        configuration_comparison="same source/options/workload/models/numerics/resources; "
+        "explicit K3 mode geometry may differ; no cross-run GPU UUID comparison",
         missing_points=missing,
         joint_correctness="joint/result.json" if joint.exists() else "joint/failure.json",
         valid=valid,

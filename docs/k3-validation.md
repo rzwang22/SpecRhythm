@@ -284,3 +284,78 @@ strict resident diagnostic gate, with the original three-mode budgets.
 The implementation's push/PR CI source contracts and Python3.11 contracts have
 reported SUCCESS; Python3.9/3.12 full jobs are still running at this documentation
 snapshot. Delivery CI is reported separately after its normal push, not assumed PASS.
+
+## Four-mode comparison and framing, 2026-09-15
+
+Read-only source: `pingpong-k3-delivery-20260915T023730Z-1970.tar.gz`, execution
+`d007dce448bd2a7d510172222ae166d7bb6f299e`; all145 logical files/106 unique objects
+passed byte/SHA256 verification. [Independent derivative](k3-four-mode-baseline-d007.json)
+retains exact metrics and interval definitions. All three old output comparisons have
+16 requests/512 matching tokens. Old execution/measurement/cleanup PASS remains intact.
+Old Serial was B8, not the new Serial B16 control. Its53.9663 tok/s, ordinary
+PingPong75.4392 and eager81.4353 are historical single-window observations only.
+
+Normal PingPong cross-request native overlap occurred on77/124 rounds with recovery
+coverage3.7555–3.8835%; eager on1/134 with0.14413–0.14701%. The latter's own-parent
+eager overlap7748.638–7793.639ms is a separate mechanism. These observations disprove
+a blanket claim that B always waits for the entire A proposal. They do not show that
+recovery is adequately hidden. No historical window or throughput is recomputed by
+subtracting audit/CPU time.
+
+Same-lane measured parent spans give normal claim→Target67.8754ms, scheduler48.1725ms,
+binding8.9343ms, admission16.8085ms and actual stock call0.37465ms. The wrapper label
+is not vLLM scheduler-body time. Within the admission parent, interval unions for
+JSON average5.4446ms and fsync2.0483ms;9.3156ms remains unaccounted within that stage.
+The first two360-row rounds each contain720 JSON encodings and360 appends; fsync
+counts are2 and1. Across124 rounds the record total is44626 as requests finish.
+JSON/checkpoint spans are nested and cannot be added to their parent. The remaining
+work is not assigned wholesale to Python/GIL, locking or storage.
+
+New tests exercise four production service factories, queued owner claims and actual
+resident Target scheduler output, including one16-request Serial output (root+K3=64
+query positions), B16 Draft extensions, and the existing event-controlled A/B and
+Serial idle constraints. Pinned stock Target bookkeeping with an imperfect Draft
+produces identical complete16-request/32-token outputs in all four modes and both
+feedback orders. Other regressions retain rejection/recovery, EOS/tails, stale/duplicate
+feedback, claims, resource retirement and candidate/commit conservation.
+
+Actual schedule→installed logger tests require360 logical rows but360 canonical payload
+encodings, both full KV audits, and byte-identical native/buffered log output. Replacing
+the optimized production factory with the legacy path fails that structural check.
+The old/new schedule comparison checks identity, selected candidates/positions,
+decisions and all admission fields. Producer→serialize→qualify→single-package→reread
+checks now include all four modes; missing fields still fail or stay explicitly missing.
+Capacity v2 checks typed geometry plus required/reserved KV positions. v1 is an explicit
+historical replay path, not an implicit fallback for new reports. The comparator allows
+Serial Target16 versus PingPong8 and requires shared workload/options/models/numerics/
+resources/configuration; runtime UUIDs are checked only within each run.
+
+Development failures retained: initial tests assumed three modes/B8 and a two-home
+Serial-eager fixture; these inputs were updated to the actual four-mode production
+routing. The first full run had40 failures (2558 passes/3 skips) from reading optional
+legacy manifest capacity outside qualification error handling in new display code.
+It now reads the real runtime capacity inside the existing boundary;103 relevant
+regressions then passed. The first Python3.12 related run had297 passes and one existing
+supervisor test failure: the child reached its10s execution timeout before any logging
+receipt or measurement snapshot, was SIGTERM-reaped, and owned cleanup completed.
+No child traceback identified the blocking point. An isolated diagnostic run passed;
+its initial cause remains unconfirmed. No assertion or timeout was relaxed.
+
+New GPU capacity, output correctness, cleanup, cross-cohort native overlap and performance
+remain PENDING until the operator returns the new four-point package. CPU ordering and
+synthetic native intervals are not GPU overlap evidence.
+
+Final local gate for the implementation: **2612 passed, 3 skipped** with the pinned
+vLLM source audit enabled (349.13s). Affected Python3.9 and Python3.12 suites each:
+**351 passed**. Ruff, compileall(src), Python3.9 grammar for216 source files, all21
+tracked Bash scripts and git diff --check pass. The three skips are retained platform/
+source-specific tests, not disabled assertions. Initial failures above remain part
+of the validation record; CI is reported separately after push.
+
+The [CPU framing microbenchmark](k3-admission-cpu-benchmark.json) uses360 logical rows
+from the real CPU resident fixture,12 alternating-order repetitions, existing observed
+JSON wrappers and bounded logger append/finish. Every output byte matches. With actual
+fsync replaced by a no-op in that isolated benchmark process, median times are5.4473ms
+legacy and4.9817ms prepared. This is supplemental local CPU evidence, not server timing,
+GPU overlap, durable-write performance or a projected throughput gain. Structural
+regressions assert operation/record conservation rather than millisecond thresholds.

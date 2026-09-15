@@ -17,8 +17,7 @@ from specrhythm.serving.ping_prepost_evidence import mechanism
 @pytest.mark.parametrize("mode", MODES)
 def test_k3_real_records_report_export_and_missing_evidence(mode, monkeypatch, tmp_path):
     monkeypatch.setattr(collector, "machine", machine)
-    runtime, backend = collector.collected(eager=mode == "pingpong-eager-k3")
-    runtime["point"]["mode"] = mode  # Collector label only; actual machine above generated K3.
+    runtime, backend = collector.collected(eager="eager" in mode, mode=mode)
     result = mechanism(runtime, backend)
     assert result["status"] == "COMPLETE", result["errors"]
     assert all(r["P"] == 3 and r["next_P"] == 3 for c in result["cycles"] for r in c["requests"])
@@ -30,7 +29,7 @@ def test_k3_real_records_report_export_and_missing_evidence(mode, monkeypatch, t
     assert any(
         r["role"] == "rejection_recovery" and r["parent_proposal_id"] for r in p["timeline"]
     )
-    if mode != "pingpong-eager-k3":
+    if "eager" not in mode:
         assert p["per_role_forwards"]["eager_lookahead"]["forward_count"] == 0
     for key in ("ordinary_draft", "rejection_recovery"):
         assert p["cross_home_native_overlap"][key] == {"lower_ms": 0.0, "upper_ms": 0.0}

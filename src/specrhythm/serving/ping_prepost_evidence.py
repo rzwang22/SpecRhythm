@@ -53,6 +53,11 @@ def mechanism(runtime, backend):
         {**parameters, "target_request_ceiling": 8},
     ):
         errors.append("protocol parameters/binding missing")
+    if uniform and physical.get("parameters") == K3_PARAMETERS:
+        from specrhythm.serving.k3 import matches_geometry
+
+        if not matches_geometry(ping.get("geometry"), runtime["point"]["mode"]):
+            errors.append("K3 actual owner execution geometry missing/different")
     if uniform and not accounting_complete(protocol.get("candidate_accounting")):
         errors.append("K3 final lifetime candidate accounting missing/inconsistent")
     retentions = {
@@ -435,6 +440,9 @@ def analyze(runtime, backend, light):
         mode=light["mode"],
         execution_geometry=backend.get("prepost", {}).get("pingpong", {}).get("geometry"),
         actual_target_batch=dict(Counter(s["B"] for s in steps)),
+        warmup_coverage={k: light.get("scan_warmup_boundary", {}).get(k) for k in (
+            "schema_version", "request_opportunities", "opportunities_by_request",
+            "unique_requests", "completed_steps")},
         draft_audit=backend["draft_audit"],
         original_qualification={
             k: light[k]
@@ -520,6 +528,10 @@ def report(root, output, status, commit):
         workload_sha256=config["workload_sha256"],
         inventory=list(reader.inventory.values()),
     )
+    if light["mode"].endswith("-k3"):
+        value["common_execution"] = {k: config["execution"][k] for k in (
+            "models", "config_sha256", "patch_manifest_sha256", "numerical_mode",
+            "engine_core", "async_scheduling", "eos_token_ids", "launch_environment", "capacity")}
     write(value, output)
     qualification = qualify(value)
     write(qualification, status)

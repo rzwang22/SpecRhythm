@@ -392,6 +392,12 @@ def summarize(manifest_path, directory, point, *, probe=False):
     }
     try:
         r = read_json(directory / "runtime.json")
+        meta = r["capacity"]
+        if "execution_geometry" in meta:
+            base.update(execution_geometry=meta["execution_geometry"],
+                        sub_batch=meta["max_requests_per_target_forward"],
+                        boundary="resident360, active16; mode-specific Target ceiling; "
+                        "warmup in units of16 actual request opportunities")
         b = read_json(directory / "draft-backend-report.json")
         if point["mode"].endswith("-k3"):
             from specrhythm.serving.k3_capacity import qualify as qualify_capacity

@@ -388,3 +388,30 @@ Warmup uses 16 completed request-verification opportunities per unit, two units
 full Serial needs two Target steps and full PingPong four. Partial steps contribute
 only their actual B; no padding or invented opportunities. Window starts only with
 full active population, preserving live pipeline state and the unchanged deadline.
+
+## Admission framing optimization (2026-09-15)
+
+`k3-normalize-once-frame-once-v2` keeps the six resident spans and both complete
+live KV snapshots/audits. Each schedule call snapshots seven scalar shared admission
+fields once: schema, cycle, consumer, readiness, measurement boundary and the two
+predicate/arithmetic flags. Per-request decision, ID, timestamp, output length,
+proposal lifecycle and scheduled count remain read at their original boundary.
+No values survive this call as an admission decision or identity proof.
+
+Only K3 chooses `PreparedAdmission`. It owns an immutable scalar mapping, renders the
+canonical payload once, hashes those exact bytes, and inserts the sorted checksum
+field without re-encoding every field. The normal native CheckpointJsonl writer and
+buffered diagnostic writer consume the identical framed line. The old dictionary
+path still encodes/hashes as before; both observers still see every logical record.
+No compression, alternate on-disk schema or export reconstruction is needed. Mutation,
+reserved checksum keys, unsupported mutable values and changed insertion ordering
+fail explicitly. Unicode/escaping, original fsync count/order, byte thresholds,
+read-your-writes, write errors and final receipts retain their existing behavior.
+
+Current prompt comparison, full generated-suffix int normalization, historical
+bidirectional identity binding, proposal/version/claim validation, frontier/block
+ownership and required fences remain synchronous. No token rows, KV snapshots,
+control packets or historical PASS decisions are cached. `post_prepost()` and READY
+publication remain untouched. Earlier READY publication is a separate future candidate.
+The optimization does not claim to eliminate all 16.81ms of admission work, nor predict
+GPU throughput or recovery coverage from CPU work removed.

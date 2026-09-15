@@ -83,3 +83,17 @@ def test_warmup_matches_request_opportunities_not_target_steps(mode):
     assert boundary["request_opportunities"] == 32
     assert boundary["completed_steps"] == (2 if n == 16 else 4)
     assert set(boundary["opportunities_by_request"].values()) == {2}
+
+
+@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize("field,value", [("target_request_ceiling", 16.0),
+                                        ("draft_physical_batch_ceiling", True),
+                                        ("active_limit", None)])
+def test_geometry_checks_are_typed_and_fail_closed(mode, field, value):
+    from specrhythm.serving.k3 import matches_geometry
+
+    g = geometry(mode)
+    assert matches_geometry(g, mode)
+    g[field] = value
+    assert not matches_geometry(g, mode)
+    assert not matches_geometry(None, mode)

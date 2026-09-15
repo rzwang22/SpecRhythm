@@ -32,17 +32,22 @@ def resident_step(step, spans):
     work = {}
     for name in PHASES:
         r = found.get(name, {})
-        if r.get("resident_schedule_policy") != POLICY:
+        if r.get("resident_schedule_policy") not in (POLICY, "k3-normalize-once-v1"):
             errors.append("resident policy missing/different: " + name)
         for key in ("resident_cycle", "request_table_size", "pid", "thread_id"):
             if type(r.get(key)) is not int:
                 errors.append("resident phase field missing/type: " + name + "." + key)
         work[name] = r.get("work")
+    policies = {r.get("resident_schedule_policy") for n, r in found.items() if n in PHASES}
+    if len(policies) != 1:
+        errors.append("resident policy differs within call")
     required = dict(
         binding=("live_requests", "binding_token_visits", "normalized_rows"),
         decisions=("decision_rows",),
         admission_records=("decision_rows", "admission_records"),
     )
+    if policies == {POLICY}:
+        required["admission_records"] += ("checkpoint_payload_encodings", "shared_field_snapshots")
     for name, keys in required.items():
         for key in keys:
             value = (work.get(name) or {}).get(key)
@@ -76,7 +81,7 @@ def resident_step(step, spans):
     return dict(
         status="COMPLETE" if valid else "INCOMPLETE",
         errors=errors,
-        policy=POLICY,
+        policy=next(iter(policies)) if len(policies) == 1 else None,
         phases_ms={
             n: (found[n]["end_ns"] - found[n]["start_ns"]) / 1e6 if n in found else None
             for n in PHASES
@@ -101,7 +106,8 @@ def summarize(rows):
     return dict(
         status="INCOMPLETE" if errors else "COMPLETE",
         errors=errors,
-        policy=POLICY,
+        policy=(evidence[0].get("policy") if evidence and
+                len({e.get("policy") for e in evidence}) == 1 else None),
         measured_steps=len(rows),
         phases_ms={
             n: stats(
@@ -122,6 +128,12 @@ def summarize(rows):
         admission_records=None
         if errors
         else sum(e["work"]["admission_records"]["admission_records"] for e in evidence),
+        checkpoint_payload_encodings=(sum(e["work"]["admission_records"][
+            "checkpoint_payload_encodings"] for e in evidence)
+            if not errors and all(e.get("policy") == POLICY for e in evidence) else None),
+        shared_field_snapshots=(sum(e["work"]["admission_records"]["shared_field_snapshots"]
+            for e in evidence)
+            if not errors and all(e.get("policy") == POLICY for e in evidence) else None),
         wrapper_unaccounted_ms=stats(
             [
                 e["wrapper_unaccounted_ms"]

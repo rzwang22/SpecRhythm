@@ -15,18 +15,21 @@ from specrhythm.serving.ping_prepost_delivery import export
 from specrhythm.serving.ping_prepost_evidence import mechanism
 
 
-def collected(eager=True):
-    m = machine(eager=eager)
+def collected(eager=True, mode=None):
+    m = machine(eager=eager, **({"mode": mode} if mode else {}))
     runtime = dict(
         point={"mode": "pingpong-eager-prepost3" if eager else "pingpong-prepost3"},
         target_steps=[],
         measurement_start_ns=time.monotonic_ns(),
     )
+    if mode:
+        runtime["point"]["mode"] = mode
     samples = Records()
     target_native = []
     for cycle in range(5):
         start = time.monotonic_ns()
-        batch = admit(m, "A" if cycle % 2 == 0 else "B")
+        batch = admit(m, "A" if (mode and mode.startswith("serial-"))
+                      or cycle % 2 == 0 else "B")
         claims = batch["claims"]
         m.verify_start([verify_row(c["proposal"]) for c in claims])
         run_work(m)

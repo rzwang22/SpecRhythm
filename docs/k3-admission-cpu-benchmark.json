@@ -1,0 +1,44 @@
+{
+  "source": "360 logical rows from real CPU resident scheduler fixture",
+  "cycles": 12,
+  "alternating_order": true,
+  "all_bytes_equal": true,
+  "scope": "CPU construction+observed JSON encoding+bounded append/finish; os.fsync replaced with no-op; not GPU or durable disk performance",
+  "legacy_ms": {
+    "median": 5.4472705,
+    "samples": [
+      13.887458,
+      5.609042,
+      5.444416,
+      6.116666,
+      5.960167,
+      5.273333,
+      5.343125,
+      6.49375,
+      5.301541,
+      5.290208,
+      5.392625,
+      5.450125
+    ]
+  },
+  "prepared_ms": {
+    "median": 4.981708,
+    "samples": [
+      6.079542,
+      5.196583,
+      4.797292,
+      5.163542,
+      5.135125,
+      4.886208,
+      4.979625,
+      6.316541,
+      4.649042,
+      4.983791,
+      4.821417,
+      4.945042
+    ]
+  },
+  "no_gpu_speedup_projection": true,
+  "platform": "macOS-26.4-arm64-arm-64bit",
+  "python": "3.11.15"
+}
