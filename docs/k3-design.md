@@ -434,3 +434,103 @@ control packets or historical PASS decisions are cached. `post_prepost()` and RE
 publication remain untouched. Earlier READY publication is a separate future candidate.
 The optimization does not claim to eliminate all 16.81ms of admission work, nor predict
 GPU throughput or recovery coverage from CPU work removed.
+
+
+## A100 local mutable storage and failure delivery (2026-09-15)
+
+This infrastructure repair continues HEAD `3b8a8db96563e8cd23951448503b308ba11e3089`
+without changing K3, no-bonus, READY publication, feedback/fences, four-mode geometry,
+resident360, sampling, or setup900/drain60. The A100 four-mode run uses the same new
+local-recording path for every point. A800/A100 differences are not a code-only comparison.
+
+Read-only source: `pingpong-k3-delivery-bitahub-retry-20260915T121314Z-2328.tar.gz`,
+SHA256 `aadd234c20a9b4c86734de3412153264f784de49dfa89d0e69923d134e94effc`.
+All18 INCLUDED logical paths were verified against inventory bytes/SHA256. The Serial
+capacity point reached three physical-rank capacity checks with zero block/workspace
+deficit and resident360. No performance window was recorded. The legacy lifecycle's
+`launch_error` contains ENOENT for the running `drain-state.json` read, not model-load
+failure. First termination was about9.91s into drain, with about50.09s of the60s deadline
+left. The recorded Broken pipe follows coordinator SIGTERM by73.19ms. A later drain
+snapshot contains88 settlement receipts. Owned processes eventually empty is distinct
+from normal cleanup PASS; original failed/invalid results remain unchanged.
+
+The server's mount observations supplied with the request identify the results root
+as DPC and `/tmp` as container overlay. Overlay is not evidence of local NVMe. A transient
+visibility/read race is an explanation to test, not proof of a DPC implementation defect.
+The old archive omitted the malformed Draft report bytes: inventory records source size
+28109338 and digest `65ba15d91ba1c7b0c0effb0ac53f0f010653b7d84fff01982a7b21f2b2fa452c`,
+and a JSON parse error. Its precise truncation mechanism cannot be reconstructed from
+that package. The terminal log was not independently located; these timings come from
+archived lifecycle/drain/primary-error records. New fault injection is explicitly synthetic.
+
+`phase4.state_snapshot.PhaseSnapshotReader` reads directly, once per supervisor poll.
+ENOENT/EINTR/EAGAIN/ESTALE and JSON/UTF-8 incomplete reads are retriable. After a valid
+snapshot,20 failed attempts or1s of continuous unreadability fails; the first128 read
+records are retained with an omitted count. First-publication ENOENT remains bounded by
+the existing startup/total supervisor deadline. Missing/corrupt reads never replace the
+last valid phase/deadline. Worker fatal evidence and the cached deadline are checked on
+every iteration. Permissions, invalid types, mismatched run/mode, backward phases and
+illegal deadline changes fail immediately. Only existing setup→window/drain or window→
+drain transactions can replace a deadline. Setup publication now also covers non-scan
+correctness/capacity; decode_scan-specific execution data is unchanged.
+
+The existing `s2_pool.publish`/drain publisher already used same-directory temporary
+write plus rename under a single coordinator writer (launcher handoff for setup). That
+publisher was not replaced or blamed as a non-atomic writer. The supervisor instead
+writes `supervisor-decision.json` before any termination signal, including cause/path,
+mode/run, last valid state, retries, deadlines and process snapshot. Lifecycle signal
+records retain actual signal times. Retained/first-failure reports order causes by host
+monotonic occurrence time; later Broken pipe/cleanup/report errors cannot win just by
+creating the old primary-error file first. Unreadable optional diagnostics remain
+secondary, with bytes preserved by export. Failed socket sends do not trigger a second
+error response on the same disconnected socket.
+
+`phase4.report_publication` constructs and serializes the final report into a unique
+same-directory `.partial`, flushes/fsyncs, closes, then exclusively links the completed
+file under its final name. A separately atomically published `draft-report-state.json`
+must say COMPLETE with owner-stop, original deadline, size and SHA256. Until then,
+existence alone is insufficient. Failures preserve partial bytes/WRITING or FAILED
+state and the original exception. K3 publication follows real owner join and final
+log flush; the local entry's Target-only correctness control opts into the same final
+publication contract after its synchronous backend closes. Legacy default modes keep
+their old report writer. A clean coordinator can precede the Draft final report: the
+supervisor waits for Draft exit only within the already published drain deadline,
+then uses existing force-cleanup bounds. API shutdown replies do not stand in for the
+release, logging, report, device or owned-process checks.
+
+`k3_local_run` is the outer entry owner. Every generated input/config, control/deadline,
+measurement/drain snapshot, ownership record, log, native timeline and report lives
+under a fresh resolved `/tmp/specrhythm-runs/<tag>/pingpong-k3-delivery-<tag>/`.
+Existing model/S1 inputs remain read-only at their configured locations; the existing
+local Unix socket placement is retained. Startup records resolved paths, mount type,
+free bytes and a write probe. Known remote mount types and overlapping roots are
+rejected, and an8GiB minimum free-space precondition is explicit/overridable. Neither
+the probe nor CPU tests prove all real filesystem consistency properties. Local roots
+are kept on success and failure; no automatic deletion is performed.
+
+The inner runner retains first stage/mode/root/exit and summary error separately and
+never publishes an upload path in managed operation. After it exits and its log closes,
+the outer entry creates one local tar, validates every archived payload and hashes the
+tar. Corrupt JSON and raw process logs are archived byte-for-byte with parse errors.
+512MiB/file and1GiB unique-byte limits are unchanged. Enumeration/object counts are now
+explicitly bounded at512, replacing the old192 logical-file gate so additional raw logs,
+partial reports and publication/ownership receipts fit the fixed four-mode inventory.
+Overflow/omission is still explicit and fails export qualification. Runtime/backend
+projection remains compact; original source size/SHA256 and the completion receipt
+allow offline `qualify_publication_receipt` without mistaking projected bytes for the
+original file. Raw payload objects may contain invalid JSON or binary log bytes.
+
+The finished local tar is copied to a unique `.copying` destination in DPC, flushed,
+re-read for size/SHA256, then renamed inside DPC. Cross-filesystem rename is never
+assumed atomic. An exclusive delivery lock and fresh names prevent overwriting history.
+On copy/verification failure, the local archive is retained; a local repack includes
+the copy error without rerunning GPU work or retrying DPC. If that repack fails the
+first verified local archive remains available. Exactly one outer `UPLOAD ONLY:` points
+to verified DPC output, or the valid local fallback. No valid tar means no upload path.
+Execution first rc outranks export41/delivery43/infrastructure44; original run, cleanup,
+archive/evidence integrity and copy status are distinct. The sealed successful tar says
+PENDING_AT_ARCHIVE_SEAL for the *subsequent* copy; its verified delivery receipt/hash is
+printed afterward and retained locally, avoiding a false self-referential final hash.
+A copy-failure fallback embeds the actual copy error; no extra upload is requested.
+
+GPU correctness, native overlap/performance and real A100/DPC adaptation remain PENDING.

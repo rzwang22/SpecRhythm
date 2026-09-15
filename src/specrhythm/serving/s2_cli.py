@@ -135,13 +135,14 @@ def execute(root, gate, mode, manifest_path, directory, *, probe=False, policy=N
         env["SR_FIXED_DRAFT_AUDIT"] = options.get("draft_audit", "full")
         env["SR_FIXED_OBSERVATION"] = options.get("observation", "original-live")
         env["SR_FIXED_IDENTITY_MATCHING"] = options.get("identity_matching", "linear")
+        setup_deadline = time.monotonic_ns() + int(options["setup_timeout"] * 1e9)
         if diagnostic.get("scan"):
-            env["SR_FIXED_SCAN_SETUP_DEADLINE_NS"] = str(
-                time.monotonic_ns() + int(options["setup_timeout"] * 1e9))
-            publish(directory / "drain-state.json", {
-                "phase": "scan_setup_and_warmup", "status": "RUNNING",
-                "deadline_ns": int(env["SR_FIXED_SCAN_SETUP_DEADLINE_NS"]),
-            })
+            env["SR_FIXED_SCAN_SETUP_DEADLINE_NS"] = str(setup_deadline)
+        publish(directory / "drain-state.json", {
+            "phase": "scan_setup_and_warmup", "status": "RUNNING",
+            "mode": mode, "run_directory": str(directory.resolve()),
+            "deadline_ns": setup_deadline,
+        })
     socket = Path("/tmp") / ("sr-s2-" + uuid.uuid4().hex[:16] + ".sock")
     env["SR_S2_DRAFT_SOCKET"] = str(socket)
     saved_env = dict(os.environ)
@@ -215,7 +216,7 @@ def execute(root, gate, mode, manifest_path, directory, *, probe=False, policy=N
                 draft_pid=draft.pid,
                 draft_socket=socket,
                 ownership_journal=directory / "ownership.json",
-                **({"phase_deadline_path": directory / "drain-state.json"}
+                **({"phase_deadline_path": directory / "drain-state.json", "run_mode": mode}
                    if diagnostic is not None else {}),
                 timeout_seconds=(14400 if diagnostic is None else
                                  2 * options["setup_timeout"] + options["window_seconds"]
@@ -239,6 +240,11 @@ def execute(root, gate, mode, manifest_path, directory, *, probe=False, policy=N
             if rc:
                 report = failed_report(directory, mode, manifest, rc)
             elif diagnostic is not None:
+                if (mode.endswith("-k3") or (mode == "target"
+                        and os.environ.get("SR_K3_MANAGED_LOCAL") == "1")):
+                    from specrhythm.phase4.report_publication import qualify_final_report
+
+                    qualify_final_report(directory / "draft-backend-report.json")
                 if diagnostic.get("scan"):
                     from specrhythm.serving.decode_scan_results import summarize
                 else:

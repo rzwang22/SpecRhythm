@@ -414,3 +414,64 @@ recorded in the runbook/project status. No AutoDL or GPU was invoked; new GPU qu
 
 Fixed execution for this entry repair: `c663cb30f470ed9bf24465d07af7ea3a6991c73e`. The later entry-only
 commit points to this source and does not alter tested execution code.
+
+
+## A100 state/read/report delivery regression scope (2026-09-15)
+
+See k3-design's independent source-package hash/timeline and filesystem limits. New
+CPU regressions run real owned subprocesses coordinated by FIFO rendezvous and inject
+only file reads: single ENOENT/short JSON recovery, persistent missing/corrupt failure,
+worker fatal logs during retry, unchanged absolute deadlines, invalid phase/identity/
+types, first-publication total timeout, and pre-signal causal recording. Real delayed
+Draft report publication after coordinator exit shares the existing deadline. Actual
+K3 and Target-only service factories exercise backend shutdown and report completion.
+Socketpair tests prove failed responses are not sent twice and preserve the original
+validation error when its error response also fails.
+
+Publication tests inject interrupted JSON serialization, fsync failure and expired
+deadline. They inspect absent final files, actual partial bytes and FAILED markers;
+then export/re-read the archive, verify hashes, and replay completion qualification
+from original source digest plus receipt. Real inner Bash uses only substituted GPU
+commands, then the production exporter/copy path handles malformed JSON, first rc23,
+copy write failure and digest mismatch, preserves local files and emits one upload.
+Geometry/nativeB16, report chain and prior interleaving suites remain in the gates.
+No timing threshold proves an optimization, and no CPU test proves DPC consistency.
+
+Development first-failure record: the initial fsync-injection test matched the full
+path against IO_CONTEXT.name, which intentionally stores a basename; it therefore did
+not inject. Matching the actual basename corrected the test (no production assertion
+or budget was relaxed). The first59 affected tests and17 state-recovery tests passed.
+Final full/version/source/Bash gates and actual new CI are recorded at delivery.
+
+The first Python3.9 run found three failures in the new test's cross-process time
+assertion: this macOS3.9 interpreter reports a per-process monotonic origin (the
+parent decision was2.275s while the child's receipt was0.947s). This was a test
+clock-domain error, not evidence of signal-before-decision. The regression now
+proves ordering by the child's actual read of the decision in its signal handler
+and the parent's real decision/signal timestamps; the synthetic downstream error
+uses an explicitly injected shared clock. No production timestamp/budget or
+assertion was relaxed. Linux server monotonic-domain acceptance remains GPU pending.
+
+The initial full run found two real new attribution regressions: generic nonzero
+coordinator-exit cleanup had displaced the already recorded worker failure in legacy
+CLI reports. It is now classified as a cleanup reaction, not a competing earlier
+cause; the original CLI assertions are kept. Two other failures were invocation
+environment errors (`python: command not found`) in unchanged shell-helper tests;
+the final gate activates the project's Python environment on PATH. Baseline push CI
+34943435521 had a source-contract failure while its paired PR workflow succeeded;
+that historical failure is investigated separately, never relabelled by local retries.
+
+Historical CI detail: baseline push34943435521's `phase4b3-draft-source-contract`
+failed `test_actual_claim_schedule_verify_enters_before_other_recovery_finishes[False-True]`
+on the existing event wait in `test_k3_dispatch_chain.py:208`. The paired baseline PR
+workflow34943441578 succeeded. This identifies the assertion, not the reason for
+its missed coordination; no budget/timeout was changed and no CI retry was requested.
+
+Local implementation gates: full pytest2677 passed/3 skipped in352.03s with the
+project Python on PATH and pinned vLLM source enabled. The three skips are opt-in
+CUDA and two Linux-only process cases on macOS. After the final small archive/legacy
+identity/error-attribution adjustments: production sealing/pinned tests18 passed;
+Python3.9 related suite131 passed plus28 final delta tests; Python3.12 related suite
+131 passed plus46 final delta tests. Pinned source-only gate17 passed. Ruff,
+compileall3.9/3.11/3.12,220 source-file Python3.9 AST, all21 Bash scripts and diff
+checks passed. New GPU/DPC validation remains PENDING.

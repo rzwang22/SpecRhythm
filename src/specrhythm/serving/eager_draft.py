@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import socket
+import sys
 import time
 
 from specrhythm.continuation.gpu_backend import GPUContinuationBackendMixin
@@ -148,9 +149,11 @@ def serve(config, directory, socket_path, *, backend_class=None, prepost_mode=No
         record_error(directory, error, "eager_draft_server")
         raise
     finally:
+        original_error = sys.exc_info()[1]
+        cleanup_error = None
+        deadline = server.deadline_ns or time.monotonic_ns() + 60_000_000_000
         try:
             # Reuse the coordinator's shared deadline, including join and log flush.
-            deadline = server.deadline_ns or time.monotonic_ns() + 60_000_000_000
             owner.close(deadline)
             from specrhythm.serving.fixed_logging import finish_current
             from specrhythm.serving.fixed_settle import remaining
@@ -158,13 +161,26 @@ def serve(config, directory, socket_path, *, backend_class=None, prepost_mode=No
             remaining(deadline)
             finish_current("draft")
             remaining(deadline)
+        except BaseException as error:
+            cleanup_error = error
+            record_error(directory, error, "draft_owner_close_or_final_flush")
+            if original_error is None:
+                raise
         finally:
             if owner.machine is not None and not owner._thread.is_alive() and not report.exists():
-                write_immutable_report(
-                    report,
-                    {
-                        **owner.machine.backend.report(),
-                        ("prepost" if prepost_mode else "rolling_eager"):
-                            owner.machine.eager_report(),
-                    },
-                )
+                def build_report():
+                    return {**owner.machine.backend.report(),
+                            ("prepost" if prepost_mode else "rolling_eager"):
+                                owner.machine.eager_report()}
+                try:
+                    if prepost_mode and prepost_mode.endswith("-k3"):
+                        from specrhythm.phase4.report_publication import publish_final_report
+
+                        publish_final_report(report, build_report, deadline_ns=deadline,
+                                             owner_stopped=not owner._thread.is_alive())
+                    else:
+                        write_immutable_report(report, build_report())
+                except BaseException as error:
+                    record_error(directory, error, "draft_final_report")
+                    if original_error is None and cleanup_error is None:
+                        raise

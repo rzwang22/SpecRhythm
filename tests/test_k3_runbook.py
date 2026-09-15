@@ -88,6 +88,7 @@ if kind==os.environ['FAIL_STAGE'] and mode==os.environ['FAIL_POINT']: sys.exit(2
         "SR_EXEC_REPO": str(repo),
         "SR_FIXED_PYTHON": str(fake),
         "SR_PING_RESULTS": str(results),
+        "SR_K3_LOCAL_DELIVERY": str(results / "pingpong-k3-delivery-fixture"),
         "SR_PING_RUN_TAG": "fixture",
         "SR_AUDIT_SERVING_MODE": "",
         "SR_FIXED_ROOT": str(tmp_path / "inherited-historical-root"),

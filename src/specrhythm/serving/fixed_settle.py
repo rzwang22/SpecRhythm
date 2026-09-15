@@ -321,8 +321,31 @@ class DiagnosticSerialMachine(Settlement, BatchedDraftStateMachine):
     pass  # Normal shutdown still executes DraftStateMachine's unresolved-proposal guard.
 
 
+class PublishedDiagnosticSerialMachine(DiagnosticSerialMachine):
+    """Opt-in Target-only control used by the local K3 entry; legacy stays unchanged."""
+
+    report_deadline_ns = None
+
+    def shutdown(self):
+        from specrhythm.phase4.report_publication import publish_final_report
+
+        path = self.report_path
+        self.report_path = None
+        try:
+            result = super().shutdown()  # Original unresolved-proposal/release checks.
+        finally:
+            self.report_path = path
+        receipt = publish_final_report(path, self.backend.report,
+            deadline_ns=self.report_deadline_ns, owner_stopped=self.backend.closed)
+        result.update(draft_backend_report_file=path.name,
+                      draft_backend_report_sha256=receipt["sha256"])
+        return result
+
+
 class DiagnosticSerialServer(DraftUnixServer):
     def _dispatch(self, operation, payload):
+        if operation == "shutdown" and isinstance(self.machine, PublishedDiagnosticSerialMachine):
+            self.machine.report_deadline_ns = payload.get("deadline_ns")
         if operation == "diagnostic_settle":
             return self.machine.diagnostic_settle(payload)
         return super()._dispatch(operation, payload)

@@ -13,6 +13,7 @@ class StartupCleanup:
         self.directory = directory
         self.result = dict(
             schema_version="specrhythm.k3-startup-cleanup.v1", mode=mode,
+            run_directory=str(directory.resolve()),
             phase="startup_failure_cleanup", status="RUNNING", deadline_ns=deadline_ns,
             original_error=str(error), execution_failed=True, actions={}, recording_errors=[],
             cleanup_qualification="PENDING_SUPERVISOR",

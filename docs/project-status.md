@@ -29,6 +29,14 @@ claims.
 
 ## Pull request progress
 
+### PR #5 — A100 状态读取、本地运行目录与单包交付（2026-09-15）
+
+- 从当前HEAD `3b8a8db96563e8cd23951448503b308ba11e3089` 继续；保留 c663cb3 的四模式geometry与原生B16验收。只改基础设施，不改K3/no-bonus/READY/调度/KV或setup900/drain60。
+- 只读核验 bitahub-retry 总包18个逻辑对象。监督器运行中读取drain-state ENOENT后提前终止，后续Broken pipe和不完整报告为次生事件；三个物理rank容量通过，不代表完整cleanup通过。原历史标签保留，DPC可见性仍是假设，overlay不等于NVMe。
+- 新入口默认 `/tmp/specrhythm-runs/<tag>` 保存所有本轮可变文件；完成后本地封包、哈希，再向DPC唯一临时目标复制/复核/发布。默认保留本地目录，失败包包含损坏JSON原始字节。原运行码、导出和交付错误分列，外层唯一UPLOAD ONLY。
+- 状态读取一次/轮、有界重试，保留原绝对deadline并检查worker。监督器终止原因先于信号落盘；完整Draft报告先写临时文件，owner停后完整发布和回执验收。旧默认报告路径不变，本入口Target-only对照同样启用完成契约。
+- 本地全量2677通过/3跳过；固定源码17通过；Python3.9/3.12相关各131通过，最后变动分别28/46通过；最终封包/入口18通过。Ruff、三版本compileall、220文件3.9 AST、21脚本Bash和diff通过。新CI按实际新SHA单独查询。新GPU correctness、native overlap/performance、A100/DPC适配验收均PENDING；不连接服务器，交付后等待唯一总包。
+
 ### PR #5 — 四模式入口 Target ceiling 修复（2026-09-15）
 
 - 修复执行SHA `c663cb30f470ed9bf24465d07af7ea3a6991c73e`；固定入口提交仅绑定该SHA并更新文档。从 `6a8072dd2ba4e478447666234fc4864ea8d48477` 继续，保留 fca2118 执行优化与四模式配置。确认 `PY_MEASUREMENT` 将所有模式固定为 ceiling8，错误拒绝两个 Serial B16；此前 shell 测试替换整段 Python，未执行该验收。

@@ -65,6 +65,7 @@ git -C "$REPO" fetch origin codex/rolling-eager-v0.1
 git -C "$REPO" cat-file -e "${EXECUTION_SHA}^{commit}"
 RUN_TREE="${REPO}-k3-four-${EXECUTION_SHA:0:12}-$(date -u +%Y%m%dT%H%M%SZ)-$$"
 git -C "$REPO" worktree add --detach "$RUN_TREE" "$EXECUTION_SHA"
+unset SR_K3_MANAGED_LOCAL SR_K3_LOCAL_DELIVERY SR_PING_DELIVERY
 export SR_EXEC_REPO="$RUN_TREE"
 bash "$RUN_TREE/scripts/run_k3_b16.sh" "$EXECUTION_SHA"
 SR_K3_FRONTEND
@@ -96,11 +97,10 @@ UPLOAD ONLY: .../pingpong-k3-delivery-<tag>.tar.gz
 `comparison.json`, `joint/result.json` (or the real joint failure), per-mode reports,
 capacity, startup/final device identity, native/owner timelines, original runtime,
 first-failure and `inventory.json` all live in that package. Inventory logical_paths
-map to deduplicated objects with byte counts/SHA256. The192-file/512MiB-file/1GiB-total
-limits and phased trace budgets remain bounded. Extending the previous145 logical
-files by the corresponding fourth-mode42 files gives187; actual inventory, missing
-fields or size overflow still decide export integrity, not this estimate. There are
-no nested subpackages or additional collection commands.
+map to deduplicated objects with byte counts/SHA256. Per-file512MiB and total unique1GiB
+budgets remain unchanged. The bounded inventory now allows512 logical/unique objects
+for raw logs, partial JSON, ownership and publication receipts; overflow/omission still
+fails integrity and is explicit. There are no nested subpackages or extra collection commands.
 
 On first failure, no later point runs. The actual phase/mode/run, process code,
 report qualification, cleanup and command code are retained; summary/export failures
@@ -142,3 +142,24 @@ Entry-repair local validation: full pytest2645 passed/3 skipped; Python3.9 and3.
 related suites157 passed each; Ruff, three-version compileall, Python3.9 AST, all21
 tracked Bash scripts and diff checks passed. Skips are opt-in CUDA and two Linux
 process tests on macOS. These CPU results do not qualify a GPU run.
+
+
+A100 storage default: all mutable execution files and the completed tar are under
+`/tmp/specrhythm-runs/<unique-tag>/`; the verified final copy goes to
+`/root/autodl-tmp/SpecRhythm-data/results/rolling-eager/`. Override with
+`SR_K3_LOCAL_BASE` and `SR_PING_RESULTS`, respectively; do not set the private
+`SR_K3_LOCAL_DELIVERY`/`SR_K3_MANAGED_LOCAL` handoff variables yourself.
+`SR_K3_MIN_FREE_BYTES` defaults to8589934592. Startup records resolved paths/mount facts,
+space and a write probe, and rejects known remote mutable storage or root overlap.
+The server's `/tmp` is overlay, with physical backing unspecified. Model/S1 locations
+and the local socket scheme are unchanged. Keep the local root after both outcomes.
+
+The inner runner stops at first error; the outer process seals a single local archive
+and makes one verified DPC copy. On copy failure upload the one printed local fallback;
+it embeds the copy failure. No archive means an explicit retained-directory error,
+not a fabricated upload path. Console delivery receipt records the tar SHA256 and copy
+status; the successful sealed archive cannot contain its own later copy hash. Failure
+status, partial/corrupt bytes and raw logs remain inside the package within byte limits.
+Do not rerun this entry over an old root or collect extra subpackages. Four points on
+one A100 with this recording configuration are the comparison; old A800 numbers are
+not a controlled estimate of this infrastructure change. GPU/filesystem acceptance PENDING.

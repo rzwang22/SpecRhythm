@@ -6,8 +6,14 @@ FINAL_SHA="${1:?full execution SHA required}"
 export SR_FIXED_PYTHON="${SR_FIXED_PYTHON:-/root/autodl-tmp/envs/specrhythm-phase4-vllm-0.25.1/bin/python3.11}"
 export SR_FIXED_S1="${SR_FIXED_S1:-/root/autodl-tmp/SpecRhythm-data/results/phase-s1/s1p-5a00049-20260909T144802Z-1469}"
 RUN_TAG="${SR_PING_RUN_TAG:-$(date -u +%Y%m%dT%H%M%SZ)-$$}"
-RESULTS="${SR_PING_RESULTS:-/root/autodl-tmp/SpecRhythm-data/results/rolling-eager}"
-export SR_PING_DELIVERY="$RESULTS/pingpong-k3-delivery-${RUN_TAG}"
+# Public entry always routes through the local supervisor. The private inner
+# path is set by that supervisor, not derived from the persistent results root.
+if [[ -z "${SR_K3_LOCAL_DELIVERY:-}" ]]; then
+  cd "${SR_EXEC_REPO:-/root/autodl-tmp/src/SpecRhythm}"
+  export PYTHONPATH="$PWD/src"
+  exec "$SR_FIXED_PYTHON" -m specrhythm.serving.k3_local_run --repo "$PWD" --commit "$FINAL_SHA"
+fi
+export SR_PING_DELIVERY="$SR_K3_LOCAL_DELIVERY"
 ARCHIVE="${SR_PING_DELIVERY}.tar.gz"
 export SR_EAGER_CAUSAL_TRACE=light SR_EAGER_CAUSAL_LAYOUT=phased
 export SR_AUDIT_MODE=runtime SR_FIXED_COMMIT="$FINAL_SHA"
@@ -19,6 +25,9 @@ export PYTHONPATH="$PWD/src" PYTHONUNBUFFERED=1
 test ! -e "$SR_PING_DELIVERY"
 test ! -e "$ARCHIVE"
 mkdir -p "$SR_PING_DELIVERY/points"
+if [[ -n "${SR_K3_STORAGE_RECEIPT:-}" ]]; then
+  cp "$SR_K3_STORAGE_RECEIPT" "$SR_PING_DELIVERY/storage-preflight.json"
+fi
 # Before a point starts, never attribute a static failure to an inherited old root.
 export SR_FIXED_ROOT="$SR_PING_DELIVERY/not_started"
 finish() {
@@ -42,6 +51,19 @@ write(v, d/'first-failure.json')
 PY_FAILURE
     summary_rc=$?
     printf 'Secondary failure-summary rc=%s; original rc=%s\n' "$summary_rc" "$first_rc"
+  fi
+  if [[ "${SR_K3_MANAGED_LOCAL:-}" == 1 ]]; then
+    "$SR_FIXED_PYTHON" - "$first_rc" "$STAGE" "$POINT" "${summary_rc:-0}" <<'PY_OUTCOME'
+import os, pathlib, sys
+from specrhythm.phase4.manifest import atomic_write_json
+atomic_write_json(pathlib.Path(os.environ['SR_PING_DELIVERY'])/'runner-outcome.json',
+    dict(first_exit_code=int(sys.argv[1]), stage=sys.argv[2], mode=sys.argv[3],
+         run_root=os.environ['SR_FIXED_ROOT'], summary_exit_code=int(sys.argv[4])))
+PY_OUTCOME
+    outcome_rc=$?
+    printf 'Runner stopped: original rc=%s; outcome write rc=%s; local archive follows.\n' "$first_rc" "$outcome_rc"
+    if [[ "$first_rc" != 0 ]]; then exit "$first_rc"; fi
+    exit "$outcome_rc"
   fi
   "$SR_FIXED_PYTHON" -m specrhythm.serving.ping_prepost_delivery \
     --directory "$SR_PING_DELIVERY" --output "$ARCHIVE" --first-code "$first_rc" --stage "$STAGE" --k3 \

@@ -20,8 +20,15 @@ from specrhythm.serving.ping_prepost import MODES, SCHEDULED_MODES
 
 FILE_LIMIT = 512 * 1024 * 1024
 TOTAL_LIMIT = 1024 * 1024 * 1024
-FILE_COUNT = 192
+FILE_COUNT = 512  # Bounded raw logs/partial files/receipts; byte budgets remain unchanged.
+LOGICAL_LIMIT = 512  # Bounded enumeration, including new raw logs and publication states.
 NAMES = {
+    "storage-preflight.json", "delivery-status.json", "runner-outcome.json",
+    "supervisor-decision.json", "draft-report-state.json",
+    "runner.log", "target.log", "draft.log", "draft-service.log", "draft-work-events.jsonl",
+    "measurement-snapshot.json", "s2-control.json", "draft-service-ready.json",
+    "draft-startup.json",
+    "ownership.json", "draft-owner.json", "command.json",
     "scan-config.json",
     "config.json",
     "patch-manifest.json",
@@ -49,7 +56,7 @@ NAMES = {
     "draft-child-failure.json",
     "actual-capacity.json",
     "target-incremental-setup.json",
-    "drain-state.json",
+    "drain-state.json", "draft-drain-state.json",
     "startup-cleanup.json",
     "k3-capacity-contract.json",
     "fixed-logging-coordinator.json",
@@ -83,6 +90,7 @@ RUNTIME_KEYS = {
     "schema_version",
 }
 BACKEND_KEYS = {
+    "report_publication",
     "fixed_device",
     "fixed_host",
     "prepost",
@@ -209,9 +217,11 @@ def export(directory, output, *, first_code=0, stage="complete", modes=MODES):
         p
         for p in directory.rglob("*")
         if p.is_file()
-        and (p.name in NAMES or p.name.endswith(("-audit-report.json", "-evidence-status.json")))
+        and (p.name in NAMES or p.name.endswith(("-audit-report.json", "-evidence-status.json"))
+             or (p.name.startswith(".draft-backend-report.json.") and p.name.endswith(".partial")))
     )
     inventory, objects, emitted, total, failures = [], {}, set(), 0, []
+    evidence_errors = []
     expected = ["joint/result.json", "comparison.json"]
     for mode in modes:
         root = directory / "points" / mode
@@ -261,44 +271,88 @@ def export(directory, output, *, first_code=0, stage="complete", modes=MODES):
                 row["status"] = "OMITTED_NONREGULAR"
                 failures.append(name)
                 continue
-            before = source.stat()
+            try:
+                before = source.stat()
+            except OSError as error:
+                row.update(status="EXPORT_ERROR", error=str(error))
+                failures.append(name)
+                continue
             row["source_bytes"] = before.st_size
-            if index >= FILE_COUNT or before.st_size > FILE_LIMIT:
+            if index >= LOGICAL_LIMIT or before.st_size > FILE_LIMIT:
                 row["status"] = "OMITTED_LIMIT"
                 failures.append(name)
                 continue
             try:
-                raw = source.read_bytes()
-                after = source.stat()
-                require(
-                    (before.st_size, before.st_mtime_ns, before.st_ino)
-                    == (after.st_size, after.st_mtime_ns, after.st_ino),
-                    "source changed during export",
-                )
+                with source.open("rb") as handle:
+                    raw = handle.read(FILE_LIMIT + 1)
+                require(len(raw) <= FILE_LIMIT, "source exceeded file byte budget while reading")
+                try:
+                    after = source.stat()
+                except OSError as error:
+                    after = None
+                    row["source_stat_error"] = str(error)
+                if after is None or (before.st_size, before.st_mtime_ns, before.st_ino) != (
+                        after.st_size, after.st_mtime_ns, after.st_ino):
+                    row["source_changed_during_read"] = True
+                    evidence_errors.append(name + ": changing source; captured bytes retained")
                 row["source_sha256"] = hashlib.sha256(raw).hexdigest()
                 data, projection = raw, None
-                if source.name in ("runtime.json", "draft-backend-report.json"):
-                    value = json.loads(raw)
-                    keys = RUNTIME_KEYS if source.name == "runtime.json" else BACKEND_KEYS
-                    if (source.name == "runtime.json"
-                            and value.get("point", {}).get("mode") in SCHEDULED_MODES
-                            and "target_final_memory" not in value):
-                        row["required_fields_missing"] = ["target_final_memory"]
-                        failures.append(name + ": missing target_final_memory (not reconstructed)")
+                value, json_valid = None, False
+                if source.suffix == ".json":
+                    try:
+                        value = json.loads(raw)
+                        json_valid = True
+                    except (ValueError, UnicodeError) as error:
+                        row["parse_error"] = dict(type=type(error).__name__, error=str(error))
+                        row["raw_bytes_retained"] = True
+                        evidence_errors.append(name + ": malformed JSON (raw bytes included)")
+                if source.name.startswith(".draft-backend-report.json."):
+                    row["publication"] = "PARTIAL_UNPUBLISHED"
+                    evidence_errors.append(name + ": unfinished report bytes retained")
+                if source.name == "draft-report-state.json":
+                    if not isinstance(value, dict) or value.get("status") != "COMPLETE":
+                        evidence_errors.append(name + ": report publication not COMPLETE")
+                    elif not source.with_name("draft-backend-report.json").is_file():
+                        evidence_errors.append(name + ": COMPLETE receipt without final report")
+                if source.name == "draft-backend-report.json":
+                    marker = source.with_name("draft-report-state.json")
+                    if marker.exists() or (isinstance(value, dict)
+                                           and "report_publication" in value):
+                        from specrhythm.phase4.report_publication import qualify_final_report
 
-                    projection = dict(
-                        omitted_top_level_fields=sorted(set(value) - keys),
-                        retained_top_level_fields=sorted(set(value) & keys),
-                        event_rows_truncated=False,
-                        semantics="keep complete bounded native/host/protocol records; "
-                        "large unrelated setup summaries stay on server",
-                    )
-                    data = json.dumps(
-                        {k: v for k, v in value.items() if k in keys}, separators=(",", ":")
-                    ).encode()
+                        try:
+                            row["publication"] = qualify_final_report(source)
+                        except (OSError, ValueError, KeyError, TypeError) as error:
+                            row["publication_error"] = str(error)
+                            evidence_errors.append(name + ": final publication incomplete")
+                    else:
+                        row["publication"] = "LEGACY_UNDECLARED; existence is not completion"
+                        if (directory / "storage-preflight.json").exists():
+                            evidence_errors.append(name + ": new entry lacks publication receipt")
+                if source.name in ("runtime.json", "draft-backend-report.json") and json_valid:
+                    if not isinstance(value, dict):
+                        row["parse_error"] = dict(type="SchemaError", error="expected JSON object")
+                        row["raw_bytes_retained"] = True
+                        evidence_errors.append(name + ": non-object JSON (raw bytes included)")
+                    else:
+                        keys = RUNTIME_KEYS if source.name == "runtime.json" else BACKEND_KEYS
+                        if (source.name == "runtime.json"
+                                and value.get("point", {}).get("mode") in SCHEDULED_MODES
+                                and "target_final_memory" not in value):
+                            row["required_fields_missing"] = ["target_final_memory"]
+                            evidence_errors.append(name + ": missing target_final_memory")
+                        projection = dict(
+                            omitted_top_level_fields=sorted(set(value) - keys),
+                            retained_top_level_fields=sorted(set(value) & keys),
+                            event_rows_truncated=False,
+                            semantics="complete bounded native/host/protocol records; "
+                            "unrelated setup summaries stay in retained local run directory")
+                        data = json.dumps({k: v for k, v in value.items() if k in keys},
+                                          separators=(",", ":")).encode()
                 digest = hashlib.sha256(data).hexdigest()
                 object_path = "objects/" + digest + ".json"
                 if digest not in emitted:
+                    require(len(emitted) < FILE_COUNT, "unique payload file budget exceeded")
                     if total + len(data) > TOTAL_LIMIT:
                         raise ValueError("unique payload total limit exceeded")
                     add(object_path, data)
@@ -318,21 +372,32 @@ def export(directory, output, *, first_code=0, stage="complete", modes=MODES):
         for name in expected:
             if name not in objects:
                 inventory.append(dict(path=name, status="MISSING"))
+        try:
+            comparison_valid = read_json(compare_path)["valid"] is True
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            comparison_valid = False
+            evidence_errors.append("comparison.json: " + str(error))
         result = dict(
             schema_version="specrhythm.ping-prepost-archive.v1",
             inventory=inventory,
             logical_paths=objects,
-            export_status="INCOMPLETE" if failures else "COMPLETE",
-            export_errors=failures,
-            export_validation_exit_code=(41 if failures else 42 if first_code == 0 and not
-                              read_json(compare_path)["valid"] else 0),
+            archive_integrity="INCOMPLETE" if failures else "COMPLETE",
+            evidence_integrity="INCOMPLETE" if evidence_errors or failures else "COLLECTED",
+            evidence_errors=evidence_errors,
+            export_status="INCOMPLETE" if failures or evidence_errors else "COMPLETE",
+            export_errors=failures + evidence_errors,
+            export_validation_exit_code=(41 if failures or evidence_errors else
+                                         42 if first_code == 0 and not comparison_valid else 0),
             first_exit_code=first_code,
             failed_stage=stage,
-            limits=dict(file_bytes=FILE_LIMIT, unique_payload_bytes=TOTAL_LIMIT, files=FILE_COUNT),
+            limits=dict(file_bytes=FILE_LIMIT, unique_payload_bytes=TOTAL_LIMIT,
+                        files=FILE_COUNT, file_count_scope="unique payloads",
+                        unique_files=FILE_COUNT, logical_files=LOGICAL_LIMIT),
             unique_payload_bytes=total,
             source_results_unchanged=True,
             missing=sum(r["status"] == "MISSING" for r in inventory),
-            extraction="logical_paths maps original relative paths to deduplicated JSON objects",
+            extraction="logical_paths maps relative paths to deduplicated payload objects; "
+                       "raw logs/corrupt JSON retain original bytes",
             qualification="archive COMPLETE means eligible files exported; "
             "it does not qualify GPU execution; "
             "missing/failed points remain explicit; see comparison and first-failure",

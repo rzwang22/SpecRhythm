@@ -311,7 +311,16 @@ def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5, 
                 window.reason = "operator_stop"
                 break
             if not scan:
+                entering = window.start_ns is None
                 window.ready(now)
+                if entering and window.start_ns is not None:
+                    publish(directory / "drain-state.json", {
+                        "phase": "scan_window_and_atomic_step", "status": "RUNNING",
+                        "mode": runtime_mode, "run_directory": str(directory.resolve()),
+                        "start_ns": window.start_ns,
+                        "deadline_ns": window.start_ns + int(
+                            (options["window_seconds"] + options["drain_timeout"]) * 1e9),
+                    })
             if window.time_expired(now):
                 break
             clock.observe(now)
@@ -396,6 +405,7 @@ def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5, 
                         (options["window_seconds"] + options["drain_timeout"]) * 1e9)
                     publish(directory / "drain-state.json", {
                         "phase": "scan_window_and_atomic_step", "status": "RUNNING",
+                        "mode": runtime_mode, "run_directory": str(directory.resolve()),
                         "start_ns": window.start_ns, "deadline_ns": deadline,
                     })
                     publish_control(inflight)
@@ -741,6 +751,7 @@ def run(root, manifest_path, directory, point, *, probe=False):
                 "deadline_ns": probe_deadline,
                 "status": "RUNNING",
                 "phase": "capacity_shutdown",
+                "mode": mode, "run_directory": str(directory.resolve()),
                 "settled_requests": 0,
                 "receipts": [],
             }

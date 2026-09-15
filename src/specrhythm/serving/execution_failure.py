@@ -34,12 +34,18 @@ def summarize(root, exit_code, stage):
         missing = [r for r in report.get("execution_path", {}).get("fsync_by_file", [])
                    if not r.get("log_name") or r["log_name"] == "MISSING_FILENAME"]
     runs = []
-    paths = sorted((root / "runs").glob("*/light-summary.json"))
+    paths = sorted({*list((root / "runs").glob("*/light-summary.json")),
+                    *(p.with_name("light-summary.json") for p in
+                      (root / "runs").glob("*/supervisor-decision.json"))})
     if len(paths) > 16:
         errors.append(dict(error="light-summary inventory truncated", retained=16,
                            available=len(paths)))
     for path in paths[:16]:
         row = read_optional(path, errors)
+        from specrhythm.serving.fixed_artifacts import retained_report
+
+        if (path.parent / "supervisor-decision.json").exists():
+            row = retained_report(path.parent, row)
         runs.append(dict(path=str(path), **{k: row.get(k) for k in (
             "capacity_status", "execution_status", "measurement_status", "cleanup_status",
             "formal_comparison_eligible", "effective_exit_code", "errors",

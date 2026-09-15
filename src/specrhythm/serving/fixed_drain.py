@@ -37,6 +37,7 @@ def settle(
         "deadline_ns": deadline,
         "settled_requests": 0,
         "phase": "wait_owner",
+        "mode": runtime_mode, "run_directory": str(directory.resolve()),
         "receipts": [],
         "cleanup_status": "PENDING",
     }

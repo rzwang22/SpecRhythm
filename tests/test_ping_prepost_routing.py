@@ -88,6 +88,11 @@ def test_true_service_factory_and_target_engine_classes(
     )
     assert len(owners) == 1 and not owners[0]._thread.is_alive()
     assert (tmp_path / "draft-backend-report.json").is_file()
+    if mode.endswith("-k3"):
+        from specrhythm.phase4.report_publication import qualify_final_report
+
+        receipt = qualify_final_report(tmp_path / "draft-backend-report.json")
+        assert receipt["owner_stopped"] and receipt["status"] == "COMPLETE"
 
 
 def test_initial_refill_adapter_uses_one_owner_registration(tmp_path, monkeypatch):

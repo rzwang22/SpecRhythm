@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import time
 
 from specrhythm.serving.fixed_audit import FixedAuditMixin
@@ -38,6 +39,10 @@ def serve(config, directory, socket_path, mode, *, backend_class=None):
         backend = (backend_class or FixedDraftBackend)(config)
         write_once(directory / "draft-startup.json", backend.provenance)
         cls = DiagnosticDualMachine if mode == "pingpong" else diagnostic_serial_machine
+        if mode == "target" and os.environ.get("SR_K3_MANAGED_LOCAL") == "1":
+            from specrhythm.serving.fixed_settle import PublishedDiagnosticSerialMachine
+
+            cls = PublishedDiagnosticSerialMachine
         return cls(backend, candidate_budget=4, report_path=report)
 
     if mode == "pingpong":
