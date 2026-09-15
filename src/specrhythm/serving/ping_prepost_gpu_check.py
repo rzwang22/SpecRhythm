@@ -76,7 +76,7 @@ def coverage(runtime, backend):
 
 
 def run(source, directory, *, modes=MODES, protocol=PROTOCOL,
-        coverage_check=coverage, require_mixed=True):
+        coverage_check=coverage, require_mixed=True, native_check=None):
     from specrhythm.serving.fixed_cli import run_point
 
     require(not directory.exists(), "joint correctness needs a fresh root")
@@ -120,7 +120,11 @@ def run(source, directory, *, modes=MODES, protocol=PROTOCOL,
                 ),
                 "joint actual Target layout invalid",
             )
-            receipts.append(dict(mode=mode, point=str(point), execution="PASS", cleanup="PASS"))
+            proof = {}
+            if native_check is not None and mode in modes:
+                proof = dict(native_target_geometry=native_check(runtime, mode, full_fixture=True))
+            receipts.append(dict(mode=mode, point=str(point), execution="PASS", cleanup="PASS",
+                                 **proof))
         layer = "joint_output_and_mixed_verification"
         result = compare_outputs(runtimes, modes=modes, require_mixed=require_mixed)
         output_status = "PASS"

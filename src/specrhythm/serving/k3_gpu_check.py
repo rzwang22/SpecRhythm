@@ -7,6 +7,7 @@ from pathlib import Path
 
 from specrhythm.serving.common import require
 from specrhythm.serving.k3 import MODES, PROTOCOL, accounting_complete
+from specrhythm.serving.k3_acceptance import native_geometry
 from specrhythm.serving.ping_prepost_gpu_check import run as joint_run
 
 
@@ -71,6 +72,7 @@ def run(source, directory):
         protocol=PROTOCOL,
         coverage_check=coverage,
         require_mixed=False,
+        native_check=native_geometry,
     )
 
 

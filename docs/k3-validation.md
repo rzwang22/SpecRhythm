@@ -359,3 +359,55 @@ fsync replaced by a no-op in that isolated benchmark process, median times are5.
 legacy and4.9817ms prepared. This is supplemental local CPU evidence, not server timing,
 GPU overlap, durable-write performance or a projected throughput gain. Structural
 regressions assert operation/record conservation rather than millisecond thresholds.
+
+
+## 2026-09-15 entry ceiling repair (after fca2118)
+
+Continued from clean PR HEAD `6a8072dd2ba4e478447666234fc4864ea8d48477`, retaining
+`fca2118b89d21b11f18f5de43d69657e820087ab` and its four-mode configuration parent.
+The old measurement heredoc used ceiling8 for every mode. Real CPU-substituted
+`fixed_runtime.run/drive -> native timeline hooks -> serialization -> summarize ->
+emit_result -> point_reports -> exact shell heredoc` reproduces rejection of both
+Serial B16 reports, after all original qualification checks pass. Both Ping B8
+reports pass that old gate. The old source heredoc is retained as a read-only
+regression fixture, not as rewritten historical evidence.
+
+Previous shell tests replaced the entire Python command and tested orchestration;
+they never executed PY_MEASUREMENT. The new tests execute it in a separate actual
+Python process. The CPU client fixture now honors the real admission payload's
+capacity instead of silently slicing every mode to8. GPU computation remains a
+replacement; actual report construction, native observation hooks and qualifiers
+are production functions.
+
+`k3_acceptance` validates mode/point, strictly typed geometry, reported active and
+Target capacities, native TP request cardinality, and measured batch statistics.
+A full-batch fixture checks one genuine native-record forward containing16 distinct
+requests for each Serial mode, not a maximum of16. The real joint loop invokes this
+check for **each** K3 mode before continuing; the older protocol coverage check on
+the eager run remains. Full-batch proof is retained in joint run receipts and the
+comparison, and runtime native records survive the existing single archive projection.
+Missing receipt evidence fails the four-mode comparison. Partial batches are not
+relabelled full, and raw owner underfill/lifecycle reasons remain available.
+
+Audit of remaining paths: K3 runner configuration/capacity already uses geometry;
+scan timing's geometry comparison is now strictly typed. The generic joint loop
+receives four explicit modes and a K3-only callback. Legacy prepost3 `coverage()`
+ceiling8 and the original default three-mode decode grid are not used by this
+single-point K3 entry and remain unchanged. Export's `--k3` uses all four MODES;
+comparison also rejects a report whose mode differs from its selected filename.
+There is no GPU algorithm or measurement boundary change.
+
+Development checks retained: the first test fixture omitted the production
+`emit_result` layer and therefore lacked capacity_status; adding that real layer
+exposed the intended two Serial assertion failures. The first implementation used
+a nonexistent Target forward_id in a compact receipt; the real producer test
+caught it, and receipts now reference actual rank/host_start_ns (plus native B/IDs).
+An attempted bad Ping B16 performance fixture was correctly stopped even earlier
+by K3Window; its negative gate test now injects actual non-scan B16 native records
+into a derived test view, explicitly not an original run qualification.
+
+Related Python3.9 and Python3.12 production-chain suites each passed157 tests.
+Ruff, compileall on3.9/3.11/3.12,217 source-file Python3.9 AST checks and21 tracked
+Bash scripts passed. Full suite:2645 passed,3 skipped in366.87s (opt-in CUDA and two macOS-inapplicable
+Linux process cases). No assertion or timeout was relaxed. Pinned execution is
+recorded in the runbook/project status. No AutoDL or GPU was invoked; new GPU qualification and performance PENDING.

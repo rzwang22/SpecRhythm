@@ -29,6 +29,14 @@ claims.
 
 ## Pull request progress
 
+### PR #5 — 四模式入口 Target ceiling 修复（2026-09-15）
+
+- 从 `6a8072dd2ba4e478447666234fc4864ea8d48477` 继续，保留 fca2118 执行优化与四模式配置。确认 `PY_MEASUREMENT` 将所有模式固定为 ceiling8，错误拒绝两个 Serial B16；此前 shell 测试替换整段 Python，未执行该验收。
+- 入口统一使用 geometry：Serial/Serial-eager16、PingPong/eager8。严格核对模式、geometry类型、实际batch摘要和原生TP请求集合。联合 correctness 对每个模式要求至少一个满批原生forward；Serial内部仍B8、重复请求、顺序拆forward、缺rank均不能通过。比较和单包保留满批证据；尾部小batch及原有原因保持。
+- 未改变GPU算法、K3、no-bonus、调度/READY、采样、KV检查、日志或窗口。旧三模式/旧prepost3默认规则不变。新GPU correctness/overlap/performance PENDING。
+- 本轮全量2645通过/3跳过（366.87秒）；Python3.9与3.12相关各157通过；Ruff、三版本compileall、217源文件3.9语法、21脚本Bash、diff检查通过。无放宽断言或超时。基线入口HEAD的GitHub八项检查已实际SUCCESS；新提交CI在交付时单独报告，不混同基线。
+
+
 ### PR #5 — K3 四模式与 admission 编码复用（2026-09-15）
 
 - 保留 `d007dce448bd2a7d510172222ae166d7bb6f299e` 和入口 `3a2ffde4cd4350392b7c6f9e98ebe2cd1d1d1315`。独立矩阵提交 `ed6ff9703765e2c36b9ec4b3d0cb91edc1125d8f` 实现 Serial/Serial-eager 单组16、PingPong/eager A8+B8；实际 Target ceiling16/8，兼容 Draft 物理合批上限16。

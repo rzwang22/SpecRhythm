@@ -85,9 +85,9 @@ assert o['identity_matching']=='bound-prefix' and o['samples'] is None
 assert (o['warmup_steps'],o['window_seconds'],o['repeats'],o['setup_timeout'],o['drain_timeout'])==(2,30,1,900,60)
 m=read_json(root/'inputs/execution-B16.json')
 c=m['fixed_diagnostic']['capacity'][os.environ['SR_AUDIT_SERVING_MODE']]
-from specrhythm.serving.k3 import geometry
+from specrhythm.serving.k3 import geometry, matches_geometry
 g=geometry(os.environ['SR_AUDIT_SERVING_MODE'])
-assert c['execution_geometry']==g
+assert matches_geometry(c['execution_geometry'],os.environ['SR_AUDIT_SERVING_MODE'])
 assert (m['active_limit'],c['per_cohort_capacity'],c['max_requests_per_target_forward'])==(16,max(g['home_capacities'].values()),g['target_request_ceiling'])
 assert c['proposal_budget']==3
 PY_CONFIG
@@ -106,16 +106,18 @@ for POINT in "${MODES[@]}"; do
   STAGE=measurement
   "$SR_FIXED_PYTHON" - <<'PY_MEASUREMENT'
 import os,pathlib
+from specrhythm.serving.common import read_json
 from specrhythm.serving.fixed_artifacts import point_reports
+from specrhythm.serving.k3 import geometry
+from specrhythm.serving.k3_acceptance import measurement
 rows=[r for r in point_reports(pathlib.Path(os.environ['SR_FIXED_ROOT'])) if not r['point'].get('probe')]
 assert len(rows)==1
 r=rows[0]
-assert r['mode']==os.environ['SR_AUDIT_SERVING_MODE'] and r['batch']==16
-assert all(r[k]=='PASS' for k in ('capacity_status','execution_status','measurement_status','cleanup_status'))
-assert r['formal_comparison_eligible'] and r['effective_exit_code']==0
-assert r['stop_reason']=='time_budget' and r['measured_window_ms']>=30000
-assert 1 <= r['actual_target_batch']['min'] <= r['actual_target_batch']['max'] <= 8
-print('Original execution/measurement/cleanup PASS; real Target ceiling8, active16.')
+mode=os.environ['SR_AUDIT_SERVING_MODE']
+# Includes formal_comparison_eligible and original run qualification, then native TP checks.
+measurement(r,read_json(pathlib.Path(r['artifact'])/'runtime.json'),mode)
+g=geometry(mode)
+print(f"Original execution/measurement/cleanup PASS; mode={mode}, real Target ceiling{g['target_request_ceiling']}, active{g['active_limit']}.")
 PY_MEASUREMENT
   STAGE=diagnostic_evidence
   "$SR_FIXED_PYTHON" -m specrhythm.serving.ping_prepost_evidence \

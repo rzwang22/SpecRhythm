@@ -36,7 +36,7 @@ hardware, produced = _hardware, _produced
 def driven(produced, monkeypatch, tmp_path):
     calls = []
 
-    def build(mode, stage, driver=None, *, full_run=False):
+    def build(mode, stage, driver=None, *, full_run=False, admission_limit=None):
         base = tmp_path / str(len(calls))
         calls.append((mode, stage))
         h = produced(mode, True, root=base)  # Actual startup/snapshot, no decode hooks yet.
@@ -115,9 +115,9 @@ def driven(produced, monkeypatch, tmp_path):
                 if operation == "status":
                     return dict(inflight_request_ids=[], failures={})
                 if operation == "pp_admit":
-                    return dict(
-                        claims=[dict(request_id=r) for r in payload["active_request_ids"][:8]]
-                    )
+                    n = payload["capacity"] if admission_limit is None else admission_limit
+                    return dict(claims=[dict(request_id=r)
+                                        for r in payload["active_request_ids"][:n]])
                 if operation in ("pp_register", "pp_stop"):
                     return {}
                 if operation == "finish_request":

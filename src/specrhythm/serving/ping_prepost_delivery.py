@@ -112,6 +112,7 @@ def comparison(directory, *, modes=MODES):
             continue
         require(path.stat().st_size <= 8 * 1024 * 1024, "compact point report too large")
         r = read_json(path)
+        require(r["mode"] == mode, "comparison report/file mode mismatch", artifact=str(path))
         reports.append(r)
         points.append(
             dict(
@@ -170,6 +171,15 @@ def comparison(directory, *, modes=MODES):
         joint_value = read_json(joint)
         valid = valid and joint_value.get("protocol") == "specrhythm.uniform-k3.v1"
         valid = valid and {r["mode"] for r in joint_value.get("runs", [])} == {"target", *modes}
+    native = {}
+    if "serial-eager-k3" in modes and joint.exists():
+        # New four-mode entries must retain the actual full-batch fixture, including
+        # both Serial B16 runs. Older three-mode historical packages are unchanged.
+        from specrhythm.serving.k3_acceptance import full_batch_receipt
+
+        native = {r["mode"]: r.get("native_target_geometry")
+                  for r in read_json(joint).get("runs", []) if r["mode"] in modes}
+        valid = valid and all(full_batch_receipt(native.get(m), m) for m in modes)
     return dict(
         schema_version="specrhythm.ping-prepost-delivery.v1",
         points=points,
@@ -179,6 +189,7 @@ def comparison(directory, *, modes=MODES):
         "explicit K3 mode geometry may differ; no cross-run GPU UUID comparison",
         missing_points=missing,
         joint_correctness="joint/result.json" if joint.exists() else "joint/failure.json",
+        joint_native_target_geometry=native,
         valid=valid,
         performance_conclusion="single window mechanism check; "
         "no stable speedup conclusion; use new run tags for later interleaved repeats",

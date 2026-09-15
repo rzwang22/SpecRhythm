@@ -170,9 +170,10 @@ def timing(runtime, backend, point, opts):
                 else point["batch"])
     execution_geometry = runtime.get("capacity", {}).get("execution_geometry")
     if execution_geometry is not None:
-        from specrhythm.serving.k3 import geometry
+        from specrhythm.serving.k3 import matches_geometry
 
-        require(execution_geometry == geometry(point["mode"]), "K3 runtime geometry mismatch")
+        require(matches_geometry(execution_geometry, point["mode"]),
+                "K3 runtime geometry mismatch")
         expected = execution_geometry["target_request_ceiling"]
     devices = runtime["target_devices"]
     require(

@@ -1,5 +1,24 @@
 # Unified K3 (explicit experimental modes)
 
+Current four-mode geometry is defined by `k3.geometry(mode)`: Serial and Serial-eager
+have one A16 home and Target ceiling16; PingPong and PingPong-eager have A8/B8 and
+ceiling8. The initial three-mode design below is historical; the later four-mode
+section supersedes only its geometry, not K3 or no-bonus semantics.
+
+The September15 entry fix uses that same geometry in `PY_CONFIG`, `PY_MEASUREMENT`
+and the offline native-geometry gate. The fixed16-request joint fixture must show
+at least one **single forward per TP rank** with16 distinct internal requests in
+both Serial modes (8 in both Ping modes). Both ranks must describe exactly the
+same scheduled request set; a duplicate ID, multiple forwards per step, missing
+rank, inconsistent summary or mode fails. This is an operator GPU evidence gate;
+CPU replacements test its operation without establishing native GPU results.
+
+The performance gate recomputes batch statistics from measured steps and their
+native TP associations. It does not require every step to be full: request-batch
+underfill remains linked to owner `admission.unfilled_reason/deferred`, population
+and lifecycle records. Candidate EOS/budget tails are a separate token-length
+concept. No feedback, scheduling, READY publication, KV or logging policy changes.
+
 `serial-k3`, `pingpong-k3`, `pingpong-eager-k3` use three actual candidates,
 including the seed, and the existing no-bonus acceptance protocol. Old prepost3
 remains P1/P4. Active16, immutable homes8/8, one TP2 Target ceiling8, one Draft.

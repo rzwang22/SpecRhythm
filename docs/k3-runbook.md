@@ -22,6 +22,16 @@ A short tail must have an EOS/output-budget reason. Refusal or insufficient capa
 never silently lowers B16 toB8. Demand3/reserve4 and eager Draft6/6 remain distinct
 from actual candidates and query positions. Capacity v2 checks each mode's geometry.
 
+Entry acceptance is mode-specific and uses `geometry(mode)` in configuration and
+measurement. It cross-checks actual native TP request sets and batch statistics;
+Serial B16 is accepted, Ping B16 is rejected. The joint full16-request fixture
+additionally requires a full native B16 forward for each Serial mode (B8 for Ping),
+so a hidden internal B8 cap cannot pass. The first full step/rank/host_start_ns/IDs
+is retained in `joint/result.json` and `comparison.json`; raw native records remain
+in the same archive. Partial performance batches keep original underfill and
+lifecycle evidence. This repairs the old fca2118 ceiling8 entry omission, without
+changing algorithms or reinterpreting historical results.
+
 This is not a relabelling of the old `d007dce448bd2a7d510172222ae166d7bb6f299e`
 Serial B8 result. That three-mode run and its original PASS/single-window conclusions
 remain historical. See [validation](k3-validation.md) and [design](k3-design.md).
@@ -126,3 +136,9 @@ OBSERVED means some nonzero native overlap, not adequate recovery hiding. A sing
 window's difference is not stable speedup, and CPU audit/record time is never subtracted
 from measured throughput. Earlier READY publication remains a separate future change,
 to be decided after this package returns.
+
+
+Entry-repair local validation: full pytest2645 passed/3 skipped; Python3.9 and3.12
+related suites157 passed each; Ruff, three-version compileall, Python3.9 AST, all21
+tracked Bash scripts and diff checks passed. Skips are opt-in CUDA and two Linux
+process tests on macOS. These CPU results do not qualify a GPU run.
