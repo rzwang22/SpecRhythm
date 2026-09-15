@@ -13,76 +13,75 @@ SCHEMA = "specrhythm.final-report-publication.v1"
 STATE_NAME = "draft-report-state.json"
 
 
-def publish_final_report(path, build, *, deadline_ns, owner_stopped):
+def publish_final_report(path, build, *, deadline_ns, owner_stopped, mode="unspecified"):
+    from specrhythm.phase4.drain_deadline import deadline_context, validate_deadline
+
     path = Path(path)
-    if not owner_stopped:
-        raise ValueError("final report requires a stopped owner")
     if path.exists():
-        raise FileExistsError(path)
+        raise FileExistsError(path)  # Never rewrite an existing immutable report/receipt.
+    stage = "deadline_validation"
+    state = dict(
+        schema_version=SCHEMA, status="WRITING", report_file=path.name,
+        writer_pid=os.getpid(), started_ns=time.monotonic_ns(),
+        deadline_ns=deadline_ns, owner_stopped=owner_stopped,
+        final_file_published=False, mode=mode,
+    )
 
     def bounded():
-        if type(deadline_ns) is not int or time.monotonic_ns() >= deadline_ns:
-            raise TimeoutError("final Draft report exceeded original drain deadline")
+        validate_deadline(deadline_ns, mode=mode, directory=path.parent.resolve(),
+                          phase="report:" + stage)
 
-    bounded()
-    fd, temporary = tempfile.mkstemp(
-        prefix="." + path.name + ".", suffix=".partial", dir=path.parent
-    )
-    state = dict(
-        schema_version=SCHEMA,
-        status="WRITING",
-        report_file=path.name,
-        temporary_file=Path(temporary).name,
-        writer_pid=os.getpid(),
-        started_ns=time.monotonic_ns(),
-        deadline_ns=deadline_ns,
-        owner_stopped=True,
-        final_file_published=False,
-    )
     try:
+        bounded()
+        if not owner_stopped:
+            raise ValueError("final report requires a stopped owner")
+        stage = "temporary_create"
+        fd, temporary = tempfile.mkstemp(
+            prefix="." + path.name + ".", suffix=".partial", dir=path.parent)
+        state["temporary_file"] = Path(temporary).name
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            stage = "writing_state"
             atomic_write_json(path.with_name(STATE_NAME), state)
+            stage = "build"
             value = build()
             bounded()
+            stage = "serialize"
             json.dump(
-                {
-                    **value,
-                    "report_publication": dict(
-                        schema_version=SCHEMA, state_file=STATE_NAME, owner_stopped=True
-                    ),
-                },
-                handle,
-                indent=2,
-                sort_keys=True,
-                allow_nan=False,
+                {**value, "report_publication": dict(
+                    schema_version=SCHEMA, state_file=STATE_NAME, owner_stopped=True)},
+                handle, indent=2, sort_keys=True, allow_nan=False,
             )
             handle.write("\n")
+            stage = "flush"
             handle.flush()
+            stage = "fsync"
             with file_context(path, physical_path=temporary, write_kind="immutable_json"):
                 os.fsync(handle.fileno())
         bounded()
+        stage = "publish"
         # Same-filesystem exclusive publication: never overwrite an existing final.
         os.link(temporary, path)
         state["final_file_published"] = True
         bounded()
-        state.update(
-            status="COMPLETE",
-            bytes=path.stat().st_size,
-            sha256=sha256_file(path),
-            completed_ns=time.monotonic_ns(),
-        )
+        stage = "verify"
+        state.update(status="COMPLETE", bytes=path.stat().st_size, sha256=sha256_file(path),
+                     completed_ns=time.monotonic_ns())
         bounded()
+        stage = "complete_state"
         atomic_write_json(path.with_name(STATE_NAME), state)
         bounded()
+        stage = "remove_temporary"
         Path(temporary).unlink()
         return state
     except BaseException as error:
-        state.update(
-            status="FAILED",
-            error=str(error),
-            exception_type=type(error).__name__,
-            failed_ns=time.monotonic_ns(),
-        )
+        context = deadline_context(deadline_ns, mode=mode, directory=path.parent.resolve(),
+                                   phase="report:" + stage)
+        error.report_publication_context = context
+        state.update(status="FAILED", error=str(error), exception_type=type(error).__name__,
+                     failed_ns=time.monotonic_ns(), failed_stage=stage,
+                     report_publication_context=context)
+        if hasattr(error, "deadline_context"):
+            state["deadline_context"] = error.deadline_context
         try:
             atomic_write_json(path.with_name(STATE_NAME), state)
         except Exception as secondary:

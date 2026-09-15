@@ -16,6 +16,8 @@ from types import SimpleNamespace
 from specrhythm.continuation.trace import TRACE, references
 from specrhythm.serving.fixed_settle import remaining
 
+_DRAIN_FAILURE = object()  # Not an operation that can arrive over the JSON RPC.
+
 
 class EagerOwner:
     def __init__(self, factory, *, timeout_seconds=900, queue_capacity=0):
@@ -57,6 +59,8 @@ class EagerOwner:
                     command = None
                 while command is not None:
                     operation, payload, response = command
+                    if operation is _DRAIN_FAILURE:
+                        raise payload  # Internal fault only; no GPU mutation on the socket thread.
                     causal = payload.pop("_causal", {})
                     TRACE.event("owner_dequeue", operation=operation, **causal)
                     if TRACE.enabled:
@@ -173,6 +177,15 @@ class EagerOwner:
                     self.machine.backend.shutdown()
                 finally:
                     self.machine.owner_stopped = True
+
+    def fail_drain(self, error, deadline_ns):
+        """Fault cleanup on the owner; never manufacture a replacement deadline."""
+        if self._thread.is_alive() and self.failure is None and not self.closed:
+            self.commands.put_nowait((_DRAIN_FAILURE, error, None))
+        # A missing deadline cannot authorize a fresh wait budget. The existing
+        # supervisor bounds the still-running owner/process in that failure case.
+        timeout = max(0, (deadline_ns - time.monotonic_ns()) / 1e9) if deadline_ns else 0
+        self._thread.join(timeout=timeout)
 
     def _publish_status(self):
         pass  # Legacy owners keep their original synchronous status path.

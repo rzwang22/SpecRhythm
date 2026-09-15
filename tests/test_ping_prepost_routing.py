@@ -1,6 +1,7 @@
 """New mode configuration and actual production service construction; no CUDA loaded."""
 
 import sys
+import time
 from types import SimpleNamespace as NS
 
 import pytest
@@ -71,7 +72,7 @@ def test_true_service_factory_and_target_engine_classes(
             assert isinstance(server.machine.machine, K3Machine)
             assert isinstance(server.machine.machine.backend, K3BackendMixin)
         # No admitted work: exercise actual shutdown, owner join and final report.
-        server.machine.call("shutdown", {})
+        server._dispatch("shutdown", {"deadline_ns": time.monotonic_ns() + 3_000_000_000})
 
     monkeypatch.setattr(eager_draft, "control", lambda: {"requests": {"r": {}}})
     monkeypatch.setattr(eager_draft.EagerSerialServer, "serve", server_serve)

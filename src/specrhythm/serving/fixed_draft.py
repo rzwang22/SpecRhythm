@@ -71,7 +71,10 @@ def serve(config, directory, socket_path, mode, *, backend_class=None):
         machine = factory()
         failure = None
         try:
-            DiagnosticSerialServer(socket_path, machine, event_log=events).serve(ready)
+            server = DiagnosticSerialServer(socket_path, machine, event_log=events)
+            server.serve(ready)
+            if server.drain_failure is not None:
+                raise server.drain_failure
         except BaseException as error:
             failure = error
             record_error(directory, error, "draft_server")

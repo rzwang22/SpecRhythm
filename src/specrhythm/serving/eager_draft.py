@@ -27,15 +27,30 @@ class EagerFixedDraftBackend(GPUContinuationBackendMixin, FixedDraftBackend):
 
 class EagerSerialServer(DraftUnixServer):
     deadline_ns = None
+    deadline_contract = None
+    drain_failure = None
 
     def _dispatch(self, operation, payload):
-        if "deadline_ns" in payload:
-            if self.deadline_ns is None:
-                self.deadline_ns = payload["deadline_ns"]
-            elif self.deadline_ns != payload["deadline_ns"]:
-                raise ValueError("eager drain must retain its original absolute deadline")
+        guarded = self.deadline_contract is not None
         try:
+            if guarded and ("deadline_ns" in payload or operation in
+                            ("pp_stop", "diagnostic_settle", "shutdown")):
+                if self.drain_failure is not None:
+                    raise self.drain_failure
+                self.deadline_ns = self.deadline_contract.bind(payload, operation)
+            elif "deadline_ns" in payload:
+                # Legacy non-K3 protocol remains unchanged.
+                if self.deadline_ns is None:
+                    self.deadline_ns = payload["deadline_ns"]
+                elif self.deadline_ns != payload["deadline_ns"]:
+                    raise ValueError("eager drain must retain its original absolute deadline")
             result = self.machine.call(operation, payload)
+        except BaseException as error:
+            if guarded and (hasattr(error, "deadline_context") or operation in
+                            ("pp_stop", "diagnostic_settle", "shutdown")):
+                self.drain_failure = self.drain_failure or error
+                self.running = False
+            raise
         finally:
             if self.machine.failure is not None:
                 self.running = False
@@ -141,8 +156,15 @@ def serve(config, directory, socket_path, *, backend_class=None, prepost_mode=No
     server = EagerSerialServer(
         socket_path, owner, event_log=CheckpointJsonl(directory / "draft-work-events.jsonl")
     )
+    strict_deadline = bool(prepost_mode and prepost_mode.endswith("-k3"))
+    if strict_deadline:
+        from specrhythm.phase4.drain_deadline import DrainDeadline
+
+        server.deadline_contract = DrainDeadline(prepost_mode, directory.resolve())
     try:
         server.serve(directory / "draft-service-ready.json")
+        if server.drain_failure is not None:
+            raise server.drain_failure
         if owner.failure is not None:
             raise RuntimeError(str(owner.failure))
     except BaseException as error:
@@ -151,9 +173,23 @@ def serve(config, directory, socket_path, *, backend_class=None, prepost_mode=No
     finally:
         original_error = sys.exc_info()[1]
         cleanup_error = None
-        deadline = server.deadline_ns or time.monotonic_ns() + 60_000_000_000
+        deadline = server.deadline_ns
+        if not strict_deadline:
+            deadline = deadline or time.monotonic_ns() + 60_000_000_000
         try:
             # Reuse the coordinator's shared deadline, including join and log flush.
+            if strict_deadline and original_error is not None:
+                # Signal the existing owner fault path at its next fenced command boundary.
+                # No new budget if a valid coordinator deadline never arrived: the external
+                # process supervisor still owns the original setup/drain absolute bound.
+                owner.fail_drain(original_error, deadline)
+                raise original_error
+            if strict_deadline:
+                from specrhythm.phase4.drain_deadline import MISSING, validate_deadline
+
+                validate_deadline(deadline if deadline is not None else MISSING,
+                                  mode=prepost_mode, directory=directory.resolve(),
+                                  phase="owner_close")
             owner.close(deadline)
             from specrhythm.serving.fixed_logging import finish_current
             from specrhythm.serving.fixed_settle import remaining
@@ -167,7 +203,8 @@ def serve(config, directory, socket_path, *, backend_class=None, prepost_mode=No
             if original_error is None:
                 raise
         finally:
-            if owner.machine is not None and not owner._thread.is_alive() and not report.exists():
+            if (owner.machine is not None and not owner._thread.is_alive() and not report.exists()
+                    and not (strict_deadline and (original_error or cleanup_error))):
                 def build_report():
                     return {**owner.machine.backend.report(),
                             ("prepost" if prepost_mode else "rolling_eager"):
@@ -177,7 +214,8 @@ def serve(config, directory, socket_path, *, backend_class=None, prepost_mode=No
                         from specrhythm.phase4.report_publication import publish_final_report
 
                         publish_final_report(report, build_report, deadline_ns=deadline,
-                                             owner_stopped=not owner._thread.is_alive())
+                                             owner_stopped=not owner._thread.is_alive(),
+                                             mode=prepost_mode)
                     else:
                         write_immutable_report(report, build_report())
                 except BaseException as error:

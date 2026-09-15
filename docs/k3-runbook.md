@@ -167,3 +167,12 @@ not a controlled estimate of this infrastructure change. GPU/filesystem acceptan
 A100 local storage/read/report repair execution: `ae5be9a6b318b31931808fd1523064b33e2f0975`.
 The entry-only commit pins this complete source; both scripts and the local delivery module
 exist in this execution tree. The terminal block above invokes it in a fresh worktree.
+
+
+Target-only deadline repair: the coordinator's one absolute drain deadline now reaches
+shutdown and final publication, as it already reached diagnostic settlement. Receivers
+reject missing/malformed/conflicting values before shutdown; only actual expiry is a
+timeout. Error/receipt details and partial bytes remain in the same archive. A failed
+protocol cannot be repaired into PASS by a later response. The new fixed entry is pinned
+in a separate delivery commit to the tested implementation; no new GPU run has occurred.
+See the dated sections in [validation](k3-validation.md) and [design](k3-design.md).

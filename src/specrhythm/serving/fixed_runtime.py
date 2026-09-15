@@ -762,7 +762,7 @@ def run(root, manifest_path, directory, point, *, probe=False):
             result = {
                 "probe": True,
                 "capacity": capacity_metadata(point["mode"], 0),
-                "draft_shutdown": probe_client.call("shutdown", {}),
+                "draft_shutdown": probe_client.call("shutdown", {"deadline_ns": probe_deadline}),
                 "target_devices": llm.collective_rpc(
                     target_report, timeout=remaining(probe_deadline)
                 ),

@@ -534,3 +534,56 @@ printed afterward and retained locally, avoiding a false self-referential final 
 A copy-failure fallback embeds the actual copy error; no extra upload is requested.
 
 GPU correctness, native overlap/performance and real A100/DPC adaptation remain PENDING.
+
+## Local Target-only drain deadline contract (2026-09-15)
+
+The A100 control failure was a shutdown argument omission, not elapsed drain time.
+`fixed_drain.settle()` created one absolute monotonic integer-nanosecond deadline and
+sent it with each diagnostic settlement, but its shutdown-mode list omitted `target`.
+The local entry selects `PublishedDiagnosticSerialMachine` for that control. Its server
+replaced the missing shutdown argument with `None`, and the publisher's combined
+`not int OR expired` test mislabeled the parameter error as `TimeoutError` after backend
+shutdown. This occurred 0.382452022s into a60s drain, with59.617547978s remaining.
+
+The coordinator now includes Target-only in shutdown deadline propagation; the separate
+non-scan capacity shutdown also forwards its already-created `probe_deadline`. No deadline
+is synthesized by the receiver. A small phase4 deadline contract validates exact `int`,
+positive and at most signed64-bit nanoseconds; bool, float, string, None, missing and
+nonpositive/out-of-range integers fail. Each receiver binds the first legal value for
+this drain and checks current time and equality on every subsequent use. Repeated equal
+settlement/shutdown values are allowed; changed values fail before owner/KV mutation.
+Target-only rechecks in its machine before the original unresolved-proposal/backend
+shutdown checks. Four K3 modes check before dispatch to their existing owner. The original
+value then bounds owner join, final logging and report publication. Existing non-K3
+server compatibility remains; no proposal, READY, sampling or GPU scheduling code changes.
+
+| Failure | Exception / retained evidence |
+|---|---|
+| Missing argument | `DeadlineContractError`, `missing_deadline`, presence=false |
+| Wrong type/value | `DeadlineContractError`, `invalid_deadline`, actual value/type |
+| Different bound value | `DeadlineContractError`, `conflicting_deadline`, original and received |
+| Legal value reached | `DeadlineExpired` (`TimeoutError`), `expired_deadline`, actual remaining_ns<=0 |
+| Report operation fails | Original exception; publication phase build/serialize/flush/fsync/publish/verify/state retained |
+
+The context includes actual mode, operation/report phase, resolved directory and current
+monotonic time. Remaining time is emitted only for a legal deadline; missing does not mean0.
+RPC error responses preserve this structured context; coordinator and Draft first-error
+records and the archive keep it. A guarded service latches the first drain failure, sends
+one error response if the connection permits, and exits to fault cleanup. A subsequent
+corrected payload cannot turn that failed drain into success. Existing broken-socket
+handling still avoids a second response on a disconnected connection.
+
+K3 fault cleanup queues an internal error on the same owner, so backend failure/release
+runs at its existing fenced command boundary. It joins only within an already-received
+coordinator deadline. If no legal deadline ever arrived, it authorizes no replacement
+wait budget: cleanup is requested asynchronously and the existing absolute process
+supervisor bounds completion/termination. This remains failed/unqualified. Normal K3
+cleanup no longer falls back to `now+60s`; the old non-K3 fallback is unchanged. Target-only
+uses its existing backend fault cleanup. Neither path publishes a successful final receipt
+from a protocol error. Report failures keep partial bytes and a FAILED publication state;
+existing immutable reports are not overwritten. Owner/API/exit-code success alone cannot
+satisfy the receipt, KV release, process cleanup or archive qualification checks.
+
+Local mutable storage, verified single-package DPC copy/fallback, setup900/drain60,
+Serial ceilings16 and PingPong ceilings8, resident360 and all four performance points are
+unchanged. No A100 performance or filesystem causal claim follows from this CPU repair.

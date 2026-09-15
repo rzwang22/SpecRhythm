@@ -475,3 +475,54 @@ Python3.9 related suite131 passed plus28 final delta tests; Python3.12 related s
 131 passed plus46 final delta tests. Pinned source-only gate17 passed. Ruff,
 compileall3.9/3.11/3.12,220 source-file Python3.9 AST, all21 Bash scripts and diff
 checks passed. New GPU/DPC validation remains PENDING.
+
+## A100 local Target-only shutdown omission (2026-09-15)
+
+Read-only source bundle:
+`pingpong-k3-delivery-a100-local-20260915T140620Z-761.tar.gz`, SHA256
+`430a325a9c9522bebddeaf89aecd1e8f5bd3b4bd18bc0e93df199e52371f4eae`.
+All146 logical entries were resolved through inventory.logical_paths and checked against
+their byte counts and SHA256. Source execution `ae5be9a6b318b31931808fd1523064b33e2f0975`,
+entry `1975061693a72f7ac1880da6b7cff82efc39fe9d`; branch was clean and equal to remote entry
+HEAD before this repair. Existing commits/results remain intact; PR5 stays Draft.
+
+Four capacity points: capacity/execution/cleanup PASS, measurement not applicable,
+effective_exit_code0. All five included process supervisors report zero state-read errors.
+The Target-only run `joint/target/runs/joint-correctness-target-B16-A-20260915T221651-707631036144378`
+failed at `drain:draft_shutdown`: start707675077154214ns, deadline707735077154214ns,
+end707675459606236ns. Elapsed0.382452022s, remaining59.617547978s. The first exception
+was the report publisher's `TimeoutError` from a missing deadline, not actual expiry.
+Target-only execution FAILED/measurement INVALID/cleanup FAILED/effective_exit_code1
+remain historical. The joint suite and four performance points did not complete/start.
+Archive COMPLETE is export integrity, not joint correctness PASS. `/tmp` is overlay
+(physical backing unknown); persistence is DPC. The deadline bug does not implicate either
+A100 speed or DPC consistency.
+
+`tests/test_k3_shutdown_deadline.py` replaces only hardware and accept-loop orchestration:
+local entry environment -> `fixed_draft.serve` actual factory -> `fixed_drain.settle`
+payload construction -> real `UnixDraftClient` and AF_UNIX framed exchange -> actual server
+`_handle/_dispatch` -> actual state machine (and K3 owner) -> physical CPU KV settlement,
+report serialization/publication/read/size/hash receipt. The first test before production
+changes failed exactly at `shutdown, payload={}`, returning
+`RuntimeError: TimeoutError: final Draft report exceeded original drain deadline`.
+No GPU was required. The previous factory test supplied its own correct shutdown deadline,
+so it never exercised coordinator payload construction; that coverage gap is now explicit.
+
+New tests cover all five modes, identical/repeated deadlines, conflict/missing/None/bool/
+string/float/illegal integers, genuine expiry, pre-shutdown rejection and failure latching,
+first-message failure with owner fault release and no new budget. Report build, serialization,
+fsync, publication and verification failure/expiry cases retain phase and partial bytes,
+and cannot qualify. RPC error -> first/secondary error summary -> real export -> inventory
+reread preserves original error context and exit code. Existing runner/local-delivery tests
+still exercise first-error stop, copy failure/local fallback, one UPLOAD ONLY, four geometry
+and native B16 evidence rules. Hardware substitutes prove the CPU cleanup contract only;
+GPU correctness/cleanup/native overlap/performance on the repaired SHA remain PENDING.
+
+Local full suite:2756 passed/3 skipped in413.96s. Python3.9/3.12 related suites:
+432 passed each. After making the owner fault notification an internal, non-RPC sentinel,
+the final affected suite passed96 tests each on3.9/3.11/3.12. Ruff, three-version compileall,
+221 source files parsed as Python3.9,21 Bash scripts, static four-mode interface and diff
+checks passed. The three platform/opt-in skips are not GPU acceptance. Baseline entry CI
+had all eight GitHub checks SUCCESS; new execution/entry CI is reported separately.
+
+No assertions, timeouts, drain/setup budgets or diagnostic qualification were weakened.

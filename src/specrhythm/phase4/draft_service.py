@@ -564,6 +564,8 @@ class DraftUnixServer:
                 send_message(connection, {
                     "protocol_version": PROTOCOL_VERSION, "ok": False,
                     "error": f"{type(error).__name__}: {error}", "result": {},
+                    **{key: getattr(error, key) for key in
+                       ("deadline_context", "report_publication_context") if hasattr(error, key)},
                 })
             except Exception as secondary:
                 error.response_error = f"{type(secondary).__name__}: {secondary}"

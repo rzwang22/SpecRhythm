@@ -114,7 +114,8 @@ def settle(
         update("draft_shutdown")
         draft_shutdown = client.call(
             "shutdown", {"deadline_ns": deadline}
-            if runtime_mode in ("serial-eager", "serial-prepost3", "serial-eager-prepost3",
+            if runtime_mode in ("target", "serial-eager",
+                          "serial-prepost3", "serial-eager-prepost3",
                           "pingpong-prepost3", "pingpong-eager-prepost3",
                           "serial-k3", "serial-eager-k3",
                           "pingpong-k3", "pingpong-eager-k3") else {}

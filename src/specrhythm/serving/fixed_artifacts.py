@@ -20,6 +20,9 @@ def record_error(directory, error, phase):
         "timestamp_ns": time.monotonic_ns(),
         "traceback": "".join(traceback.format_exception(type(error), error, error.__traceback__)),
     }
+    for key in ("deadline_context", "report_publication_context"):
+        if hasattr(error, key):
+            row[key] = getattr(error, key)
     if hasattr(error, "response_error"):
         row["response_error"] = error.response_error
     try:

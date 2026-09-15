@@ -141,7 +141,11 @@ class UnixDraftClient:
         if response.get("protocol_version") != PROTOCOL_VERSION:
             raise RuntimeError("Draft service returned an incompatible protocol")
         if response.get("ok") is not True:
-            raise RuntimeError(str(response.get("error", "Draft service request failed")))
+            error = RuntimeError(str(response.get("error", "Draft service request failed")))
+            for key in ("deadline_context", "report_publication_context"):
+                if key in response:
+                    setattr(error, key, response[key])
+            raise error
         event = {
             "schema_version": "specrhythm.phase4-transport-event.v1",
             "transport": "unix-domain-socket",

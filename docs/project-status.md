@@ -29,6 +29,16 @@ claims.
 
 ## Pull request progress
 
+### PR #5 — Target-only 原始 drain deadline 传递（2026-09-15）
+
+- 从干净且与远端一致的 `1975061693a72f7ac1880da6b7cff82efc39fe9d` 继续，保留 `ae5be9a6b318b31931808fd1523064b33e2f0975` 的本地运行目录、监督器和单包交付修复。
+- 最新 A100 总包SHA256与146逻辑文件逐一核验。四容量及其cleanup通过，Target-only在drain 0.382452022秒处失败，仍剩59.617547978秒；监督器状态读取错误为0。旧FAILED/INVALID及未执行阶段保持，不归因于A100或DPC。
+- 真实生产链回归先复现 shutdown `{}` 导致 `None` 被发布器误报超时，再补齐同一绝对deadline。Target-only和四K3接收端严格区分缺失/非法/冲突与实际到期；先校验后执行shutdown，报告发布沿用原值。新路径无 `now+60s` 兜底，失败走既有owner/监督器清理并锁定首错。
+- RPC、首错汇总、总包保留模式、阶段、运行目录、收到的值/类型和单调时间；仅合法deadline计算余量。报告构建/写入/fsync/发布/校验错误分阶段保留，部分字节与完成回执校验继续严格。
+- 未改K3协议、READY、GPU算法、geometry、模型、测量配置或setup900/drain60。四模式容量→Target-only加四模式联合correctness→四性能点、唯一总包交付保持。新GPU correctness/cleanup/overlap/performance全部PENDING。
+- 全量pytest 2756通过/3跳过（413.96秒）；Python3.9/3.12相关各432通过；最终owner故障通知分别在3.9/3.11/3.12各96通过。Ruff、三版本compileall、221文件3.9语法、21脚本Bash、静态四模式接口和diff通过。首次红例是修复前真实链漏传deadline，未放宽任何断言/预算。新CI按提交实际状态单独报告；CPU测试不替代A100验收。
+
+
 ### PR #5 — A100 状态读取、本地运行目录与单包交付（2026-09-15）
 
 - 实现SHA `ae5be9a6b318b31931808fd1523064b33e2f0975`；随后固定入口仅绑定此SHA。
