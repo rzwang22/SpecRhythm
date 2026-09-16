@@ -1673,3 +1673,15 @@ case exceeded20s. This is not a fully green local suite; the causes of those tim
 failures are not claimed resolved. Earlier ENOSPC and temporary artifact-retention
 collision are documented separately in k3-validation. Ruff, compileall, Python3.9
 syntax and Bash checks passed. No assertion or timeout changes.
+
+Execution commit `899b54a6b58c0ea07046582c5a17934f630ac040` contains the complete
+policy, native geometry gates, strict attribution repair and regressions. The follow-up
+fixed-entry commit pins exactly this version. Both keep PR#5 Draft; no other PR changes.
+
+Final entry checks46 passed, then24 default/strict forwarding and local delivery
+checks passed on each of Python3.9/3.12. Execution files were byte-verified against
+the fixed implementation SHA and all eight static role/mode cases passed. Baseline
+and isolated current checks did not reproduce the four full-suite timeouts; their
+original causes remain unresolved. Implementation CI35059823704 (push) and35059827533
+(PR) passed the Python3.11 and pinned-source contract jobs; full Python3.9/3.12 jobs
+were still running at the documentation snapshot. No GPU test was run locally.

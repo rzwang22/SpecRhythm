@@ -651,3 +651,20 @@ focused passes. Relevant Python3.9 and3.12 suites each passed270 tests; the new 
 entry/scan-summary delta passed65 tests. Ruff, Python3.9 syntax (222 source files),
 three-version compileall and all23 repository Bash scripts passed. No deadlines,
 assertions or GPU budgets were changed. Remote CI is reported separately.
+
+Timeout investigation: an independent public archive of unmodified3ac3752 passed the
+three natural-teardown cases; its prepost capacity/failure case also passed when run
+from that baseline checkout (0.58s). The current checkout's three natural-teardown
+cases passed in isolation (21.46s total). These focused comparisons do not explain
+the four original full-suite subprocess timeouts, so the full-suite failure remains
+reported. The failed first mixed-working-directory probe is retained in local logs.
+No unrelated lifecycle or legacy prepost implementation was modified.
+
+Final fixed-entry/runner/local-delivery suite:46 passed. Additional explicit default/
+strict profile forwarding cases and local single-package fallback:24 passed each on
+Python3.9 and3.12. The pinned execution files (runner, policy, native acceptance and
+evidence CLI) were byte-compared against899b54a6b58c0ea07046582c5a17934f630ac040;
+the eight role/mode static capacity contracts passed, with GPU capacity still PENDING.
+Implementation CI push35059823704 and PR35059827533: Python3.11 contract and pinned
+Draft source-contract jobs passed; Python3.9/3.12 full jobs were in progress at this
+documentation snapshot. Completion/failed CI states must be read from those runs.

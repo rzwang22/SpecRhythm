@@ -1,7 +1,7 @@
 # A100 K3 B64 performance exploration
 
 This is the explicit `k3-b64-v1` configuration, not legacy fixed64 or prepost3/P1–P4.
-The B16 entry and `k3-b16-v1` default remain unchanged. Execution SHA: `f6f67aa1e1d7aea2a81665ec628d0ae857c148ee`.
+The B16 entry and `k3-b16-v1` default remain unchanged. Execution SHA: `899b54a6b58c0ea07046582c5a17934f630ac040`.
 Repository fixed entry: `scripts/run_k3_b64_pinned.sh`; it pins that implementation
 and creates a fresh detached worktree before executing `scripts/run_k3_b64.sh`.
 No GPU execution has been performed by the local agent.
@@ -123,7 +123,7 @@ the parent `if` keeps the interactive terminal open.
 if bash <<'SR_B64_CHILD'
 set -Eeuo pipefail
 REPO="${SR_K3_REPO:-/root/autodl-tmp/src/SpecRhythm}"
-EXEC_SHA=f6f67aa1e1d7aea2a81665ec628d0ae857c148ee
+EXEC_SHA=899b54a6b58c0ea07046582c5a17934f630ac040
 git -C "$REPO" fetch origin codex/rolling-eager-v0.1
 git -C "$REPO" cat-file -e "${EXEC_SHA}:scripts/run_k3_b64.sh"
 RUN_TREE="${REPO}-k3-b64-${EXEC_SHA:0:12}-$(date -u +%Y%m%dT%H%M%SZ)-$$"
