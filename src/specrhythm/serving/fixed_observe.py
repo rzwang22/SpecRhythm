@@ -58,8 +58,16 @@ def wrap(owner, name, category):
         if category == "log_fsync":
             from specrhythm.io_context import sync_attribution
 
-            with TIMERS.span(category, **sync_attribution()):
-                return original(*args, **kwargs)
+            attribution, started = sync_attribution(), time.monotonic_ns()
+            try:
+                with TIMERS.span(category, **attribution):
+                    return original(*args, **kwargs)
+            finally:
+                from specrhythm.serving.fixed_logging import _CURRENT
+
+                if (_CURRENT is not None and _CURRENT.pid == os.getpid()
+                        and _CURRENT.mode == "deferred-window"):
+                    _CURRENT.record_fsync(attribution, started, time.monotonic_ns())
         if TRACE.enabled and category == "ipc":
             operation = args[1] if len(args) > 1 else kwargs["operation"]
             payload = args[2] if len(args) > 2 else kwargs["payload"]

@@ -31,8 +31,8 @@ SCHEMA = "specrhythm.decode-scan.v1"
 BOUNDARY = "prefilled resident pool; post-warmup full-batch decode; actual stop before drain"
 
 
-def options(**kwargs):
-    value = settings(observation="buffered-live", identity_matching="bound-prefix", **kwargs)
+def options(observation="buffered-live", **kwargs):
+    value = settings(observation=observation, identity_matching="bound-prefix", **kwargs)
     value["samples"] = None  # Results, never a measurement stop budget.
     return value
 

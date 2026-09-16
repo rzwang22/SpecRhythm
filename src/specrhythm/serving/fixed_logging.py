@@ -20,7 +20,7 @@ from specrhythm.phase4.transport import canonical_json_bytes, payload_sha256
 from specrhythm.serving.common import read_json, require
 from specrhythm.serving.s2_pool import publish
 
-MODES = ("original-live", "buffered-live")
+MODES = ("original-live", "buffered-live", "deferred-window")
 MAX_RECORDS = 256
 MAX_BYTES = 1024 * 1024
 # Audited single-process writers. read-your-writes flushes preserve startup readers.
@@ -323,7 +323,12 @@ def current(role=None):
     if not os.environ.get("SR_FIXED_POINT"):
         return None
     if _CURRENT is None or _CURRENT.pid != os.getpid():
-        _CURRENT = DiagnosticLogs(
+        factory = DiagnosticLogs
+        if os.environ.get("SR_FIXED_OBSERVATION") == "deferred-window":
+            from specrhythm.serving.deferred_logging import DeferredLogs
+
+            factory = DeferredLogs
+        _CURRENT = factory(
             Path(os.environ["SR_FIXED_POINT"]).parent,
             os.environ.get("SR_FIXED_OBSERVATION", "original-live"),
             role or "unknown",
@@ -331,11 +336,16 @@ def current(role=None):
     if role and _CURRENT.role != role:
         _CURRENT.role = role
         _CURRENT._publish("RUNNING")
+    if _CURRENT.mode == "deferred-window":
+        from specrhythm.diagnostic_report import install
+
+        install(_CURRENT.defer_report)
     return _CURRENT
 
 
 def buffered():
-    return os.environ.get("SR_FIXED_OBSERVATION", "original-live") == "buffered-live"
+    return os.environ.get("SR_FIXED_OBSERVATION", "original-live") in (
+        "buffered-live", "deferred-window")
 
 
 def finish_current(role=None):
@@ -389,11 +399,12 @@ def qualify(directory, observation):
     result = {
         "observation": observation,
         "receipts": receipts,
-        "finalization_required": observation == "buffered-live",
+        "finalization_required": observation != "original-live",
     }
     if observation == "original-live":
         return result  # Old immutable artifacts predate receipts; native per-record fsync.
-    require(observation == "buffered-live", "unknown diagnostic log configuration")
+    require(observation in ("buffered-live", "deferred-window"),
+            "unknown diagnostic log configuration")
     require(
         sorted(r["role"] for r in receipts)
         == ["coordinator", "draft", "target-rank-0", "target-rank-1"],
@@ -424,6 +435,27 @@ def qualify(directory, observation):
             artifact=str(directory / f"fixed-logging-{row['pid']}.json"),
             actual=row,
         )
+    if observation == "deferred-window":
+        from specrhythm.phase4.manifest import sha256_file
+
+        for receipt in receipts:
+            require(receipt["deferred_report_slots"] == len(receipt["reports"]),
+                    "deferred report producer lacks final receipt")
+            if receipt["deferred_report_requests"]:
+                require(set(receipt["reports"]) == {"plugin-report.json"},
+                        "deferred plugin report missing")
+            for name, stream in receipt["streams"].items():
+                digest = stream["written_bytes_sha256"]
+                if digest is not None:
+                    require(sha256_file(directory / name) == digest,
+                            "deferred log physical checksum differs", artifact=name)
+            for name, report in receipt["reports"].items():
+                require(report["status"] == "COMPLETE"
+                        and report["deadline_ns"] == drain["deadline_ns"]
+                        and report["end_ns"] <= drain["deadline_ns"]
+                        and (directory / name).stat().st_size == report["bytes"]
+                        and sha256_file(directory / name) == report["sha256"],
+                        "deferred report incomplete", artifact=name)
     return result
 
 
@@ -442,7 +474,10 @@ def install_checkpoint_logging(role, capture, timers):
         capture(row)  # Contract validation is immediate, not deferred with persistence.
 
     def read_visible(log):
-        current().before_read(log)
+        logs = current()
+        if logs.mode == "deferred-window":
+            return logs.read_snapshot(log, read)
+        logs.before_read(log)
         return read(log)
 
     retain._fixed_checkpoint_logging = True

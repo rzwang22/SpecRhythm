@@ -914,47 +914,50 @@ class RemoteDraftProposer:
     def _write_report(self) -> None:
         if self.tp_rank != 0:
             return
-        atomic_write_json(
-            self.report_path,
-            {
-                "schema_version": "specrhythm.phase4-remote-proposer-report.v1",
-                "proposer_model_parameter_count": 0,
-                "target_logits_observed": False,
-                "target_future_tokens_observed": False,
-                "oracle_labels_observed": False,
-                "transport": "unix-domain-socket",
-                "target_tp_world_size": self.tp_world_size,
-                "target_rank0_only_transport": True,
-                "hook_counts": dict(self.hooks_seen),
-                "request_count": len(self.requests),
-                "round_count": len(self.round_records),
-                "requests": {
-                    request_id: {
-                        "generated_token_ids": list(state.generated_token_ids),
-                        "bootstrap_target_tokens": state.bootstrap_target_tokens,
-                        "tail_target_tokens": state.tail_target_tokens,
-                        "next_round_id": state.next_round_id,
-                        "finished": state.finished,
-                    }
-                    for request_id, state in self.requests.items()
-                },
-                **self._gpu_qualification_report(),
-                "decode_ready_provider": (
-                    "resident-warm-start" if self.resident_mode else None
-                ),
-                "decode_ready_setup_complete": self.resident_setup_complete,
-                "decode_ready_observed_request_count": (
-                    len(self.resident_setup_tracker.observations)
-                    if self.resident_setup_tracker is not None
-                    else 0
-                ),
-                "measurement_start_ns": self.measurement_start_ns,
-                "performance_measurement_start_ns": (
-                    self.performance_measurement_start_ns
-                ),
-                "phase4b2_performance_requested": performance_requested(),
-            },
-        )
+        from specrhythm.diagnostic_report import defer
+
+        if not defer(self.report_path, self._build_report):
+            atomic_write_json(self.report_path, self._build_report())
+
+    def _build_report(self):
+        return {
+        "schema_version": "specrhythm.phase4-remote-proposer-report.v1",
+        "proposer_model_parameter_count": 0,
+        "target_logits_observed": False,
+        "target_future_tokens_observed": False,
+        "oracle_labels_observed": False,
+        "transport": "unix-domain-socket",
+        "target_tp_world_size": self.tp_world_size,
+        "target_rank0_only_transport": True,
+        "hook_counts": dict(self.hooks_seen),
+        "request_count": len(self.requests),
+        "round_count": len(self.round_records),
+        "requests": {
+            request_id: {
+                "generated_token_ids": list(state.generated_token_ids),
+                "bootstrap_target_tokens": state.bootstrap_target_tokens,
+                "tail_target_tokens": state.tail_target_tokens,
+                "next_round_id": state.next_round_id,
+                "finished": state.finished,
+            }
+            for request_id, state in self.requests.items()
+        },
+        **self._gpu_qualification_report(),
+        "decode_ready_provider": (
+            "resident-warm-start" if self.resident_mode else None
+        ),
+        "decode_ready_setup_complete": self.resident_setup_complete,
+        "decode_ready_observed_request_count": (
+            len(self.resident_setup_tracker.observations)
+            if self.resident_setup_tracker is not None
+            else 0
+        ),
+        "measurement_start_ns": self.measurement_start_ns,
+        "performance_measurement_start_ns": (
+            self.performance_measurement_start_ns
+        ),
+        "phase4b2_performance_requested": performance_requested(),
+    }
 
 
 def _required_path(name: str) -> Path:
