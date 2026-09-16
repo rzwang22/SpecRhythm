@@ -626,3 +626,34 @@ Reports add ΣactualB opportunities, tokens/opportunity, actual window_ms×64/Σ
 and the four within-B64 throughput ratios. Existing native union/intersection and
 critical-path scopes remain unchanged. READY early publication remains a separate
 future candidate, outside this change. See [B64 runbook](k3-b64-runbook.md).
+
+## B64 validation policy separation (2026-09-16)
+
+Execution geometry and output-equivalence policy are independent. The B64 public
+entry defaults to `performance-exploration`; the optional `strict-output` path retains
+complete-output comparison. B16 and missing-policy legacy manifests keep strict behavior.
+`k3_validation` validates policy before model execution, propagates it through planning,
+point/runtime reports and compares declarations across producer boundaries. No model,
+sampling, K3, owner/scheduler, READY, fence or logging changes are included.
+
+Exploration requires native geometry from its own warmup/runtime (`native_geometry`,
+`measurement`, formal scan summary): one actual full forward64/32 for each mode,
+unique requests, both TP ranks matched to scheduled rows, A/B coverage and bounded
+home/active counts. All previous device, capacity, K3, prefix/epoch, frontier,
+release, token conservation, cleanup and trace checks stay in place. Warmup128
+actual opportunities and the continuous30s window are unchanged. Raw partial-batch
+reasons remain linked to owner admission and population evidence.
+
+`output_equivalence_status=NOT_RUN` and `full_output_comparison_run=false` mean the
+operator selected performance exploration. They are independent of `measurement_valid`
+and `native_geometry_status`; there is no synthetic equivalence PASS. The existing
+`formal_comparison_eligible` is run-level execution/measurement/cleanup eligibility,
+not full-output proof. Delivery comparison checks the explicit policy and native
+receipts; only the absent independent `joint/` is classified as intentionally not run.
+Missing performance evidence and all existing failures still stop the flow.
+
+The retained strict comparison reports cross-run mismatch under `comparison`, with
+actual modes/request IDs and both source files. It no longer inherits the last invoked
+mode. The historical54/64 Serial,54/64 Serial-eager and64/64 two PingPong result is
+unresolved and unchanged. Performance was not run in that historical experiment.
+See [B64 runbook](k3-b64-runbook.md) for source archive hash, scopes and manual strict entry.

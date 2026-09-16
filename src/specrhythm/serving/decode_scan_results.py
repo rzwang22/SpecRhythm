@@ -399,6 +399,10 @@ def summarize(manifest_path, directory, point, *, probe=False):
     }
     try:
         r = read_json(directory / "runtime.json")
+        from specrhythm.serving.k3_validation import matching, not_run
+
+        matching(m, point, r)
+        base.update(not_run(point))
         meta = r["capacity"]
         if "execution_geometry" in meta:
             base.update(execution_geometry=meta["execution_geometry"],
@@ -447,6 +451,17 @@ def summarize(manifest_path, directory, point, *, probe=False):
             result = {"measurement_status": "NOT_APPLICABLE", "stop_reason": "capacity_probe"}
         else:
             result = timing(r, b, point, opts)
+        if "validation_profile" in point:
+            from specrhythm.serving.k3_acceptance import native_geometry
+            from specrhythm.serving.k3_validation import EXPLORATION, profile_of
+
+            proof = None if probe else native_geometry(
+                r, point["mode"], full_fixture=profile_of(point) == EXPLORATION)
+            result.update(native_geometry_status="NOT_APPLICABLE" if probe else "PASS",
+                          native_target_geometry=proof,
+                          measurement_valid=result["measurement_status"] == "PASS",
+                          formal_comparison_eligible_scope="run-level execution/measurement/"
+                          "cleanup only; does not certify full output equivalence")
         return {**base, **result, "valid": True, "errors": [], "execution_status": "PASS"}
     except (DataError, KeyError, TypeError, ValueError, OSError) as error:
         return {
@@ -519,6 +534,8 @@ def emit_result(directory, result, point):
         and value.get("measurement_status") == "PASS"
         and value.get("cleanup_status") == "PASS"
     )
+    if "validation_profile" in point:
+        value["measurement_valid"] = value["formal_comparison_eligible"]
     value = compact(value)
     print("[decode scan] " + json.dumps(value, ensure_ascii=False), flush=True)
     write_once(directory / "result.json", value)

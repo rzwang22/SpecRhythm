@@ -37,10 +37,12 @@ def driven(produced, monkeypatch, tmp_path):
     calls = []
 
     def build(mode, stage, driver=None, *, full_run=False, admission_limit=None,
-              configuration="k3-b16-v1"):
+              configuration="k3-b16-v1", validation_profile=None):
         from specrhythm.serving.k3 import configuration_fields, geometry
+        from specrhythm.serving.k3_validation import fields as validation_fields
 
-        fields = configuration_fields(configuration)
+        fields = {**configuration_fields(configuration),
+                  **validation_fields(validation_profile, configuration)}
         active = geometry("serial-k3", configuration)["active_limit"]
         base = tmp_path / str(len(calls))
         calls.append((mode, stage))

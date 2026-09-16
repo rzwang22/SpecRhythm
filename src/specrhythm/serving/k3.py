@@ -46,7 +46,9 @@ def configuration_fields(configuration):
 def validate_point(point, manifest):
     """Fail before engine creation if any declaration along the launch chain differs."""
     from specrhythm.serving.common import require
+    from specrhythm.serving.k3_validation import matching
 
+    matching(point, manifest)
     config = configuration_of(manifest)
     require(configuration_of(point) == config, "K3 point/manifest configuration mismatch")
     mode = point["mode"]

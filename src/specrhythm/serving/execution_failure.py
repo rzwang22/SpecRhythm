@@ -114,6 +114,44 @@ def joint_run_failure(root, mode, error, layer, point=None):
     )
 
 
+def joint_comparison_failure(directory, error, runtimes, receipts):
+    """A cross-run comparison belongs to no last-invoked model process."""
+    reference = {r["request_id"]: r for r in runtimes["target"]["requests"]}
+    sources = {r["mode"]: str(Path(r["point"]) / "runtime.json") for r in receipts}
+    mismatches = []
+    for mode, runtime in runtimes.items():
+        if mode == "target":
+            continue
+        actual = {r["request_id"]: r for r in runtime["requests"]}
+        for rid in sorted(set(reference) | set(actual)):
+            a, b = actual.get(rid), reference.get(rid)
+            tokens = a is not None and b is not None and (
+                a["generated_token_ids"] == b["generated_token_ids"])
+            terminal = a is not None and b is not None and a.get("finish_reason") == b.get(
+                "finish_reason")
+            if not tokens or not terminal:
+                mismatches.append(dict(mode=mode, request_id=rid, tokens_equal=tokens,
+                    termination_equal=terminal, source=sources[mode], reference=sources["target"]))
+    runs = []
+    for receipt in receipts:
+        errors = []
+        path = Path(receipt["point"]) / "light-summary.json"
+        report = read_optional(path, errors)
+        runs.append(dict(mode=receipt["mode"], run_directory=receipt["point"],
+                         source_report=str(path), summary_read_errors=errors,
+                         **{k: report.get(k) for k in ("effective_exit_code", "execution_status",
+                                                       "cleanup_status")}))
+    return dict(outer_stage="joint_gpu_correctness", failure_layer="comparison",
+                mode=None, point="comparison", run_directory=str(directory),
+                command_exit_code=1, original_returncode=1,
+                effective_exit_code=None, process_results=runs,
+                mismatched_modes=sorted({r["mode"] for r in mismatches}),
+                mismatches=mismatches, evidence_sources=sources,
+                primary_error=dict(error=str(error), mismatches=mismatches),
+                comparison_scope="all completed modes versus Target-only; "
+                "no single failed process")
+
+
 def summarize_joint(root, exit_code, stage="joint_gpu_correctness"):
     """Project the joint runner's first failure without inventing a failed next mode."""
     root = Path(root)
@@ -122,7 +160,8 @@ def summarize_joint(root, exit_code, stage="joint_gpu_correctness"):
     return {
         **failure, "first_exit_code": exit_code, "failed_stage": stage, "outer_stage": stage,
         "failure_layer": failure.get("failure_layer", "joint_failure_evidence_missing"),
-        "point": failure.get("mode"), "run_directory": failure.get("run_directory"),
+        "point": failure.get("point", failure.get("mode")),
+        "run_directory": failure.get("run_directory"),
         "joint_failure_source": str(root / "failure.json"),
         "summary_read_errors": [*failure.get("summary_read_errors", []), *errors],
         "original_results_unchanged": True,

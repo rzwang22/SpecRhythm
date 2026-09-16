@@ -173,6 +173,9 @@ def run(root, *, batch=None, mode=None, remaining=False, probe=False, single_poi
 
 def summary(root):
     config = load(root)
+    from specrhythm.serving.k3_validation import matching, not_run
+
+    policy_fields = not_run(config)
     reports = point_reports(root)
     indexed = {key(r["point"]): r for r in reports if is_probe(r) and not r.get("valid")}
     indexed.update({key(r["point"]): r for r in reports if not is_probe(r)})
@@ -182,6 +185,8 @@ def summary(root):
     ]
     for p in displayed:
         r = indexed.get(key(p), {})
+        if r:
+            matching(config, p, r)
         row = {k: r.get(k) for k in COLUMNS}
         row.update(
             mode=p["mode"],
@@ -213,12 +218,19 @@ def summary(root):
         row["actual_target_batch"] = r.get("actual_target_batch")
         row["prepared_pool"] = r.get("prepared_pool")
         row["primary_error"] = r.get("primary_error")
+        if policy_fields:
+            row.update(policy_fields, measurement_valid=r.get("measurement_valid"),
+                       native_geometry_status=r.get("native_geometry_status"))
+            from specrhythm.serving.k3 import configuration_of, geometry
+
+            row["sub_batch"] = geometry(p["mode"], configuration_of(p))["target_request_ceiling"]
         if "rolling_eager" in r:
             row["rolling_eager"] = r["rolling_eager"]
         if "rolling_eager_retained" in r:
             row["rolling_eager_retained"] = r["rolling_eager_retained"]
         rows.append(row)
     result = {
+        **policy_fields,
         "schema_version": "specrhythm.decode-scan-summary.v1",
         "points": rows,
         "valid_comparison_points": sum(r["formal_comparison_eligible"] for r in rows),
@@ -230,16 +242,19 @@ def summary(root):
     stamp = str(time.monotonic_ns())
     path = root / ("scan-summary-" + stamp + ".json")
     write_once(path, result)
+    columns = (*COLUMNS, *(["validation_profile", "k3_configuration",
+        "full_output_comparison_run", "output_equivalence_status", "measurement_valid",
+        "native_geometry_status"] if policy_fields else []))
     with path.with_suffix(".csv").open("x", newline="") as handle:
         writer = csv.DictWriter(
             handle,
-            fieldnames=[*COLUMNS, "actual_batch_min", "actual_batch_mean", "actual_batch_max"],
+            fieldnames=[*columns, "actual_batch_min", "actual_batch_mean", "actual_batch_max"],
         )
         writer.writeheader()
         for r in rows:
             writer.writerow(
                 {
-                    **{k: r.get(k) for k in COLUMNS},
+                    **{k: r.get(k) for k in columns},
                     **{
                         "actual_batch_" + k: (r.get("actual_target_batch") or {}).get(k)
                         for k in ("min", "mean", "max")
@@ -358,6 +373,9 @@ def main(argv=None):
     from specrhythm.serving.k3 import B16, CONFIGURATIONS
 
     p.add_argument("--k3-configuration", choices=CONFIGURATIONS, default=B16)
+    from specrhythm.serving.k3_validation import PROFILES
+
+    p.add_argument("--validation-profile", choices=PROFILES)
     p.add_argument("--selection-seed", type=int, default=1666)
     p.add_argument("--warmup-steps", type=int, default=2)
     p.add_argument("--window-seconds", type=float, default=30)
@@ -384,6 +402,7 @@ def main(argv=None):
                 ),
                 seed=args.selection_seed,
                 s0=args.s0, k3_configuration=args.k3_configuration,
+                validation_profile=args.validation_profile,
             )
         elif args.command in ("run", "capacity"):
             value = run(

@@ -97,13 +97,19 @@ if kind==os.environ['FAIL_STAGE'] and mode==os.environ['FAIL_POINT']: sys.exit(2
         "FAIL_STAGE": failure,
         "FAIL_POINT": point,
         "EXPORT_ERROR": "yes" if export_error else "no",
+        **({"SR_K3_VALIDATION_PROFILE": "strict-output"} if failure == "correctness" else {}),
     }
     result = subprocess.run(
         ["bash"], input=block, env=env, text=True, capture_output=True, timeout=20
     )
     assert result.returncode == 0 and "PARENT_ALIVE" in result.stdout, result.stderr
     calls = log.read_text().splitlines()
-    assert calls[0] == " static_capacity_contract"
+    assert calls[0] == (" other" if script_name == "run_k3_b64.sh"
+                        else " static_capacity_contract")
+    if script_name == "run_k3_b64.sh" and failure != "correctness":
+        assert not any(r.endswith(" correctness") for r in calls)
+        if failure == "none":
+            assert "Full output comparison NOT_RUN" in result.stdout
     assert sum(r.endswith(" export") for r in calls) == 1
     assert result.stdout.count("UPLOAD ONLY:") == 1
     assert len(list(results.glob("*.tar.gz"))) == 1

@@ -24,14 +24,15 @@ hardware, produced, driven = _hardware, _produced, _driven
 RUN = subprocess.run
 
 
-def entry(root, mode, body=None):
+def entry(root, mode, body=None, validation_profile="strict-output"):
     if body is None:
         body = re.search(r"<<'PY_MEASUREMENT'\n(.*?)\nPY_MEASUREMENT",
                          Path("scripts/run_k3_b16.sh").read_text(), re.S).group(1)
     return RUN([sys.executable, "-"], input=body, text=True, capture_output=True,
                timeout=20, env={**os.environ, "PYTHONPATH": str(Path("src").resolve()),
                                "SR_FIXED_ROOT": str(root),
-                               "SR_AUDIT_SERVING_MODE": mode})
+                               "SR_AUDIT_SERVING_MODE": mode,
+                               "SR_K3_VALIDATION_PROFILE": validation_profile})
 
 
 def retain(h):

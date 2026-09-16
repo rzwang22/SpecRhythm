@@ -108,6 +108,8 @@ def native_geometry(runtime, mode, *, full_fixture=False, configuration=None):
             or seen_homes == set(g["home_capacities"]), "B64 fixture missing home coverage")
     first = full[0] if full else None
     return dict(mode=mode, execution_geometry=g, full_batch_steps=len(full),
+                observed_home_cohorts=sorted(seen_homes),
+                evidence_scope="all recorded warmup/runtime verification steps",
                 first_full_batch=None if first is None else dict(
                     step_index=first, request_ids=steps[first]["request_ids"],
                     ranks={str(rank): dict(host_start_ns=f["host_start_ns"],
@@ -120,8 +122,13 @@ def native_geometry(runtime, mode, *, full_fixture=False, configuration=None):
                 "request lifecycle retained without reconstruction")
 
 
-def measurement(report, runtime, mode, configuration=B16):
+def measurement(report, runtime, mode, configuration=B16, validation_profile=None):
     """The foreground runner's gate. No hardware, timing or historical report mutation."""
+    from specrhythm.serving.k3_validation import EXPLORATION, matching
+
+    policy = matching(report, runtime, runtime["point"])
+    require(validation_profile is None or policy == validation_profile,
+            "K3 measurement validation_profile mismatch")
     g = geometry(mode, configuration)
     require(configuration_of(report["point"]) == configuration,
             "K3 measurement requested configuration mismatch")
@@ -146,7 +153,8 @@ def measurement(report, runtime, mode, configuration=B16):
             "K3 original run qualification failed")
     require(report["stop_reason"] == "time_budget" and report["measured_window_ms"] >= 30000,
             "K3 measurement did not complete the fixed window")
-    proof = native_geometry(runtime, mode, configuration=configuration)
+    proof = native_geometry(runtime, mode, configuration=configuration,
+                            full_fixture=policy == EXPLORATION)
     values = [s["B"] for s in runtime["target_steps"] if s["window"] and s["B"]]
     require(type(report["target_steps"]) is int and report["target_steps"] == len(values),
             "K3 reported measured step count mismatch")

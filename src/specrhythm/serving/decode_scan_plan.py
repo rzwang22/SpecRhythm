@@ -64,11 +64,14 @@ def select(main, small_ids, seed=1666):
     )
 
 
-def selected_point(mode, batch, repeat=0, *, k3_configuration="k3-b16-v1"):
+def selected_point(mode, batch, repeat=0, *, k3_configuration="k3-b16-v1",
+                   validation_profile=None):
     from specrhythm.serving.k3 import MODES as K3_MODES
     from specrhythm.serving.k3 import configuration_fields, geometry
+    from specrhythm.serving.k3_validation import fields as validation_fields
 
-    fields = configuration_fields(k3_configuration)
+    fields = {**configuration_fields(k3_configuration),
+              **validation_fields(validation_profile, k3_configuration)}
     if mode in K3_MODES:
         require(type(batch) is int and batch == geometry(mode, k3_configuration)["active_limit"],
                 "K3 point batch/configuration mismatch; configured B"
@@ -89,8 +92,10 @@ def selected_point(mode, batch, repeat=0, *, k3_configuration="k3-b16-v1"):
     )
 
 
-def manifest(execution, ids, workload_sha, opts, batch, *, k3_configuration="k3-b16-v1"):
+def manifest(execution, ids, workload_sha, opts, batch, *, k3_configuration="k3-b16-v1",
+                   validation_profile=None):
     from specrhythm.serving.k3 import configuration_fields
+    from specrhythm.serving.k3_validation import fields as validation_fields
 
     require(
         batch in BATCHES and len(ids) == len(set(ids)) == POOL_SIZE,
@@ -115,6 +120,7 @@ def manifest(execution, ids, workload_sha, opts, batch, *, k3_configuration="k3-
             "trace": trace,
             "active_limit": batch,
             **configuration_fields(k3_configuration),
+            **validation_fields(validation_profile, k3_configuration),
             "actual_N": POOL_SIZE,
             "requested_N": POOL_SIZE,
             "fixed_diagnostic": {
@@ -144,11 +150,14 @@ def manifest(execution, ids, workload_sha, opts, batch, *, k3_configuration="k3-
     )
 
 
-def prepare(root, s1, opts, *, seed=1666, s0=None, k3_configuration="k3-b16-v1"):
+def prepare(root, s1, opts, *, seed=1666, s0=None, k3_configuration="k3-b16-v1",
+            validation_profile=None):
     from specrhythm.serving.k3 import B64, configuration_fields
     from specrhythm.serving.k3 import MODES as K3_MODES
+    from specrhythm.serving.k3_validation import fields as validation_fields
 
-    fields = configuration_fields(k3_configuration)
+    fields = {**configuration_fields(k3_configuration),
+              **validation_fields(validation_profile, k3_configuration)}
     batches = (64,) if k3_configuration == B64 else BATCHES
     require(not root.exists(), "decode scan requires a new result root", artifact=str(root))
     old, _ = load_execution(s1 / "s1-mixed100/execution-manifest.json", verify_parent=True)
@@ -201,7 +210,7 @@ def prepare(root, s1, opts, *, seed=1666, s0=None, k3_configuration="k3-b16-v1")
     manifests = {}
     for batch in batches:
         value = manifest(execution, selection["request_ids"], work_sha, opts, batch,
-                         k3_configuration=k3_configuration)
+                         k3_configuration=k3_configuration, validation_profile=validation_profile)
         name = f"execution-B{batch}.json"
         write_once(inputs / name, value)
         manifests[str(batch)] = {"path": "inputs/" + name, "sha256": value["sha256"]}
@@ -224,7 +233,8 @@ def prepare(root, s1, opts, *, seed=1666, s0=None, k3_configuration="k3-b16-v1")
                 for m in (() if k3_configuration == B64 else MODES)
             ],
             "optional_points": [
-                selected_point(m, b, r, k3_configuration=k3_configuration)
+                selected_point(m, b, r, k3_configuration=k3_configuration,
+                               validation_profile=validation_profile)
                 for r in range(opts["repeats"])
                 for b in batches
                 for m in ("serial-eager", "serial-prepost3", "serial-eager-prepost3",

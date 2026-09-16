@@ -296,7 +296,25 @@ def qualify(report):
     ]
     if missing_fsync:
         errors.append("fsync file attribution incomplete")
+    from specrhythm.serving.k3_validation import EXPLORATION, not_run, profile_of
+
+    policy_fields = {}
+    if "validation_profile" in report:
+        policy_fields = not_run(report)
+        if profile_of(report) == EXPLORATION:
+            from specrhythm.serving.k3 import configuration_of
+            from specrhythm.serving.k3_acceptance import full_batch_receipt
+
+            if (report.get("full_output_comparison_run") is not False
+                    or report.get("output_equivalence_status") != "NOT_RUN"
+                    or report.get("native_geometry_status") != "PASS"
+                    or not full_batch_receipt(report.get("native_target_geometry"),
+                                              report["mode"], configuration_of(report))):
+                errors.append("performance exploration policy/native geometry evidence invalid")
+        policy_fields.update(measurement_valid=report.get("measurement_valid"),
+                             native_geometry_status=report.get("native_geometry_status"))
     return dict(
+        **policy_fields,
         schema_version="specrhythm.execution-evidence-status.v1",
         original_qualification=report.get("original_qualification"),
         original_run_details=report.get("original_run_details"),

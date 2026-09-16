@@ -1,4 +1,4 @@
-# A100 K3 B64 four-mode check
+# A100 K3 B64 performance exploration
 
 This is the explicit `k3-b64-v1` configuration, not legacy fixed64 or prepost3/P1–P4.
 The B16 entry and `k3-b16-v1` default remain unchanged. Execution SHA: `f6f67aa1e1d7aea2a81665ec628d0ae857c148ee`.
@@ -19,18 +19,41 @@ owner, scheduler, warmup and native qualification. The CLI requires
 capacity retain the declaration. Missing declarations mean legacy B16 only; they cannot
 qualify a B64 point. There is no automatic downgrade if capacity is insufficient.
 
+The default validation policy is `performance-exploration`, separate from execution
+geometry `k3-b64-v1`. The policy is written to `validation-plan.json`, scan-config,
+execution manifests, selected points, runtime, summaries, diagnostic status,
+comparison and archive inventory. A missing plan retains the old strict policy;
+it never silently selects performance exploration. B16 remains strict by default.
+
 The foreground entry runs exactly:
 
 1. Static B64 interface/capacity arithmetic check (no GPU PASS).
 2. Four capacity points, with all360 real prefills and normal drain.
-3. Target-only and four modes, same first64 frozen requests, complete outputs capped
-   at32 tokens/request. Compare full tokens and termination reasons by ID. EOS may
-   legitimately reduce the nominal2048 tokens. Require one actual distinct64-request
-   forward for **each** Serial mode, distinct32 for each PingPong mode, both TP ranks,
-   and bounded home occupancy. Multiple smaller forwards cannot satisfy this proof.
-4. Four single runtime performance points, with resident360, unchanged seed1666,
+3. Four single runtime performance points, with resident360, unchanged seed1666,
    two warmup units, continuous30s window, setup900s/drain60s, no retries or grid.
+4. Each point must pass capacity/device, execution, measurement, cleanup, K3/KV/
+   ownership/accounting and diagnostic-integrity checks before the next point.
+   Its own warmup/runtime native records must contain one actual distinct64-request
+   forward for **each** Serial mode, distinct32 for each PingPong mode, both TP ranks,
+   both PingPong homes and bounded active/home occupancy. Multiple smaller forwards
+   cannot satisfy this proof. Measured partial batches retain their actual distribution
+   and links to population/owner unfilled/deferred reasons.
 5. Comparison and exactly one content-deduplicated delivery archive.
+
+No Target-only or independent full-output diagnostic is launched in this default flow.
+`full_output_comparison_run=false` and `output_equivalence_status=NOT_RUN` are deliberate,
+not PASS and not execution failure. Reported throughput/overlap carries the statement
+**this run has not verified complete output equivalence**. `measurement_valid` and
+`native_geometry_status` are separate. The legacy `formal_comparison_eligible` field
+already means run execution/measurement/cleanup eligibility; it has never certified
+joint output equivalence. Its value is not forged or relaxed for this policy.
+
+The historical B64 archive `pingpong-k3-delivery-a100-k3-b64-20260915T175251Z-343.tar.gz`
+(SHA256 `d9e31c43f66d501451823180638b66e31c0e84a92ac932be2e01b4b47eaa1606`,
+execution `f6f67aa1e1d7aea2a81665ec628d0ae857c148ee`) remains a failed strict comparison:
+Serial and Serial-eager each54/64 exact with the same10 differing requests; both
+PingPong modes64/64 exact. All four formal performance points were NOT_RUN.
+Those discrepancies are unresolved; this policy does not change their data or status.
 
 Warmup counts actual request-verification opportunities, not calls: at least128,
 with per-ID coverage and the start boundary retained. At full batch this means two
@@ -55,10 +78,12 @@ buffers, dropped-row checks and logging policy are unchanged. A malformed receip
 retains raw bytes and an evidence error under the old bounded fallback limits; it
 never creates a synthetic COMPLETE/PASS. Exceeding any bound remains explicit failure.
 
-Upload only `pingpong-k3-delivery-<tag>.tar.gz`. It includes comparison, joint result
-or first failure, raw native/request/proposal evidence, capacity ranks and budgets,
+Upload only `pingpong-k3-delivery-<tag>.tar.gz`. It includes comparison, validation plan, first failure when present,
+raw native/request/proposal evidence, capacity ranks and budgets,
 B64 execution manifests, original errors/cleanup, inventory size/SHA256, and export
-status. No separate JSON/log collection commands are needed.
+status. For exploration the inventory explicitly declares `joint/` intentionally
+not run. Missing required performance evidence still fails; missing/truncated raw
+records never become zero/PASS. No separate JSON/log collection commands are needed.
 
 Read `request_verification_opportunities` as Σ actual Target B in the measured
 window. `tokens_per_request_opportunity` uses that denominator; `window_ms_per_active_opportunities`
@@ -77,8 +102,9 @@ A nonzero OBSERVED overlap is not proof that recovery is fully hidden. One windo
 is a mechanism check, not a stable speedup claim. Old B16/A800 results remain history;
 cross-run/hardware differences cannot establish this change's isolated benefit.
 
-B64 capacity, output correctness, execution/measurement/cleanup, evidence integrity,
-native overlap and performance remain **PENDING server evidence**.
+New B64 capacity, execution/measurement/cleanup, evidence integrity, native geometry,
+overlap and performance remain **PENDING server evidence**. Output equivalence is
+**NOT_RUN by default**; a manually requested new strict diagnostic is pending until run.
 
 For the new comparison specifically, inspect `pipeline.cross_home_overlap_steps` and
 `pipeline.recovery_coverage_by_other_homes` alongside the existing other-request
@@ -104,6 +130,7 @@ RUN_TREE="${REPO}-k3-b64-${EXEC_SHA:0:12}-$(date -u +%Y%m%dT%H%M%SZ)-$$"
 git -C "$REPO" worktree add --detach "$RUN_TREE" "$EXEC_SHA"
 unset SR_K3_MANAGED_LOCAL SR_K3_LOCAL_DELIVERY SR_PING_DELIVERY
 export SR_EXEC_REPO="$RUN_TREE"
+export SR_K3_VALIDATION_PROFILE="${SR_K3_VALIDATION_PROFILE:-performance-exploration}"
 export SR_PING_RUN_TAG="${SR_PING_RUN_TAG:-a100-k3-b64-$(date -u +%Y%m%dT%H%M%SZ)-$$}"
 bash "$RUN_TREE/scripts/run_k3_b64.sh" "$EXEC_SHA"
 SR_B64_CHILD
@@ -120,3 +147,22 @@ search is included. Optional existing `SR_FIXED_PYTHON`, `SR_FIXED_S1`, `SR_K3_R
 `SR_K3_LOCAL_BASE` and `SR_PING_RESULTS` overrides retain their previous meaning;
 resolved storage paths, filesystem types and free space are recorded by the local
 supervisor. Preserve the same workload/model/numerical settings on this A100 host.
+
+## Optional strict diagnostic (explicit operator choice)
+
+Set `SR_K3_VALIDATION_PROFILE=strict-output` in the child Bash above, before invoking
+the runner. Use a fresh tag/worktree. This selects the retained capacity → Target-only
+plus four64-request complete-output comparisons → performance flow. Comparison failure
+still stops all later performance points. Do not reuse an exploration directory.
+
+The profile option uses the same fixed entry, new local directory and single-package
+delivery. It preserves the complete32-token-per-request fixture, reference run,
+termination comparison and all native checks. It does not add tolerance or modify
+sampling. The standalone `specrhythm.serving.k3_gpu_check` command also remains
+available for explicit diagnostics; the default runner never calls it.
+
+Aggregate output failures now use `failure_layer=comparison`, `point=comparison`,
+`mode=null`, list actual mismatched modes/IDs and reference/source runtime paths,
+and mark known inequality FAILED. Per-process exit codes remain separate from the
+comparison command's exit1. The last completed eager mode is not blamed for another
+mode's mismatch. Historical failure files are never rewritten.

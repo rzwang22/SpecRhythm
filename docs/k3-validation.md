@@ -598,3 +598,56 @@ the owner-response timeout but do not establish the cost that exhausted its budg
 CPU/IO scheduling is only a hypothesis. No timeout, assertion or implementation was
 changed to turn this result green, and the workflow was not rerun. Other CI jobs were
 still running at this snapshot; final delivery status is reported from GitHub.
+
+## B64 performance-exploration policy validation (2026-09-16)
+
+The default B64 runner executes all four capacities and all four performance points
+without invoking Target-only or independent full-output runs. The explicit strict
+option preserves that separate gate. Real runner subprocess tests cover both paths,
+first-error stop, secondary export errors and exactly one upload path; B16 still
+runs its original strict gate. New tests enter the real manifest/point builder and
+CPU-substituted `fixed_runtime.drive`, serialize runtime, invoke scan summarize/emit,
+execute the runner's actual measurement heredoc, export and replay native qualification.
+They reject hidden smaller forwards, missing ranks, policy conflicts, frontier damage
+and missing release evidence. Existing lifecycle/protocol suites remain required.
+
+The comparison/export unit additionally combines those drive-produced geometry proofs
+with explicitly synthetic host timing fixtures (not GPU evidence), exercises four-mode
+comparison and archive replay, rejects forged equivalence PASS/missing proof/invalid
+measurement, and rejects a missing plan falling back to strict. The real strict joint
+loop and comparator receive CPU-produced output with an explicit worker-boundary fault;
+two Serial modes, not the last eager mode, appear in aggregate failure sources.
+
+Initial new-test failures exposed fixture omissions: a direct summary bypassed the
+production `emit_result` cleanup fields, and the direct-drive export fixture lacked
+`fixed_cli.run_point`'s `point.json` publication. Tests now execute the former and
+serialize the actual selected point at the latter boundary. Production checks correctly
+rejected both omissions; no assertion, timeout or runtime budget was relaxed.
+
+The evidence CLI now accepts and checks the B64 runner's geometry argument (previously
+passed by the runner but absent from its parser), plus the independent validation
+profile. This fixes an entry/report contract mismatch, without changing collection.
+CPU passes prove these contracts, not GPU output equivalence, geometry, overlap or
+throughput. New server performance remains PENDING; default full-output check NOT_RUN.
+
+Local validation environment incident: the first full run ended20 failed/2478 passed/
+3 skipped/477 errors after the volume reached116MiB free; the first storage failures
+were `OSError: [Errno 28] No space left on device`. The concurrent Python3.9 run also
+failed on ENOSPC. Those logs are retained outside the repository. Only this task's
+completed pytest scratch directories were removed, preserving history and raw server
+archives. An attempted `tmp_path_retention_policy=failed` rerun was stopped after a
+separate reproducible fixture collision: removing successful per-test directories
+allows a reused name while a sibling `.tar.gz` still exists. The existing exporter
+correctly rejected `new delivery archive required`. The45 deadline cases passed
+under the original default retention. Final runs use fresh basetemp directories and
+original retention, assertions, deadlines and budgets. These are diagnosed local
+environment/test-artifact failures, not GPU evidence or resolved remote CI failures.
+
+Final local suite result: **2873 passed,3 skipped,4 failed**. Failures were the three
+`test_shared_shell_accepts_natural_teardown_and_removes_guard` modes (target/serial/dual,
+15-second subprocess deadline) and the legacy prepost capacity first-error case
+(20-second subprocess deadline). They are retained as failures, not declared fixed by
+focused passes. Relevant Python3.9 and3.12 suites each passed270 tests; the new policy/
+entry/scan-summary delta passed65 tests. Ruff, Python3.9 syntax (222 source files),
+three-version compileall and all23 repository Bash scripts passed. No deadlines,
+assertions or GPU budgets were changed. Remote CI is reported separately.

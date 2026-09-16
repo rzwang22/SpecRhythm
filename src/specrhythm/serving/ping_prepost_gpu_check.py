@@ -81,6 +81,10 @@ def run(source, directory, *, modes=MODES, protocol=PROTOCOL,
     from specrhythm.serving.k3 import B64, configuration_fields, geometry
 
     fields = configuration_fields(configuration)
+    if configuration == B64:
+        from specrhythm.serving.k3_validation import STRICT
+
+        fields["validation_profile"] = STRICT
     count = geometry("serial-k3", configuration)["active_limit"]
     from specrhythm.serving.fixed_cli import run_point
 
@@ -132,7 +136,8 @@ def run(source, directory, *, modes=MODES, protocol=PROTOCOL,
                 proof = dict(native_target_geometry=native_check(runtime, mode, full_fixture=True))
             receipts.append(dict(mode=mode, point=str(point), execution="PASS", cleanup="PASS",
                                  **proof))
-        layer = "joint_output_and_mixed_verification"
+        layer = "comparison"
+        mode, root, point = None, directory, None
         result = compare_outputs(runtimes, modes=modes, require_mixed=require_mixed,
                                  **(dict(request_count=count, compare_termination=True)
                                     if configuration == B64 else {}))
@@ -147,19 +152,29 @@ def run(source, directory, *, modes=MODES, protocol=PROTOCOL,
             runs=receipts,
             protocol=protocol,
             output_correctness=output_status,
+            full_output_comparison_run=True, output_equivalence_status="PASS",
             single_shared_correctness=True,
         )
         write_once(directory / "result.json", value)
         return value
     except BaseException as error:
         try:
-            context = joint_run_failure(root, mode, error, layer, point)
+            if layer == "comparison":
+                from specrhythm.serving.execution_failure import joint_comparison_failure
+
+                context = joint_comparison_failure(directory, error, runtimes, receipts)
+                output_status = "FAILED"
+            else:
+                context = joint_run_failure(root, mode, error, layer, point)
             write_once(
                 directory / "failure.json",
                 dict(
                     error=str(error),
                     **context,
                     output_correctness=output_status,
+                    full_output_comparison_run=layer in ("comparison", "joint_coverage"),
+                    output_equivalence_status=output_status if output_status != "PENDING"
+                    else "NOT_RUN",
                     completed_runs=receipts,
                     GPU_correctness="NOT_QUALIFIED",
                     performance="NOT_TESTED",

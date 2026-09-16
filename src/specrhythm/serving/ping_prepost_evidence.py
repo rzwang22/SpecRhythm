@@ -445,7 +445,20 @@ def analyze(runtime, backend, light):
         if ping["pipeline"]["evidence_integrity"] != "COMPLETE":
             ping["status"] = "INCOMPLETE"
             ping["errors"].extend(ping["pipeline"]["errors"])
+    from specrhythm.serving.k3_validation import matching, not_run
+
+    matching(runtime, runtime["point"], light)
+    policy_fields = not_run(runtime)
+    if policy_fields:
+        from specrhythm.serving.k3 import configuration_of
+        from specrhythm.serving.k3_acceptance import measurement
+
+        proof = measurement(light, runtime, light["mode"], configuration_of(runtime))
+        policy_fields.update(native_geometry_status="PASS", native_target_geometry=proof,
+                             measurement_valid=True)
+    policy_fields.pop("k3_configuration", None)  # Geometry is recorded independently below.
     return dict(
+        **policy_fields,
         mode=light["mode"],
         **({"k3_configuration": runtime["point"]["k3_configuration"]}
            if "k3_configuration" in runtime["point"] else {}),
@@ -534,6 +547,9 @@ def report(root, output, status, commit):
         and light["workload_sha256"] == config["workload_sha256"],
         "point binding differs",
     )
+    from specrhythm.serving.k3_validation import matching
+
+    matching(config, light)
     value = analyze(
         reader.read(point / "runtime.json", required=True),
         reader.read(point / "draft-backend-report.json", required=True),
@@ -561,7 +577,18 @@ def main(argv=None):
     p.add_argument("--output", type=Path, required=True)
     p.add_argument("--status", type=Path, required=True)
     p.add_argument("--commit", required=True)
+    from specrhythm.serving.common import read_json
+    from specrhythm.serving.k3 import CONFIGURATIONS, configuration_of
+    from specrhythm.serving.k3_validation import PROFILES, profile_of
+
+    p.add_argument("--k3-configuration", choices=CONFIGURATIONS)
+    p.add_argument("--validation-profile", choices=PROFILES)
     args = p.parse_args(argv)
+    config = read_json(args.root / "scan-config.json")
+    require(args.k3_configuration is None or configuration_of(config) == args.k3_configuration,
+            "diagnostic requested geometry differs")
+    require(args.validation_profile is None or profile_of(config) == args.validation_profile,
+            "diagnostic requested validation_profile differs")
     result = report(args.root, args.output, args.status, args.commit)
     print(json.dumps(result))
     require(

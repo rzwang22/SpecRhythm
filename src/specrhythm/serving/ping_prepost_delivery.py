@@ -58,7 +58,7 @@ NAMES = {
     "target-incremental-setup.json",
     "drain-state.json", "draft-drain-state.json",
     "startup-cleanup.json",
-    "k3-capacity-contract.json",
+    "k3-capacity-contract.json", "validation-plan.json",
     "fixed-logging-coordinator.json",
     "fixed-logging-draft.json",
     "fixed-logging-target-rank-0.json",
@@ -67,7 +67,9 @@ NAMES = {
 RUNTIME_KEYS = {
     "events",
     "capacity",
-    "probe",
+    "probe", "validation_profile", "k3_configuration", "full_output_comparison_run",
+    "output_equivalence_status", "output_equivalence_scope", "output_equivalence_reason",
+    "known_output_difference",
     "measurement_start_ns",
     "measurement_end_ns",
     "start_ns",
@@ -129,6 +131,13 @@ def byte_limits(directory):
 
 
 def comparison(directory, *, modes=MODES):
+    from specrhythm.serving.k3 import configuration_of
+    from specrhythm.serving.k3_acceptance import full_batch_receipt
+    from specrhythm.serving.k3_validation import EXPLORATION, profile_of, read_plan
+
+    plan = read_plan(directory)
+    policy = profile_of(plan)
+    exploration = policy == EXPLORATION
     points = []
     missing = []
     reports = []
@@ -150,6 +159,9 @@ def comparison(directory, *, modes=MODES):
                 **{
                     k: r.get(k)
                     for k in (
+                        "validation_profile", "full_output_comparison_run",
+                        "output_equivalence_status", "measurement_valid", "native_geometry_status",
+                        "native_target_geometry",
                         "execution_geometry", "actual_target_batch", "warmup_coverage",
                         "k3_configuration", "request_verification_opportunities",
                         "tokens_per_request_opportunity", "window_ms_per_active_opportunities",
@@ -189,6 +201,7 @@ def comparison(directory, *, modes=MODES):
         matched = matched and len({configuration_of(r) for r in reports}) == 1
         matched = matched and bool(reports) and bool(reports[0].get("common_execution")) and all(
             r.get("common_execution") == reports[0]["common_execution"] for r in reports)
+    matched = matched and all(profile_of(r) == policy for r in reports)
     valid = matched and all(
         qualify(r)["diagnostic_integrity"] == "COMPLETE"
         and all(
@@ -197,29 +210,52 @@ def comparison(directory, *, modes=MODES):
         )
         for r in reports
     )
+    measurements_valid = valid
     joint = directory / "joint/result.json"
-    if not joint.exists() or read_json(joint).get("GPU_correctness") != "PASS":
-        valid = False
-    if any(m.endswith("-k3") for m in modes) and joint.exists():
-        joint_value = read_json(joint)
-        valid = valid and joint_value.get("protocol") == "specrhythm.uniform-k3.v1"
-        valid = valid and {r["mode"] for r in joint_value.get("runs", [])} == {"target", *modes}
+    joint_failure = directory / "joint/failure.json"
+    joint_result = read_json(joint) if joint.exists() else {}
+    failure_result = read_json(joint_failure) if joint_failure.exists() else {}
     native = {}
-    if "serial-eager-k3" in modes and joint.exists():
-        # New four-mode entries must retain the actual full-batch fixture, including
-        # both Serial B16 runs. Older three-mode historical packages are unchanged.
+    if exploration:
+        from specrhythm.serving.k3 import B64, geometry
         from specrhythm.serving.k3_acceptance import full_batch_receipt
 
-        native = {r["mode"]: r.get("native_target_geometry")
-                  for r in read_json(joint).get("runs", []) if r["mode"] in modes}
-        valid = valid and all(full_batch_receipt(native.get(m), m, configuration_of(reports[0])
-                                                          if reports else "k3-b16-v1")
-                              for m in modes)
-        if reports and configuration_of(reports[0]) == "k3-b64-v1":
+        native = {r["mode"]: r.get("native_target_geometry") for r in reports}
+        valid = valid and not (directory / "joint").exists() and all(
+            r.get("full_output_comparison_run") is False
+            and r.get("output_equivalence_status") == "NOT_RUN"
+            and r.get("measurement_valid") is True
+            and r.get("native_geometry_status") == "PASS"
+            and r.get("original_run_details", {}).get("capacity_status") == "PASS"
+            and r.get("original_run_details", {}).get("effective_exit_code") == 0
+            and full_batch_receipt(native.get(r["mode"]), r["mode"], B64)
+            and set((native.get(r["mode"]) or {}).get("observed_home_cohorts", []))
+                == set(geometry(r["mode"], B64)["home_capacities"])
+            for r in reports)
+    else:
+        if not joint.exists() or read_json(joint).get("GPU_correctness") != "PASS":
+            valid = False
+        if any(m.endswith("-k3") for m in modes) and joint.exists():
             joint_value = read_json(joint)
-            valid = valid and configuration_of(joint_value) == "k3-b64-v1"
-            valid = valid and joint_value.get("request_count") == 64
-            valid = valid and joint_value.get("termination_comparison") == "exact by request ID"
+            valid = valid and joint_value.get("protocol") == "specrhythm.uniform-k3.v1"
+            valid = valid and {r["mode"] for r in joint_value.get("runs", [])} == {
+                "target", *modes}
+        if "serial-eager-k3" in modes and joint.exists():
+            # New four-mode entries must retain the actual full-batch fixture, including
+            # both Serial B16 runs. Older three-mode historical packages are unchanged.
+            from specrhythm.serving.k3_acceptance import full_batch_receipt
+
+            native = {r["mode"]: r.get("native_target_geometry")
+                      for r in read_json(joint).get("runs", []) if r["mode"] in modes}
+            valid = valid and all(full_batch_receipt(native.get(m), m, configuration_of(reports[0])
+                                                              if reports else "k3-b16-v1")
+                                  for m in modes)
+            if reports and configuration_of(reports[0]) == "k3-b64-v1":
+                joint_value = read_json(joint)
+                valid = valid and configuration_of(joint_value) == "k3-b64-v1"
+                valid = valid and joint_value.get("request_count") == 64
+                valid = valid and (joint_value.get("termination_comparison")
+                               == "exact by request ID")
     ratios = []
     if "serial-eager-k3" in modes:
         by_mode = {r["mode"]: r for r in reports}
@@ -241,7 +277,24 @@ def comparison(directory, *, modes=MODES):
         configuration_comparison="same source/options/workload/models/numerics/resources; "
         "explicit K3 mode geometry may differ; no cross-run GPU UUID comparison",
         missing_points=missing,
-        joint_correctness="joint/result.json" if joint.exists() else "joint/failure.json",
+        validation_profile=policy,
+        full_output_comparison_run=False if exploration else
+            True if joint_result.get("GPU_correctness") == "PASS" else
+            failure_result.get("full_output_comparison_run"),
+        output_equivalence_status="NOT_RUN" if exploration else
+            "PASS" if joint.exists() and read_json(joint).get("GPU_correctness") == "PASS"
+            else failure_result.get("output_equivalence_status", "NOT_QUALIFIED")
+                if failure_result else "NOT_RUN",
+        output_equivalence_note="This run does not verify complete output equivalence."
+            if exploration else "Separate strict joint diagnostic required.",
+        known_output_difference=plan.get("known_output_difference"),
+        measurement_valid=measurements_valid,
+        native_geometry_status="PASS" if len(native) == len(modes) and all(
+            full_batch_receipt(native.get(m), m, configuration_of(reports[0]))
+            for m in modes) and reports else "NOT_QUALIFIED",
+        native_geometry_source="current warmup/runtime" if exploration else "joint correctness",
+        joint_correctness=None if exploration else
+            "joint/result.json" if joint.exists() else "joint/failure.json",
         joint_native_target_geometry=native,
         paired_ratios=ratios,
         valid=valid,
@@ -252,6 +305,15 @@ def comparison(directory, *, modes=MODES):
 
 def export(directory, output, *, first_code=0, stage="complete", modes=MODES):
     require(directory.is_dir() and not output.exists(), "new delivery archive required")
+    from specrhythm.serving.k3_validation import EXPLORATION, profile_of, read_plan
+
+    policy_error = None
+    try:
+        plan = read_plan(directory)
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        plan = {}
+        policy_error = "invalid validation plan: " + str(error)
+    exploration = profile_of(plan) == EXPLORATION
     limit_error = None
     try:
         file_limit, total_limit = byte_limits(directory)
@@ -273,8 +335,10 @@ def export(directory, output, *, first_code=0, stage="complete", modes=MODES):
              or (p.name.startswith(".draft-backend-report.json.") and p.name.endswith(".partial")))
     )
     inventory, objects, emitted, total, failures = [], {}, set(), 0, []
-    evidence_errors = [limit_error] if limit_error else []
-    expected = ["joint/result.json", "comparison.json"]
+    evidence_errors = [e for e in (limit_error, policy_error) if e]
+    expected = ["comparison.json"] if exploration else ["joint/result.json", "comparison.json"]
+    if exploration:
+        expected.extend(["validation-plan.json", "k3-capacity-contract.json"])
     for mode in modes:
         root = directory / "points" / mode
         runs = []
@@ -424,6 +488,8 @@ def export(directory, output, *, first_code=0, stage="complete", modes=MODES):
         for name in expected:
             if name not in objects:
                 inventory.append(dict(path=name, status="MISSING"))
+                if exploration and first_code == 0:
+                    evidence_errors.append(name + ": required performance evidence missing")
         try:
             comparison_valid = read_json(compare_path)["valid"] is True
         except (OSError, ValueError, KeyError, TypeError) as error:
@@ -431,6 +497,9 @@ def export(directory, output, *, first_code=0, stage="complete", modes=MODES):
             evidence_errors.append("comparison.json: " + str(error))
         result = dict(
             schema_version="specrhythm.ping-prepost-archive.v1",
+            validation_profile=profile_of(plan),
+            intentionally_not_run=[dict(path="joint/", reason="explicit performance-exploration",
+                output_equivalence_status="NOT_RUN")] if exploration else [],
             inventory=inventory,
             logical_paths=objects,
             archive_integrity="INCOMPLETE" if failures else "COMPLETE",

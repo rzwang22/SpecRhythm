@@ -187,7 +187,9 @@ def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5, 
     point = execution_point(point, probe)
     mode, runtime_mode = point["mode"], point["runtime_mode"]
     from specrhythm.serving.k3 import configuration_fields, configuration_of
+    from specrhythm.serving.k3_validation import matching, not_run
 
+    matching(point, manifest)
     configuration = configuration_of(manifest)
     require(configuration_of(point) == configuration, "K3 runtime configuration mismatch")
     scan = point.get("scan", False)
@@ -555,6 +557,7 @@ def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5, 
         return {
             "schema_version": "specrhythm.fixed-runtime.v2",
             "point": point,
+            **not_run(manifest),
             "probe": probe,
             "capacity": {
                 **(diag["capacity"][mode] if scan or point.get("prepost_correctness")

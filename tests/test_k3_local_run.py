@@ -83,6 +83,14 @@ exit 23
     assert local.validate_archive(upload)["archive_integrity"] == "VERIFIED"
     raw, inventory = payload(upload, "points/serial-k3/runs/injected/draft-backend-report.json")
     assert raw == b'{"unfinished":' and inventory["first_exit_code"] == 23
+    if batch == 64:
+        policy = json.loads(payload(upload, "validation-plan.json")[0])
+        assert policy["validation_profile"] == inventory["validation_profile"] == (
+            "performance-exploration")
+        assert policy["full_output_comparison_planned"] is False
+        assert inventory["intentionally_not_run"][0]["path"] == "joint/"
+    else:
+        assert inventory["validation_profile"] == "strict-output"
     assert (
         inventory["failed_stage"] == "prepare" and inventory["export_validation_exit_code"] == 41
     )

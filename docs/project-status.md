@@ -1645,3 +1645,31 @@ no retry, assertion relaxation or budget increase was made. Other jobs were stil
 running at this documentation snapshot. Final delivery CI is reported separately;
 neither local passes nor the other job's success erase this recorded failure.
 GPU evidence is still PENDING.
+
+## 2026-09-16 — B64 performance exploration, strict diagnostics retained
+
+Continue from3ac3752/f6f67aa on Draft PR#5 without changing other PRs or historical
+results. Default B64 policy now explicitly selects `performance-exploration`:
+static → four capacities → four warmup/performance points → native geometry/runtime
+and evidence gates → comparison/single archive. Target-only and independent complete
+output tests are not launched. `strict-output` remains an opt-in path; B16 defaults
+and algorithm/execution/storage/budget configuration are unchanged.
+
+Full output equivalence is NOT_RUN, not PASS. The historical first B64 run had
+54/64 exact outputs in each Serial mode with the same10 differences, and64/64 in each
+PingPong mode; its strict failure and unstarted performance points remain unchanged.
+Native64/32 proof now comes from the current exploration warmup/runtime. Required
+capacity/device/KV/protocol/cleanup/measurement/trace checks remain strict. Aggregate
+strict mismatch reports now identify actual modes/IDs under comparison, preserving
+individual process exit codes and unique single-package delivery.
+
+Implementation/entry validation results and CI are recorded in the delivery update.
+New GPU performance and geometry/cleanup evidence are PENDING; no server was contacted.
+
+Local implementation validation: policy/entry/report delta65 passed; related Python3.9
+and3.12 suites270 passed each. Full suite2873 passed/3 skipped/4 failed: three existing
+natural-teardown shell cases exceeded15s and one legacy prepost capacity/failure-shell
+case exceeded20s. This is not a fully green local suite; the causes of those timing
+failures are not claimed resolved. Earlier ENOSPC and temporary artifact-retention
+collision are documented separately in k3-validation. Ruff, compileall, Python3.9
+syntax and Bash checks passed. No assertion or timeout changes.
