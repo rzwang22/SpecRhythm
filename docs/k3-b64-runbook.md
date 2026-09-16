@@ -169,6 +169,38 @@ mode's mismatch. Historical failure files are never rewritten.
 
 ## Independent I/O and dispatch comparison
 
+Implementation stages: I/O `4006ea7d1aed494dc1c663153bd23a7065bb22b6`,
+unified execution `cc42a501b63623de3e046e6388d0dcab0d2f339c`.
+The fixed entry is committed at `2cd2ca4906ce61e5038296a4bce88e29a3802a9d` and
+pins **both** experiment configurations to `cc42a501b63623de3e046e6388d0dcab0d2f339c`.
+Do not compare the two implementation commits as the scheduling ablation: use the
+two explicit configurations on this same final execution commit.
+
+After these commits are available on the remote, copy this complete foreground
+command on the existing A100 server. Run it once with `EXPERIMENT=io-only`; run it
+independently with `EXPERIMENT=unified` for the same-I/O scheduling comparison.
+Each invocation has eight measured points and exactly one upload package. A failure
+stops the remaining points in that invocation; do not automatically retry it.
+
+```bash
+EXPERIMENT=io-only  # choose io-only or unified
+if bash -s -- "$EXPERIMENT" <<'SR_K3_DIAGNOSTICS_ENTRY'
+set -Eeuo pipefail
+REPO="${SR_K3_REPO:-/root/autodl-tmp/src/SpecRhythm}"
+ENTRY_SHA=2cd2ca4906ce61e5038296a4bce88e29a3802a9d
+git -C "$REPO" fetch origin codex/rolling-eager-v0.1
+ENTRY_FILE=$(mktemp /tmp/specrhythm-k3-diagnostics-XXXXXX.sh)
+git -C "$REPO" show "${ENTRY_SHA}:scripts/run_k3_b64_diagnostics_pinned.sh" > "$ENTRY_FILE"
+bash "$ENTRY_FILE" "$1"
+SR_K3_DIAGNOSTICS_ENTRY
+then
+  printf 'Experiment finished; upload only the package named by UPLOAD ONLY.\n'
+else
+  rc=$?
+  printf 'Experiment stopped (original rc=%s); interactive terminal remains open.\n' "$rc"
+fi
+```
+
 The new `run_k3_b64_diagnostics_pinned.sh` takes exactly one argument: `io-only` or
 `unified`. Both use the same fixed execution commit, deferred-window observation
 and performance-exploration. The first keeps original Draft dispatch; the second

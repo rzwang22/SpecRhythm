@@ -126,3 +126,21 @@ corresponding parametrized baseline cases at `5511f89` passed in an independent
 read-only source copy with the environment on PATH. This establishes the baseline
 check result, not the cause of the intermittent timeouts. Final full validation
 uses the same Python environment on PATH; no test limit/assertion was changed.
+
+Final local full-suite invocation with the correct environment: **2 failed,
+2,931 passed, 3 skipped** (890.87 s). The remaining failures are the existing
+`test_target_failure_terminates_draft_without_unbounded_wait` subprocess limit
+(5 s), and `test_actual_fork_cannot_share_parent_buffer_or_forge_child_complete`
+(the child's valid 2 s diagnostic deadline expired). The original buffered-live
+`DiagnosticLogs` class and teardown helper/test are unchanged by this work. The
+same fork case also passed once in the read-only `5511f89` baseline. These checks
+do not establish the cause of the full-suite failures; full local validation is
+**not PASS**, and no timeout, assertion or budget was relaxed. New targeted cases
+and fixed-entry checks do not erase these failures.
+
+Final affected tests on Python 3.9 and 3.12: **126 passed each**. The pinned entry's
+actual Bash launch/first-error/single-upload cases: **5 passed**. The two configs
+use the same source; only the explicit dispatch policy differs. CPU tests replace
+GPU worker execution and do not prove A100 overlap, performance or filesystem
+behavior. Output equivalence is deliberately NOT_RUN. Remote CI is reported from
+the actual pushed SHA separately; before upload there is no new CI result.

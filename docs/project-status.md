@@ -29,6 +29,41 @@ claims.
 
 ## Pull request progress
 
+### PR #5 — B64 diagnostic persistence and unified dispatch (2026-09-16)
+
+- Continued from `5511f89ec142abf37448ffb2031641dc2964b966`, preserving prior
+  performance-exploration and B16 defaults. I/O stage:
+  `4006ea7d1aed494dc1c663153bd23a7065bb22b6`; final execution:
+  `cc42a501b63623de3e046e6388d0dcab0d2f339c`; fixed entry:
+  `2cd2ca4906ce61e5038296a4bce88e29a3802a9d`.
+- Explicit `io-only` and `unified` use the same final execution, bounded
+  `deferred-window` diagnostics, geometry, workload and budgets. Post-run JSONL
+  and repeated plugin-report snapshots are finalized under the original drain
+  deadline. Admission/KV/protocol checks and live control/ownership remain online.
+  Overflow, partial publication and missing bytes continue to fail qualification.
+- Existing mixed recovery/ordinary materialization is retained. Runnable inventories
+  and unique physical IDs distinguish recovery-only calls from mixed calls. Unified
+  policy validates runnable selection and publishes complete legal promotions at
+  their own fenced boundary before unrelated materialization, returning to the
+  owner command loop; Serial still has its all-Draft idle gate. No claim of a
+  historical missed-batch count or GPU forward reduction is made without evidence.
+- Each configuration runs four modes in forward then reverse order, with independent
+  roots, all raw values/ranges and one bounded deduplicated archive. Local retention,
+  verified DPC delivery/fallback, first-error status and sole UPLOAD ONLY are retained.
+  Full output equivalence remains NOT_RUN; historical Serial differences remain open.
+- Local full-suite result: **2 failed / 2931 passed / 3 skipped**. The two failures
+  are an existing 5 s subprocess timeout and an existing fork logger's 2 s deadline
+  expiration. Baseline isolated checks passed but do not identify the timeout cause.
+  No assertion or budget was loosened. Final Python 3.9/3.12 affected suites each
+  passed 126 cases; fixed-entry suite passed 5. See the
+  [validation record](validation/k3-deferred-dispatch.md) for first failures and scope.
+- HTTPS push initially failed because the configured credential was rejected.
+  The existing SSH identity authenticated successfully; delivery uses ordinary SSH
+  push without changing the remote configuration or rewriting history. CI status is
+  recorded against the uploaded commit separately. GPU capacity/cleanup/native
+  overlap/performance remain PENDING.
+  [Independent server commands](k3-b64-runbook.md#independent-io-and-dispatch-comparison).
+
 ### PR #5 — Target-only 原始 drain deadline 传递（2026-09-15）
 
 - 执行SHA `5b50529f3bd3617f29c60ee9de6bf7143f96449e`；随后固定入口仅绑定此已验证实现并更新交付文档。固定入口/真实runner/本地单包交付24项回归通过，提交中的必需执行文件已逐一核对。
