@@ -125,3 +125,43 @@ def test_buffer_bytes_immutable_and_unaudited_admission_stays_live(installed, tm
     control.append({"control": "not resident audit schema"})
     assert control.path.exists() and control.read()[0]["control"]
     assert logs.pending
+
+
+def test_real_four_producer_receipts_qualification_and_corruption(tmp_path, monkeypatch):
+    from specrhythm.serving.fixed_logging import qualify
+
+    # Distinct CPU producer IDs; all use real framing, fsync, publication and qualify.
+    logs = []
+    for i, role in enumerate(("draft", "coordinator", "target-rank-0", "target-rank-1")):
+        monkeypatch.setattr(os, "getpid", lambda i=i: 81000 + i)
+        log = DeferredLogs(tmp_path, role=role)
+        logs.append(log)
+        name = ("draft-work-events.jsonl", "scheduler-events.jsonl",
+                "round-events.jsonl", "target-diagnostics.jsonl")[i]
+        log.append(CheckpointJsonl(tmp_path / name), {"role": role}, CheckpointJsonl.append)
+        if role == "target-rank-0":
+            log.defer_report(tmp_path / "plugin-report.json", lambda: {"rounds": 2})
+    start = time.monotonic_ns()
+    deadline = start + 5_000_000_000
+    for log in logs:
+        log.finish(deadline)
+    publish(tmp_path / "drain-state.json", dict(start_ns=start, end_ns=time.monotonic_ns(),
+                                               deadline_ns=deadline))
+    assert qualify(tmp_path, "deferred-window")["finalization_required"]
+    path = tmp_path / "round-events.jsonl"
+    path.write_bytes(path.read_bytes().replace(b'target-rank-0', b'broken-rank-0'))
+    with pytest.raises(DataError, match="checksum"):
+        qualify(tmp_path, "deferred-window")
+
+
+def test_pending_audited_admission_preserves_all_rows(installed, tmp_path):
+    from specrhythm.phase4.admission_record import ADMISSION_EVENT_SCHEMA
+
+    logs, _, _ = installed
+    path = tmp_path / "admission-events.jsonl"
+    for i in range(1100):
+        CheckpointJsonl(path).append(dict(schema_version=ADMISSION_EVENT_SCHEMA,
+                                        consumer="serial", sequence=i))
+    assert not path.exists()
+    logs.finish(time.monotonic_ns() + 5_000_000_000)
+    assert [r["sequence"] for r in CheckpointJsonl(path).read()] == list(range(1100))

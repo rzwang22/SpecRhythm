@@ -439,6 +439,12 @@ def qualify(directory, observation):
         from specrhythm.phase4.manifest import sha256_file
 
         for receipt in receipts:
+            require(set(receipt["published_files"]) == set(receipt["deferred_streams"]),
+                    "deferred stream publication receipt missing")
+            for name, raw in receipt["published_files"].items():
+                require((directory / name).stat().st_size == raw["bytes"]
+                        and sha256_file(directory / name) == raw["sha256"],
+                        "deferred stream checksum differs", artifact=name)
             require(receipt["deferred_report_slots"] == len(receipt["reports"]),
                     "deferred report producer lacks final receipt")
             if receipt["deferred_report_requests"]:

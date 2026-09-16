@@ -22,8 +22,11 @@ class DeferredLogs(DiagnosticLogs):
     def __init__(self, directory, mode=MODE, role="unknown", *, max_records=RECORD_LIMIT,
                  max_bytes=BYTE_LIMIT, **kwargs):
         self.phases = defaultdict(lambda: dict(produced=0, enqueue_ns=0, encoded_bytes=0,
-                                               write_records=0, flushes=0, persistence_ns=0))
+                                               write_records=0, flushes=0, persistence_ns=0,
+                                               encode_ns=0))
         self.report_builders = {}
+        self.deferred_streams = set()
+        self.published_files = {}
         self.report_requests = 0
         self.report_receipts = {}
         self.io_phases = {}
@@ -42,6 +45,8 @@ class DeferredLogs(DiagnosticLogs):
             deferred_report_slots=len(self.report_builders),
             maximum_report_bytes=REPORT_LIMIT,
             reports=dict(self.report_receipts),
+            deferred_streams=sorted(self.deferred_streams),
+            published_files=dict(self.published_files),
             physical_io_by_phase=dict(self.io_phases),
             memory_scope="encoded pending bytes plus bounded row/path references; "
                          "report builder holds existing proposer, no history copy",
@@ -71,11 +76,13 @@ class DeferredLogs(DiagnosticLogs):
             try:
                 require(not self.closed and self.error is None,
                         "diagnostic logger finalized/failed")
+                self.deferred_streams.add(log.path.name)
                 self.produced += 1
                 self.streams[log.path.name]["produced"] += 1
                 phase["produced"] += 1
                 from specrhythm.phase4.admission_record import PreparedAdmission
 
+                encode_started = time.monotonic_ns()
                 if type(value) is PreparedAdmission:
                     line = value.line
                 else:
@@ -83,6 +90,7 @@ class DeferredLogs(DiagnosticLogs):
                     require("record_sha256" not in payload, "record_sha256 is reserved")
                     payload["record_sha256"] = payload_sha256(payload)
                     line = canonical_json_bytes(payload) + b"\n"
+                phase["encode_ns"] += time.monotonic_ns() - encode_started
                 phase["encoded_bytes"] += len(line)
                 require(len(self.pending) < self.max_records
                         and self.pending_bytes + len(line) <= self.max_bytes,
@@ -145,6 +153,11 @@ class DeferredLogs(DiagnosticLogs):
     def _flush(self, reason):
         require(reason in ("final", "failure"), "deferred diagnostics cannot flush online")
         super()._flush(reason)
+        for name in self.deferred_streams:
+            path = self.directory / name
+            self._budget()
+            self.published_files[name] = dict(bytes=path.stat().st_size,
+                                              sha256=sha256_file(path))
         if reason != "final":
             return
         for path, build in self.report_builders.items():
