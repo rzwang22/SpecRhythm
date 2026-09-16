@@ -142,6 +142,10 @@ def execute(root, gate, mode, manifest_path, directory, *, probe=False, policy=N
         options = manifest["fixed_diagnostic"]["options"]
         env["SR_FIXED_DRAFT_AUDIT"] = options.get("draft_audit", "full")
         env["SR_FIXED_OBSERVATION"] = options.get("observation", "original-live")
+        if "draft_dispatch" in options:
+            env["SR_K3_DRAFT_DISPATCH"] = options["draft_dispatch"]
+        else:
+            env.pop("SR_K3_DRAFT_DISPATCH", None)
         env["SR_FIXED_IDENTITY_MATCHING"] = options.get("identity_matching", "linear")
         setup_deadline = time.monotonic_ns() + int(options["setup_timeout"] * 1e9)
         if diagnostic.get("scan"):

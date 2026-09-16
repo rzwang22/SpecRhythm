@@ -16,6 +16,7 @@ from pathlib import Path
 from specrhythm.serving.audit_layer_report import write
 from specrhythm.serving.common import read_json, require
 from specrhythm.serving.execution_evidence import qualify
+from specrhythm.serving.fixed_logging import POST_RUN_LOGS
 from specrhythm.serving.ping_prepost import MODES, SCHEDULED_MODES
 
 FILE_LIMIT = 512 * 1024 * 1024
@@ -24,6 +25,8 @@ FILE_COUNT = 512  # Bounded raw logs/partial files/receipts; byte budgets remain
 LOGICAL_LIMIT = 512  # Bounded enumeration, including new raw logs and publication states.
 NAMES = {
     "storage-preflight.json", "delivery-status.json", "runner-outcome.json",
+    "plugin-report.json", "admission-events.jsonl", "round-events.jsonl",
+    "target-diagnostics.jsonl", "transport-events.jsonl",
     "supervisor-decision.json", "draft-report-state.json",
     "runner.log", "target.log", "draft.log", "draft-service.log", "draft-work-events.jsonl",
     "measurement-snapshot.json", "s2-control.json", "draft-service-ready.json",
@@ -64,6 +67,7 @@ NAMES = {
     "fixed-logging-target-rank-0.json",
     "fixed-logging-target-rank-1.json",
 }
+NAMES.update(POST_RUN_LOGS)
 RUNTIME_KEYS = {
     "events",
     "capacity",
@@ -180,6 +184,9 @@ def comparison(directory, *, modes=MODES):
             )
         )
         if mode.endswith("-k3"):
+            points[-1]["draft_dispatch"] = {k: v for k, v in
+                r["pingpong"].get("draft_dispatch", {}).items() if k != "calls"}
+            points[-1]["diagnostic_logging"] = r.get("diagnostic_logging")
             points[-1]["K3_mechanism"] = {
                 k: r["pingpong"].get(k) for k in (
                     "outcomes", "generated", "retained", "discarded", "lookahead_rates",
@@ -304,6 +311,10 @@ def comparison(directory, *, modes=MODES):
 
 
 def export(directory, output, *, first_code=0, stage="complete", modes=MODES):
+    if (directory / "experiment-plan.json").exists():
+        from specrhythm.serving.k3_repeat_export import export_repeats
+
+        return export_repeats(directory, output, first_code=first_code, stage=stage, modes=modes)
     require(directory.is_dir() and not output.exists(), "new delivery archive required")
     from specrhythm.serving.k3_validation import EXPLORATION, profile_of, read_plan
 
@@ -331,10 +342,13 @@ def export(directory, output, *, first_code=0, stage="complete", modes=MODES):
         p
         for p in directory.rglob("*")
         if p.is_file()
-        and (p.name in NAMES or p.name.endswith(("-audit-report.json", "-evidence-status.json"))
+        and (p.name in NAMES or (p.name.startswith("fixed-logging-")
+                               and p.suffix == ".json")
+             or p.name.endswith(("-audit-report.json", "-evidence-status.json"))
              or (p.name.startswith(".draft-backend-report.json.") and p.name.endswith(".partial")))
     )
     inventory, objects, emitted, total, failures = [], {}, set(), 0, []
+    checked_logging = set()
     evidence_errors = [e for e in (limit_error, policy_error) if e]
     expected = ["comparison.json"] if exploration else ["joint/result.json", "comparison.json"]
     if exploration:
@@ -422,6 +436,16 @@ def export(directory, output, *, first_code=0, stage="complete", modes=MODES):
                         row["parse_error"] = dict(type=type(error).__name__, error=str(error))
                         row["raw_bytes_retained"] = True
                         evidence_errors.append(name + ": malformed JSON (raw bytes included)")
+                if (source.name.startswith("fixed-logging-") and isinstance(value, dict)
+                        and value.get("observation") == "deferred-window"
+                        and source.parent not in checked_logging):
+                    from specrhythm.serving.fixed_logging import qualify as qualify_logging
+
+                    checked_logging.add(source.parent)
+                    try:
+                        qualify_logging(source.parent, "deferred-window")
+                    except (OSError, ValueError, KeyError, TypeError) as error:
+                        evidence_errors.append(name + ": diagnostic publication: " + str(error))
                 if source.name.startswith(".draft-backend-report.json."):
                     row["publication"] = "PARTIAL_UNPUBLISHED"
                     evidence_errors.append(name + ": unfinished report bytes retained")

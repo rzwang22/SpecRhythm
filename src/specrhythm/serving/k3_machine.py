@@ -15,16 +15,36 @@ class K3Machine(PingPrePostMachine):
     protocol, parameters = PROTOCOL, PARAMETERS
     uniform_candidate_length = 3
 
-    def __init__(self, *args, mode=None, configuration=B16, **kwargs):
+    def __init__(self, *args, mode=None, configuration=B16, draft_dispatch=None, **kwargs):
         super().__init__(*args, **kwargs)
         # Explicit production mode; historical CPU callers retain two-home defaults.
         mode = mode or ("pingpong-eager-k3" if self.enabled else "pingpong-k3")
+        from specrhythm.serving.k3_dispatch import MODES, snapshot
+
+        require(draft_dispatch is None or draft_dispatch in MODES, "unknown Draft dispatch")
+        self.draft_dispatch = draft_dispatch
+        self.dispatch_counts, self.dispatch_peak_live = {}, 0
+        if draft_dispatch is not None:
+            self.backend.dispatch_snapshot = lambda bindings: snapshot(self, bindings)
         self.geometry = geometry(mode, configuration)
         self.active_limit = self.geometry["active_limit"]
         self.backend.physical_batch_ceiling = self.geometry["draft_physical_batch_ceiling"]
         require(self.geometry["eager"] == self.enabled, "K3 mode/eager mismatch")
         self.target_batch_ceiling = self.geometry["target_request_ceiling"]
         self.home_capacities = self.geometry["home_capacities"]
+
+    def step(self):
+        if self.draft_dispatch == "unified" and not self.draining:
+            from specrhythm.serving.k3_dispatch import settled_promotions
+
+            promotions = settled_promotions(self)
+            if promotions:
+                # Return to the owner command loop before unrelated GPU work. The
+                # ordinary/recovery work stays runnable for the next common dispatch.
+                # Serial admission still checks has_work() on the same owner.
+                self.finish_synchronizations(promotions)
+                return True
+        return super().step()
 
     def admit(self, payload):
         if self.geometry["serial_idle_gate"]:
@@ -119,6 +139,13 @@ class K3Machine(PingPrePostMachine):
     def eager_report(self):
         result = super().eager_report()
         result["pingpong"]["geometry"] = self.geometry
+        result["pingpong"]["draft_dispatch"] = self.draft_dispatch or "legacy"
+        if self.draft_dispatch is not None:
+            result["pingpong"]["dispatch_observation"] = dict(
+                per_phase_forward_budget=4096, observed_by_phase=self.dispatch_counts,
+                live_request_limit=self.active_limit, peak_live_requests=self.dispatch_peak_live,
+                overflow="fail before next dispatch; no silent row loss",
+            )
         c = self.counters
         generated = sum(c[k] for k in (
             "initial_seed_candidates", "normal_extension_candidates",

@@ -334,7 +334,12 @@ def mechanism(runtime, backend):
     ]
     flat = [r for c in cycles for r in c["requests"]]
     generated = sum(r["generated"] for r in flat)
+    from specrhythm.serving.k3_physical_dispatch_evidence import summarize as dispatch_summary
+
+    dispatch = dispatch_summary(physical_rows, native_for_host, start, end)
+    errors.extend(dispatch.get("errors", []))
     return dict(
+        draft_dispatch=dispatch,
         protocol=expected_protocol,
         candidate_accounting=protocol.get("candidate_accounting") if uniform else None,
         status="INCOMPLETE" if errors else "COMPLETE",
@@ -395,7 +400,7 @@ def mechanism(runtime, backend):
     )
 
 
-def analyze(runtime, backend, light):
+def analyze(runtime, backend, light, *, draft_dispatch=None):
     start, end = runtime["measurement_start_ns"], runtime["measurement_end_ns"]
     targets = runtime["target_devices"]
     require(len(targets) == 2, "Target TP ranks missing")
@@ -438,6 +443,12 @@ def analyze(runtime, backend, light):
     )
     steps = [s for s in runtime["target_steps"] if s.get("window") and s["B"]]
     ping = mechanism(runtime, backend)
+    dispatch_policy = draft_dispatch
+    if dispatch_policy is not None:
+        require(backend.get("prepost", {}).get("pingpong", {}).get("draft_dispatch")
+                == dispatch_policy, "actual owner dispatch differs from manifest")
+        require(ping["draft_dispatch"]["status"] == "COMPLETE",
+                "configured Draft dispatch inventory missing/incomplete")
     if light["mode"].endswith("-k3"):
         from specrhythm.serving.k3_evidence import pipeline
 
@@ -501,6 +512,7 @@ def analyze(runtime, backend, light):
         },
         draft_device=device(backend["fixed_device"], start, end),
         pingpong=ping,
+        diagnostic_logging=light.get("diagnostic_logging"),
         target_TP_union={
             side: duration(
                 bounds([g for d in targets for g in d["device"]["forwards"]], start, end, inner)
@@ -554,6 +566,7 @@ def report(root, output, status, commit):
         reader.read(point / "runtime.json", required=True),
         reader.read(point / "draft-backend-report.json", required=True),
         light,
+        draft_dispatch=config["options"].get("draft_dispatch"),
     )
     value.update(
         source_commit=commit,

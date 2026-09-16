@@ -1685,3 +1685,21 @@ and isolated current checks did not reproduce the four full-suite timeouts; thei
 original causes remain unresolved. Implementation CI35059823704 (push) and35059827533
 (PR) passed the Python3.11 and pinned-source contract jobs; full Python3.9/3.12 jobs
 were still running at the documentation snapshot. No GPU test was run locally.
+
+### 2026-09-16 — B64 diagnostic I/O / unified dispatch experiment
+
+Draft PR #5 remains Draft. Opt-in bounded deferred diagnostics postpone post-run
+JSONL persistence and repeated plugin-report construction under the unchanged
+absolute drain deadline. Both `io-only` and `unified` configurations use the same
+recording and evidence contracts. Existing mixed correction/ordinary/lookahead
+materialize was verified; no claim that all historical recovery was exclusive.
+Unified mode validates runnable-set completeness and publishes valid complete K3
+promotions before unrelated recovery calls, returning to the owner queue. Serial's
+idle gate remains. Historical missed-batching count is unknown without inventory.
+
+Dedicated two-repetition foreground entry (forward then reverse mode order), one
+flattened archive, performance-exploration / output NOT_RUN. B16 defaults, hardware,
+geometry, protocol and historical results unchanged. See
+[validation](validation/k3-deferred-dispatch.md) and [B64 runbook](k3-b64-runbook.md).
+Local test/CI outcomes and final fixed SHA are recorded in the delivery update below.
+No AutoDL/A100 connection or GPU run performed; new GPU results are PENDING.

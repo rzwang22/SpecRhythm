@@ -138,7 +138,8 @@ def serve(config, directory, socket_path, *, backend_class=None, prepost_mode=No
                     "pingpong-eager-k3",
                 ),
                 report_path=report,
-                **({"mode": prepost_mode, "configuration": configuration_of(control())}
+                **({"mode": prepost_mode, "configuration": configuration_of(control()),
+                    "draft_dispatch": os.environ.get("SR_K3_DRAFT_DISPATCH")}
                    if prepost_mode.endswith("-k3") else {}),
             )
         return EagerSerialMachine(

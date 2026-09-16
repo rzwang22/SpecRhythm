@@ -42,6 +42,7 @@ def settings(
     observation="original-live",
     identity_matching="linear",
     draft_audit="full",
+    draft_dispatch=None,
 ):
     for name, value, minimum in (
         ("warmup_steps", warmup_steps, 0),
@@ -66,7 +67,9 @@ def settings(
 
     require(identity_matching in IDENTITY_MODES, "unknown fixed identity matching mode")
     require(draft_audit in ("full", "runtime"), "unknown Draft audit mode")
+    require(draft_dispatch in (None, "legacy", "unified"), "unknown Draft dispatch")
     return dict(
+        **({"draft_dispatch": draft_dispatch} if draft_dispatch is not None else {}),
         draft_audit=draft_audit,
         warmup_steps=warmup_steps,
         samples=samples,

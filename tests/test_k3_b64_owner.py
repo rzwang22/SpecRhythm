@@ -21,7 +21,8 @@ fixed_schedulers, s2_schedulers, target_pool = _fixed, _s2, _pool
 
 
 @pytest.mark.parametrize('mode', MODES)
-def test_B64_owner_target_no_hidden_B16_limit(target_pool, monkeypatch, mode):
+@pytest.mark.parametrize('draft_dispatch', [None, 'legacy', 'unified'])
+def test_B64_owner_target_no_hidden_B16_limit(target_pool, monkeypatch, mode, draft_dispatch):
     s, packet, path = target_pool
     g = geometry(mode, B64)
     monkeypatch.setenv('SR_S2_MODE', mode)
@@ -37,7 +38,8 @@ def test_B64_owner_target_no_hidden_B16_limit(target_pool, monkeypatch, mode):
 
     def factory():
         m = K3Machine(Backend(NS(max_model_len=4096), worker=OwnerWorker()), request_ids=ids,
-                      mode=mode, eager=g['eager'], configuration=B64)
+                      mode=mode, eager=g['eager'], configuration=B64,
+                      draft_dispatch=draft_dispatch)
         rows = []
         for rid in ids:
             prefix = tuple(s.requests[rid].all_token_ids)

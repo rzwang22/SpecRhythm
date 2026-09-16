@@ -23,6 +23,7 @@ class PrePostBackendMixin(GPUContinuationBackendMixin):
         super().__init__(*args, **kwargs)
         self.prepost_jobs, self.prepost_retired = {}, {}
         self.prepost_forwards = Records()
+        self.physical_forward_sequence = 0
         self.metrics.batches.update({p: Counter() for p in PURPOSES})
         self._provenance["prepost"] = dict(
             protocol=self.protocol,
@@ -79,12 +80,18 @@ class PrePostBackendMixin(GPUContinuationBackendMixin):
         ceiling = getattr(self, "physical_batch_ceiling", None)
         require(ceiling is None or len(rows) <= ceiling,
                 "K3 physical Draft batch exceeds geometry")
+        dispatch = None
+        if getattr(self, "dispatch_snapshot", None) is not None:
+            bindings, dispatch = self.dispatch_snapshot(bindings)
+        self.physical_forward_sequence += 1
+        physical_id = "draft-physical-" + str(self.physical_forward_sequence)
         started = time.monotonic_ns()
         before = self.metrics.forwards[purpose]
         try:
             self._gpu_writing = True
             with TRACE.span(
                 purpose,
+                physical_forward_id=physical_id,
                 bindings=bindings,
                 B=len(rows),
                 materialized_positions=[len(r.suffix) for r in rows],
@@ -103,6 +110,8 @@ class PrePostBackendMixin(GPUContinuationBackendMixin):
             )
             row = dict(
                 purpose=purpose,
+                physical_forward_id=physical_id,
+                dispatch=dispatch,
                 start_ns=started,
                 end_ns=time.monotonic_ns(),
                 B=len(rows),

@@ -203,13 +203,18 @@ class DeviceTimeline:
         from specrhythm.serving.fixed_timing import project_anchor
 
         rows = []
-        for start, end, host, launch_end, meta in self.pending:
+        for index, (start, end, host, launch_end, meta) in enumerate(self.pending):
             require(end.query(), "final fence did not complete diagnostic CUDA events")
             a, b = self.anchor.elapsed_time(start) * 1e6, self.anchor.elapsed_time(end) * 1e6
             require(b > a, "nonpositive diagnostic GPU event duration")
             rows.append(
                 {
                     **meta,
+                    # Run + producer identity + native index identifies every physical
+                    # call, including setup/refill, without extra GPU or host work.
+                    "native_forward_id": "native-index:" + str(index),
+                    "physical_forward_id": meta.get("causal_context", {}).get(
+                        "physical_forward_id", "native-index:" + str(index)),
                     "host_start_ns": host,
                     "host_launch_end_ns": launch_end,
                     "gpu_event_ms": (b - a) / 1e6,

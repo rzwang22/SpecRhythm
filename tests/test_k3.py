@@ -23,11 +23,12 @@ class Backend(K3BackendMixin, VllmBatchedDraftBackend):
         }
 
 
-def machine(eager=True, ids=("a", "b"), budget=100, eos=(), worker=None, complete=True, mode=None):
+def machine(eager=True, ids=("a", "b"), budget=100, eos=(), worker=None, complete=True, mode=None,
+            draft_dispatch=None):
     m = K3Machine(
         Backend(NS(max_model_len=4096), worker=worker or OwnerWorker()),
         request_ids=ids,
-        eager=eager, mode=mode,
+        eager=eager, mode=mode, draft_dispatch=draft_dispatch,
     )
     for rid in ids:
         m.initialize(rid, (10, 20), token_prefix_hash((10, 20)))

@@ -16,6 +16,17 @@ MODE = "deferred-window"
 RECORD_LIMIT = 100000
 BYTE_LIMIT = 256 * 1024 * 1024
 REPORT_LIMIT = 64 * 1024 * 1024
+LIVE_REASONS = {
+    "s2-control.json": "online coordinator/Target/Draft control snapshot",
+    "drain-state.json": "supervisor phase and original absolute deadline",
+    "draft-drain-state.json": "owner bounded cleanup progress",
+    "measurement-snapshot.json": "authoritative measurement stop/accounting snapshot",
+    "ownership.json": "owned process cleanup",
+    "draft-owner.json": "owned process cleanup",
+    "draft-service-ready.json": "startup readiness handshake",
+    "diagnostic-primary-error.json": "primary failure retention",
+    "diagnostic-secondary-errors.json": "secondary failure retention",
+}
 
 
 class DeferredLogs(DiagnosticLogs):
@@ -62,7 +73,8 @@ class DeferredLogs(DiagnosticLogs):
         row = self.io_phases.setdefault(key, dict(
             phase=phase, **attribution, fsync_calls=0, fsync_ns=0,
             reason="deferred diagnostic finalization" if self.deadline_ns is not None
-            else "live control/lifecycle or non-deferred stream; see write_kind"))
+            else LIVE_REASONS.get(attribution.get("log_name"),
+                                  "other live writer; retained; purpose not inferred")))
         row["fsync_calls"] += 1
         row["fsync_ns"] += ended - started
 
@@ -173,7 +185,8 @@ class DeferredLogs(DiagnosticLogs):
             # Validate the published content as well as its physical bytes.
             require(json.loads(path.read_bytes()) == value, "deferred report reread differs")
             self.report_receipts[path.name] = dict(
-                status="COMPLETE", bytes=path.stat().st_size, sha256=sha256_file(path),
+                status="COMPLETE", phase="drain", bytes=path.stat().st_size,
+                sha256=sha256_file(path),
                 canonical_sha256=hashlib.sha256(encoded).hexdigest(),
                 encoded_bytes=len(encoded), start_ns=start, end_ns=time.monotonic_ns(),
                 deadline_ns=self.deadline_ns, build_count=1,
@@ -186,6 +199,15 @@ class DeferredLogs(DiagnosticLogs):
             if not self.closed:
                 validate_deadline(deadline_ns, mode=self.role, directory=self.directory,
                                   phase="diagnostic_final_flush")
+            if self.error is not None and self.pending and self.deadline_ns is None:
+                # A controlled stop may supply the original drain deadline after
+                # an earlier error had no readable deadline. Preserve acquired bytes
+                # under that budget, but keep FAILED and the original error sticky.
+                self.deadline_ns = deadline_ns
+                try:
+                    self._flush("failure")
+                except BaseException as secondary:
+                    self.secondary_errors.append("failure flush: " + repr(secondary))
             return super().finish(deadline_ns)
         except BaseException as error:
             self.abort(error)

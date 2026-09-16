@@ -148,6 +148,20 @@ def test_real_four_producer_receipts_qualification_and_corruption(tmp_path, monk
     publish(tmp_path / "drain-state.json", dict(start_ns=start, end_ns=time.monotonic_ns(),
                                                deadline_ns=deadline))
     assert qualify(tmp_path, "deferred-window")["finalization_required"]
+    import tarfile
+
+    from specrhythm.serving.k3 import MODES
+    from specrhythm.serving.ping_prepost_delivery import export
+
+    archive = tmp_path.parent / (tmp_path.name + ".tar.gz")
+    exported = export(tmp_path, archive, first_code=23, modes=MODES)
+    restored = tmp_path.parent / (tmp_path.name + "-restored")
+    with tarfile.open(archive) as t:
+        for name, obj in exported["logical_paths"].items():
+            dest = restored / name
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(t.extractfile(obj).read())
+    assert qualify(restored, "deferred-window")["finalization_required"]
     path = tmp_path / "round-events.jsonl"
     path.write_bytes(path.read_bytes().replace(b'target-rank-0', b'broken-rank-0'))
     with pytest.raises(DataError, match="checksum"):
@@ -165,3 +179,19 @@ def test_pending_audited_admission_preserves_all_rows(installed, tmp_path):
     assert not path.exists()
     logs.finish(time.monotonic_ns() + 5_000_000_000)
     assert [r["sequence"] for r in CheckpointJsonl(path).read()] == list(range(1100))
+
+
+def test_controlled_failed_stop_preserves_pending_rows_but_remains_failed(tmp_path):
+    logs = DeferredLogs(tmp_path)
+    log = CheckpointJsonl(tmp_path / "round-events.jsonl")
+    logs.append(log, {"before_error": True}, CheckpointJsonl.append)
+    logs.abort(RuntimeError("original worker error"))
+    assert not log.path.exists()  # No deadline existed: no invented emergency budget.
+    deadline = time.monotonic_ns() + 5_000_000_000
+    with pytest.raises(DataError):
+        logs.finish(deadline)
+    assert log.read()[0]["before_error"] is True
+    receipt = json.loads(logs.receipt_path.read_bytes())
+    assert receipt["status"] == "FAILED" and not receipt["integrity_complete"]
+    assert receipt["error"] == "RuntimeError: original worker error"
+    assert logs.deadline_ns == deadline and receipt["written_records"] == 1

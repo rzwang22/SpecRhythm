@@ -166,3 +166,25 @@ Aggregate output failures now use `failure_layer=comparison`, `point=comparison`
 and mark known inequality FAILED. Per-process exit codes remain separate from the
 comparison command's exit1. The last completed eager mode is not blamed for another
 mode's mismatch. Historical failure files are never rewritten.
+
+## Independent I/O and dispatch comparison
+
+The new `run_k3_b64_diagnostics_pinned.sh` takes exactly one argument: `io-only` or
+`unified`. Both use the same fixed execution commit, deferred-window observation
+and performance-exploration. The first keeps original Draft dispatch; the second
+also enables runnable-set enforcement and independent promotion publication.
+The existing `run_k3_b64_pinned.sh` and B16 entry remain historical controls.
+
+Each invocation performs two repetitions: forward and reverse four-mode orders,
+with new roots for every capacity and performance point. No independent complete
+output comparison runs; output_equivalence_status remains NOT_RUN. Compare all
+repetition values/ranges, not the best window. Scheduling net benefit requires
+these two same-I/O runs. The driver does not automatically run both configurations.
+
+The local `/tmp/specrhythm-runs` evidence is retained; only the outer delivery
+prints UPLOAD ONLY after local archive validation and verified DPC copy or local
+fallback. The single package contains `experiment-plan.json`, both repetitions,
+comparison/ranges, raw physical inventories, native timelines, final logging
+receipts and first/secondary errors. A failed point stops subsequent points and
+repetitions. GPU capacity, cleanup, geometry, overlap and performance remain PENDING
+until new server evidence is returned. Historical output differences remain open.

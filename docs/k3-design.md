@@ -657,3 +657,19 @@ actual modes/request IDs and both source files. It no longer inherits the last i
 mode. The historical54/64 Serial,54/64 Serial-eager and64/64 two PingPong result is
 unresolved and unchanged. Performance was not run in that historical experiment.
 See [B64 runbook](k3-b64-runbook.md) for source archive hash, scopes and manual strict entry.
+
+## B64 deferred diagnostics and unified physical dispatch (2026-09-16)
+
+The explicit `deferred-window` observation mode postpones post-run JSONL persistence
+and plugin report construction to finalization under the shared absolute drain
+limit. Runtime decisions, audits and online control remain synchronous. The
+`draft_dispatch=legacy|unified` option is independent of geometry and validation
+profile; omitted values preserve historical behavior. See
+[implementation and evidence contract](validation/k3-deferred-dispatch.md).
+
+Unified mode reuses existing ordinary/correction/lookahead ragged batching and
+checks runnable-set completeness. Complete K3 promotions publish after their own
+validation/fence and yield to owner commands before unrelated recovery GPU work.
+No extra candidate or change to the Serial idle gate is allowed. Physical dispatch
+inventories explain unselected work; source tags do not create recovery queues.
+CPU regressions prove materialize membership and safe ordering, not GPU overlap.

@@ -368,6 +368,7 @@ def main(argv=None):
     p.add_argument("--single-point", action="store_true",
                    help="explicit one-point diagnostic: waive only the B16 order prerequisite")
     p.add_argument("--draft-audit", choices=("full", "runtime"), default="full")
+    p.add_argument("--draft-dispatch", choices=("legacy", "unified"))
     p.add_argument("--observation", choices=("buffered-live", "deferred-window"),
                    default="buffered-live")
     p.add_argument("--identity-matching", choices=("bound-prefix",), default="bound-prefix")
@@ -396,6 +397,7 @@ def main(argv=None):
                 options(
                     draft_audit=args.draft_audit,
                     observation=args.observation,
+                    draft_dispatch=args.draft_dispatch,
                     warmup_steps=args.warmup_steps,
                     repeats=args.repeats,
                     window_seconds=args.window_seconds,

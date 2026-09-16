@@ -14,6 +14,17 @@ if [[ -z "${SR_K3_LOCAL_DELIVERY:-}" ]]; then
   export PYTHONPATH="$PWD/src"
   exec "$SR_FIXED_PYTHON" -m specrhythm.serving.k3_local_run --repo "$PWD" --commit "$FINAL_SHA" --k3-configuration k3-b64-v1 --validation-profile "$SR_K3_VALIDATION_PROFILE"
 fi
+if [[ -n "${SR_K3_EXPERIMENT:-}" && -z "${SR_K3_REPEAT_CHILD:-}" ]]; then
+  export PYTHONPATH="${SR_EXEC_REPO:?}/src"
+  exec "$SR_FIXED_PYTHON" -m specrhythm.serving.k3_repeat_run \
+    --directory "$SR_K3_LOCAL_DELIVERY" --repo "$SR_EXEC_REPO" --commit "$FINAL_SHA" \
+    --configuration "$SR_K3_EXPERIMENT"
+fi
+export SR_K3_OBSERVATION="${SR_K3_OBSERVATION:-buffered-live}"
+DISPATCH_ARGS=()
+if [[ -n "${SR_K3_DRAFT_DISPATCH:-}" ]]; then
+  DISPATCH_ARGS=(--draft-dispatch "$SR_K3_DRAFT_DISPATCH")
+fi
 export SR_PING_DELIVERY="$SR_K3_LOCAL_DELIVERY"
 ARCHIVE="${SR_PING_DELIVERY}.tar.gz"
 export SR_EAGER_CAUSAL_TRACE=light SR_EAGER_CAUSAL_LAYOUT=phased
@@ -97,11 +108,14 @@ STAGE=static_capacity_contract
 "$SR_FIXED_PYTHON" -m specrhythm.serving.k3_capacity \
   --output "$SR_PING_DELIVERY/k3-capacity-contract.json" --k3-configuration k3-b64-v1
 MODES=(serial-k3 serial-eager-k3 pingpong-k3 pingpong-eager-k3)
+if [[ "${SR_K3_REVERSE:-0}" == 1 ]]; then
+  MODES=(pingpong-eager-k3 pingpong-k3 serial-eager-k3 serial-k3)
+fi
 for POINT in "${MODES[@]}"; do
   STAGE=prepare
   export SR_AUDIT_SERVING_MODE="$POINT" SR_FIXED_ROOT="$SR_PING_DELIVERY/points/$POINT"
   bash scripts/run_decode_scan.sh prepare --k3-configuration k3-b64-v1 --validation-profile "$SR_K3_VALIDATION_PROFILE" --s1 "$SR_FIXED_S1" --draft-audit runtime \
-    --observation buffered-live --identity-matching bound-prefix --selection-seed 1666 \
+    --observation "$SR_K3_OBSERVATION" ${DISPATCH_ARGS[@]+"${DISPATCH_ARGS[@]}"} --identity-matching bound-prefix --selection-seed 1666 \
     --warmup-steps 2 --window-seconds 30 --repeats 1 --setup-timeout 900 --drain-timeout 60
   "$SR_FIXED_PYTHON" - <<'PY_CONFIG'
 import os,pathlib
@@ -111,7 +125,8 @@ assert s['execution']['git_commit']==os.environ['SR_FIXED_COMMIT']
 assert s['workload_sha256']=='cdaf71adace15d229f5087b98f9fd162a958456226a660184fe03f5d6ebd8ff4'
 assert s['pool_size']==len(set(s['selection']['request_ids']))==360
 o=s['options']
-assert o['draft_audit']=='runtime' and o['observation']=='buffered-live'
+assert o['draft_audit']=='runtime' and o['observation']==os.environ['SR_K3_OBSERVATION']
+assert o.get('draft_dispatch')==os.environ.get('SR_K3_DRAFT_DISPATCH')
 assert o['identity_matching']=='bound-prefix' and o['samples'] is None
 assert (o['warmup_steps'],o['window_seconds'],o['repeats'],o['setup_timeout'],o['drain_timeout'])==(2,30,1,900,60)
 m=read_json(root/'inputs/execution-B64.json')
