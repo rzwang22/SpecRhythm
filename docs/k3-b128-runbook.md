@@ -6,7 +6,9 @@ Draft physical ceiling128. Resident360, unchanged frozen workload SHA256
 GPU0 Draft and GPU1/2 one TP2 Target. This is not a change to K3, precision,
 Target diagnostics, scheduler, READY semantics or KV protocol.
 
-The fixed entry (added in the delivery commit) pins the implementation, creates a
+Execution commit: `f7bfb43152f5655edbad9888c53c0a81e9d11954`.
+
+The fixed entry `scripts/run_k3_b128_pinned.sh` pins that implementation, creates a
 new detached worktree, clears inherited private runner flags, and defaults to
 `unified`, `deferred-window`, `performance-exploration`. It also accepts `io-only`
 (legacy dispatch/same I/O), and an explicit same-version `b64` rerun. It never
