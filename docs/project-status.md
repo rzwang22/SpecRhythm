@@ -1809,3 +1809,21 @@ changes. Same-SHA lean-reference/lean-dispatch-opt controls keep all eight windo
 and single-bundle delivery. See `docs/validation/k3-dispatch-cycle.md` for boundaries,
 evidence limitations and validation. New GPU performance/overlap remain PENDING;
 full output equivalence remains NOT_RUN; historical output differences remain open.
+
+
+Dispatch delivery: execution `c1fca49f3f846ef94f0759b585fddaf091d78b62`, fixed entry
+`9feb51a4d36e4acc0f682ea006a6842d327a69d4`. Observation and encoding optimization
+remain separate commits/switches; both same-SHA lean configurations run8 windows.
+Related suites passed90 (Python3.9) and94 (Python3.12); fixed-entry/profile13 passed
+on3.12, entry/cycle15 on3.9. Final local full run3089 passed/3 failed/3 skipped;
+three unchanged legacy20s/5s/15s subprocess harness timeouts remain unexplained.
+First full run3061 passed/10 failed/3 skipped is retained separately in
+`docs/validation/k3-dispatch-local-checks.json`. No timeout/assertion was relaxed.
+Ruff, compileall3.9/3.12, Python3.9 syntax and Bash checks passed. CPU interleaving
+and report checks do not certify native GPU performance or output equivalence.
+Fixed entry ordinary push preserves Draft PR#5 and all prior branch commits.
+
+CI snapshot for entry9feb51a, run35260463228: Python3.11 contract and pinned-vLLM
+source contract PASS; Python3.9/3.12 full jobs RUNNING. Their completion is not
+claimed. The documentation follow-up may have its own pending CI run. New GPU
+capacity/cleanup/overlap/performance PENDING; output equivalence NOT_RUN.

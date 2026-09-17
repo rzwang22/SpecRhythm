@@ -111,3 +111,57 @@ Choose one configuration for each foreground invocation. Both invocations create
 new worktrees/local directories and independently produce one archive. Do not
 run them concurrently on the same GPUs. Original buffers, report caps and
 setup/drain deadlines are unchanged.
+
+
+### Fixed lean dispatch foreground commands
+
+Entry commit: `9feb51a4d36e4acc0f682ea006a6842d327a69d4`.
+Run each configuration separately on the existing A100 server. This wrapper
+contains strict mode in a child Bash and leaves the interactive parent open.
+The first command runs the reference; use `lean-dispatch-opt` in the indicated
+argument for the independent optimization run. Do not execute both concurrently.
+
+```bash
+if bash -s -- lean-reference <<'SR_K3_DISPATCH_BOOT'
+set -Eeuo pipefail
+REPO="${SR_K3_REPO:-/root/autodl-tmp/src/SpecRhythm}"
+ENTRY_SHA=9feb51a4d36e4acc0f682ea006a6842d327a69d4
+git -C "$REPO" fetch origin codex/rolling-eager-v0.1
+ENTRY="$(mktemp /tmp/specrhythm-k3-dispatch-entry.XXXXXX.sh)"
+git -C "$REPO" show "$ENTRY_SHA:scripts/run_k3_dispatch_pinned.sh" > "$ENTRY"
+bash "$ENTRY" "$1"
+SR_K3_DISPATCH_BOOT
+then
+  printf 'Finished; return only the archive printed by the runner.\n'
+else
+  rc=$?
+  printf 'Stopped with original rc=%s; interactive shell remains open.\n' "$rc"
+fi
+```
+
+The complete optimization command is identical except for the independently
+selected argument:
+
+```bash
+if bash -s -- lean-dispatch-opt <<'SR_K3_DISPATCH_BOOT'
+set -Eeuo pipefail
+REPO="${SR_K3_REPO:-/root/autodl-tmp/src/SpecRhythm}"
+ENTRY_SHA=9feb51a4d36e4acc0f682ea006a6842d327a69d4
+git -C "$REPO" fetch origin codex/rolling-eager-v0.1
+ENTRY="$(mktemp /tmp/specrhythm-k3-dispatch-entry.XXXXXX.sh)"
+git -C "$REPO" show "$ENTRY_SHA:scripts/run_k3_dispatch_pinned.sh" > "$ENTRY"
+bash "$ENTRY" "$1"
+SR_K3_DISPATCH_BOOT
+then
+  printf 'Finished; return only the archive printed by the runner.\n'
+else
+  rc=$?
+  printf 'Stopped with original rc=%s; interactive shell remains open.\n' "$rc"
+fi
+```
+
+Each invocation prints one `UPLOAD ONLY:` for its own verified single archive,
+`pingpong-k3-delivery-a100-k3-b128-<configuration>-<tag>.tar.gz`. Capacity and eight
+performance windows, both comparisons, raw evidence, cycle projections, first
+failure and export/copy outcomes are inside that archive. No extra collection
+commands or separate JSON uploads are required.

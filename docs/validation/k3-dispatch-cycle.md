@@ -144,7 +144,54 @@ part of that residual without extra device synchronization.
 Report budget check: losslessly factor the identical explanatory `scope`
 string out of each request wait row into `dispatch.request_wait_scope`;
 all numeric/missing values and identities remain. Together with compact cycle
-statistics, the four replayed reports occupy 6.30–6.92 MB, below the unchanged
+statistics, the four replayed reports occupy 6.41–7.05 MB, below the unchanged
 8 MiB cap. Missing scope prevents factoring; no guessed default is inserted.
 The initial pretty-JSON diagnostic exceeded the cap; production uses compact
 JSON, and both the correct encoding and structural headroom were checked.
+
+
+## CPU and delivery validation (2026-09-18)
+
+The production-chain tests drive real owner/backend/controller/scheduler paths
+with controlled CPU interfaces, construct runtime/native reports, qualify, export,
+and re-read the single archive. Both encoding profiles preserve actual claim and
+Serial gate behavior. The additional report projection keeps every complete-step
+thread partition and its same-sample aggregate; missing lanes remain missing.
+CPU ordering establishes safe interleaving, not native GPU overlap.
+
+Python3.12 related suite:94 passed. Python3.9 related suite:90 passed.
+Final fixed-entry/profile tests:13 passed on3.12; fixed-entry/cycle tests:15 passed
+on3.9. The final cycle-only regression has8 passed, including thread coverage and
+closure. Ruff passes after correcting import order, lambda fixture binding and
+one line-length violation; no functional check, timeout or assertion was relaxed.
+
+First full Python3.12 run:3061 passed,10 failed,3 skipped. Nine failures were the
+unchanged subprocess20s failure-summary/export harness boundaries (three K3
+joint-export cases, one Ping prepost joint-export case and five legacy Serial
+prepost runner cases). One unchanged forked logging test exceeded its existing2s
+drain deadline. These are actual failed checks, not certified pre-existing causes.
+No evidence establishes their original cause. Subsequent results are recorded
+separately; a later pass does not erase or explain these failures.
+
+Execution `c1fca49f3f846ef94f0759b585fddaf091d78b62` contains observations and both
+encoding profiles. Fixed entry `9feb51a4d36e4acc0f682ea006a6842d327a69d4` reads that
+exact execution SHA; the server does not execute moving branch HEAD. New GPU
+performance, geometry, cleanup and overlap are PENDING. Output equivalence is
+NOT_RUN, and the historical B64 output differences remain unresolved.
+
+
+Final full local run: **3089 passed,3 failed,3 skipped** in1031.77s. The three
+remaining failures are unchanged legacy harnesses:
+
+- `test_execution_pair_runbook... [capacity-serial:runtime]`:20s child timeout.
+- `test_phase4_dual::test_target_failure_terminates_draft_without_unbounded_wait`:5s child timeout.
+- `test_phase4_natural_teardown... [target]`:15s child timeout.
+
+Their tests and shell helper implementations have no diff against preserved
+`bb79d4f`; none activates the new control encoding policy. Their original causes
+remain unresolved; this local full suite is not reported green. Git's separate
+working-tree refresh was sampled blocked in `read()`, and an initial static-source
+read raised OS error89; those observations do not establish the test failures'
+cause. Fresh strict syntax/Bash checks passed for406 Python files/20 scripts,
+and compileall passed on3.9 and3.12. Machine-readable local check results are in
+`k3-dispatch-local-checks.json`. No source test deadline was extended.
