@@ -57,6 +57,8 @@ def metadata(options):
     selected = options.get("target_diagnostics", "full")
     return dict(
         **coverage(selected),
+        **({"target_dispatch": options["target_dispatch"]}
+           if "target_dispatch" in options else {}),
         capture_function="specrhythm.phase4.vllm_diagnostics.capture_target_forward",
         target_logits_diagnostics=("ENABLED; existing raw top-10/argmax/log-softmax path"
                                    if selected == "full" else "NOT_COLLECTED_BY_PROFILE"),

@@ -284,6 +284,21 @@ def cycle_report(runtime, backend):
         available = cur["group"]["step"]["ping_admission"].get("target_available_observed_ns")
         lower = max(r["timestamp_ns"], available) if r and type(available) is int else None
         upper = c.get("eligibility_observed_ns")
+        ready_busy = None
+        if r and c["claimed_ns"] >= r["timestamp_ns"]:
+            busy_ms = duration(
+                intersect(
+                    [(r["timestamp_ns"], c["claimed_ns"])],
+                    [(s["start_ns"], s["end_ns"]) for s in runtime["target_steps"]],
+                )
+            )
+            ready_busy = dict(
+                Target_complete_step_busy_ms=busy_ms,
+                outside_observed_Target_steps_ms=(c["claimed_ns"] - r["timestamp_ns"]) / 1e6
+                - busy_ms,
+                outside_reason="UNACCOUNTED; may include home/capacity/Serial gate, "
+                "coordinator work and owner command service; not proven avoidable",
+            )
         cycles.append(
             dict(
                 key=list(key),
@@ -294,6 +309,7 @@ def cycle_report(runtime, backend):
                 next_step=cur["group"]["index"],
                 landmarks_ns=landmarks,
                 ledger=ledger(landmarks),
+                READY_wait=ready_busy,
                 eligibility=dict(
                     ready_version=key[1],
                     valid_until_claim_ns=c["claimed_ns"],
@@ -307,15 +323,39 @@ def cycle_report(runtime, backend):
     # Cadences are start-to-start, not denominators synthesized from opportunity counts.
     cadences = defaultdict(list)
     previous_global, previous_home = None, {}
+    cadence_cycles = defaultdict(list)
     for row in steps:
         t = row["landmarks_ns"]["GPU_start_lower"]
-        if previous_global is not None:
-            cadences["global"].append((t - previous_global) / 1e6)
-        previous_global = t
+        previous_for_scope = {
+            "global": previous_global,
+            **{home: previous_home.get(home) for home in row["home_request_counts"]},
+        }
+        for scope, prev in previous_for_scope.items():
+            if prev is None:
+                continue
+            x, y = prev["landmarks_ns"], row["landmarks_ns"]
+            cadences[scope].append((t - x["GPU_start_lower"]) / 1e6)
+            landmarks = dict(
+                previous_GPU_start_lower=x["GPU_start_lower"],
+                previous_GPU_end_upper=x["GPU_end_upper"],
+                previous_step_end=x["complete_step_end"],
+                next_claim=y["claim"],
+                next_step_start=y["complete_step_start"],
+                next_GPU_start_lower=t,
+            )
+            cadence_cycles[scope].append(
+                dict(
+                    key=[scope, prev["key"], row["key"]],
+                    landmarks_ns=landmarks,
+                    ledger=ledger(landmarks),
+                    intervening_steps=[
+                        other["key"] for other in steps if prev["key"] < other["key"] < row["key"]
+                    ],
+                )
+            )
+        previous_global = row
         for home in row["home_request_counts"]:
-            if home in previous_home:
-                cadences[home].append((t - previous_home[home]) / 1e6)
-            previous_home[home] = t
+            previous_home[home] = row
     lanes = {}
     producers = {"coordinator": host, "draft": backend.get("fixed_host", {})}
     producers.update(
@@ -343,6 +383,18 @@ def cycle_report(runtime, backend):
         cadence_start_lower_ms={k: stats(v) for k, v in cadences.items()},
         feedback_owner_queue=queue,
         thread_partitions=lanes,
+        cadence_cycles=dict(cadence_cycles),
+        cadence_cycle_summary={k: summarize_ledgers(v) for k, v in cadence_cycles.items()},
+        observation_coverage={
+            name: dict(
+                retained_trace_rows=len(traces(h)),
+                source_retention={
+                    k: v for k, v in h.get("causal_timeline", {}).items() if k != "rows"
+                },
+                recorder_self_cost="NOT_SEPARATELY_MEASURED; host spans include instrumentation",
+            )
+            for name, h in producers.items()
+        },
         scope="complete feedback-generated to next feedback-generated request/version cycles; "
         "no interpolation; home cadence may include mixed-home steps; no alternation assumption",
         limitations="GPU lower/upper envelope closes algebraically, not exact device wall time; "
@@ -350,3 +402,45 @@ def cycle_report(runtime, backend):
         "Unobserved IPC/input subwork and legal eligibility remain unaccounted; terminal requests "
         "without a next claim have no next cycle. Native overlap is reported separately.",
     )
+
+
+def compact_report(value):
+    """Keep all-sample statistics and declared examples within the existing 8 MiB report.
+
+    Complete source events remain in the single archive; no repeated raw request
+    ledger arrays in comparison or audit reports. Offline cycle_report reconstructs
+    them without inference. Per-step endpoints/ledgers remain for strict qualification.
+    """
+    queue = value["feedback_owner_queue"]
+    return {
+        **{
+            k: v
+            for k, v in value.items()
+            if k not in ("request_cycles", "cadence_cycles", "feedback_owner_queue", "steps")
+        },
+        "steps": [
+            {k: v for k, v in s.items() if k != "claim_to_gpu_threads"} for s in value["steps"]
+        ],
+        "feedback_owner_queue_summary": {
+            k: stats([r[k] for r in queue])
+            for k in ("wait_ms", "physical_host_call_union_ms", "other_or_unaccounted_ms")
+        },
+        "sample_projection": "all complete samples contribute to statistics; median/P90 examples "
+        "retained; request ledgers reconstructible from archived native/owner/transport events",
+    }
+
+
+def factor_wait_scope(pipeline):
+    """Lossless report-only factoring of repeated prose, not missing evidence filling."""
+    import copy
+
+    result = copy.deepcopy(pipeline)
+    rows = [r for s in result.get('dispatch', {}).get('rows', [])
+            for r in s.get('request_versions', [])]
+    scopes = [r.get('wait_breakdown', {}).get('scope') for r in rows]
+    if scopes and all(isinstance(x, str) and x == scopes[0] for x in scopes):
+        result['dispatch']['request_wait_scope'] = scopes[0]
+        result['dispatch']['scope_encoding'] = 'shared request_versions.wait_breakdown.scope v1'
+        for r in rows:
+            del r['wait_breakdown']['scope']
+    return result

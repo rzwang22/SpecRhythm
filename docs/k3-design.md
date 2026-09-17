@@ -820,3 +820,17 @@ are rank0-only; rank1's absent optional spans are NOT_APPLICABLE, while both TP
 ranks still require independent native device/request evidence. Long committed-
 prefix records and their hashes remain for the existing structural input contract;
 this patch does not claim to eliminate every metadata/encoding cost.
+
+## Lean B128 dispatch cycle audit and control encoding
+
+See [matched-cycle validation](validation/k3-dispatch-cycle.md). This iteration adds
+bounded host preparation/owner spans and offline, version-joined feedback cycle
+ledgers. Native clock bounds, complete-step boundaries and thread-local exclusive
+partitions remain distinct. Earliest legal eligibility is only partially observed;
+selection-time eligibility is not treated as its origin.
+
+The opt-in `target_dispatch=encode-once` changes only current control JSON encoding
+and writing, not the snapshot contents, publication boundaries or consumers.
+It caches no prefix/KV, readiness or eligibility. `reference` is the compatibility
+path. Both variants retain all live audits, Serial gates and READY ordering.
+Performance and new native overlap are PENDING server evidence.

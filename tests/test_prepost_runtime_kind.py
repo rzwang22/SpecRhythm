@@ -37,7 +37,8 @@ def driven(produced, monkeypatch, tmp_path):
     calls = []
 
     def build(mode, stage, driver=None, *, full_run=False, admission_limit=None,
-              configuration="k3-b16-v1", validation_profile=None, target_diagnostics=None):
+              configuration="k3-b16-v1", validation_profile=None, target_diagnostics=None,
+              target_dispatch=None):
         from specrhythm.serving.k3 import configuration_fields, geometry
         from specrhythm.serving.k3_validation import fields as validation_fields
 
@@ -48,6 +49,8 @@ def driven(produced, monkeypatch, tmp_path):
         calls.append((mode, stage))
         if target_diagnostics is not None:
             monkeypatch.setenv("SR_FIXED_TARGET_DIAGNOSTICS", target_diagnostics)
+        if target_dispatch is not None:
+            monkeypatch.setenv("SR_K3_TARGET_DISPATCH", target_dispatch)
         h = produced(mode, True, root=base)  # Actual startup/snapshot, no decode hooks yet.
         directory = base / "drive-output"
         shutil.copytree(
@@ -77,6 +80,8 @@ def driven(produced, monkeypatch, tmp_path):
         opts = m["fixed_diagnostic"]["options"]
         if target_diagnostics is not None:
             opts["target_diagnostics"] = target_diagnostics
+        if target_dispatch is not None:
+            opts["target_dispatch"] = target_dispatch
         if configuration == "k3-b128-v1":
             from specrhythm.serving.k3_scale_report import metadata
 

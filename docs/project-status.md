@@ -1791,3 +1791,21 @@ geometry, protocol and historical results unchanged. See
 [validation](validation/k3-deferred-dispatch.md) and [B64 runbook](k3-b64-runbook.md).
 Local test/CI outcomes and final fixed SHA are recorded in the delivery update below.
 No AutoDL/A100 connection or GPU run performed; new GPU results are PENDING.
+
+### 2026-09-18 — lean B128 dispatch cycle accounting (pending server)
+
+Preserved `bb79d4f` after the verified `4ff1170` lean reference. Observation commit
+`b459781964afca88daea7e3331e91855b1aa06fe` adds matched feedback cycles and bounded
+control/worker/owner spans. First-repeat ordinary PingPong explains its apparent
+negative step residual exactly: claim begins 97.527 ms before complete-step, while
+feedback RPC precedes step end by 78.825 ms. The same 52 samples close to 394.764 ms.
+Eager receive→dequeue is partly occupied by a recorded Draft physical host call,
+with the remaining duration explicitly unaccounted.
+
+A separate switch changes only online control serialization from fragmented
+`json.dump` writes to byte-equivalent one-shot `json.dumps` + write + atomic replace.
+No scheduling order, READY publication, live KV check, deadline or output protocol
+changes. Same-SHA lean-reference/lean-dispatch-opt controls keep all eight windows
+and single-bundle delivery. See `docs/validation/k3-dispatch-cycle.md` for boundaries,
+evidence limitations and validation. New GPU performance/overlap remain PENDING;
+full output equivalence remains NOT_RUN; historical output differences remain open.

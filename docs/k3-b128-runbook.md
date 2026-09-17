@@ -82,3 +82,22 @@ For a separately requested same-version B64 repeat, replace the last child comma
 with `bash "$ENTRY" unified b64`. For the retained I/O-only/legacy dispatch control,
 use `bash "$ENTRY" io-only b128`. Neither is run by default. Each invocation creates
 its own worktree, local directory and archive; no old results are overwritten.
+
+## Same-SHA lean dispatch controls (2026-09-18)
+
+The independent entry `scripts/run_k3_dispatch_pinned.sh` accepts exactly one of
+`lean-reference` / `lean-dispatch-opt`. Each runs four first-repeat capacity probes
+and eight performance windows (forward modes, then reverse modes), sequentially.
+Both use lean Target diagnostics, unified Draft dispatch, deferred-window I/O,
+performance-exploration and unchanged k3-b128-v1. Output equivalence is NOT_RUN.
+Reference retains control streaming encoding; opt uses one-shot encoding before
+the same atomic publication. No full numerical baseline or output comparison runs.
+
+All original /tmp mutable storage, setup900/drain60 absolute budgets, local archive,
+DPC copy/hash verification and local fallback are retained. Each invocation emits
+only one UPLOAD ONLY path. Failure stops later points; no retry/grid is added.
+Comparison includes compact all-sample cycle statistics and declared median/P90
+examples. Raw native/owner/transport records remain in the bundle for reconstructing
+all request ledgers; large derived arrays are not embedded repeatedly.
+Missing landmarks, clipped/incomplete cycles and unknown eligibility stay explicit.
+The first two windows per mode cannot establish a stable speedup by themselves.

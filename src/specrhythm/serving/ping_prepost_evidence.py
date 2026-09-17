@@ -486,10 +486,13 @@ def analyze(runtime, backend, light, *, draft_dispatch=None):
                     is True for d in targets),
                 "B128 effective Target logits diagnostics missing/disabled")
     calls = ping.get("draft_dispatch", {}).get("unique_physical_calls")
-    from specrhythm.serving.k3_cycle_evidence import cycle_report
+    from specrhythm.serving.k3_cycle_evidence import compact_report, cycle_report, factor_wait_scope
+
+    if light["mode"].endswith("-k3"):
+        ping["pipeline"] = factor_wait_scope(ping["pipeline"])
 
     return dict(
-        cycle_accounting=cycle_report(runtime, backend)
+        cycle_accounting=compact_report(cycle_report(runtime, backend))
         if light["mode"].endswith("-k3") else None,
         capture_target_forward=capture_summary(
             {k: v for k, v in hosts.items() if k.startswith("target-rank-")}, start, end),
@@ -625,6 +628,13 @@ def report(root, output, status, commit):
             "engine_core", "async_scheduling", "eos_token_ids", "launch_environment", "capacity")}
     write(value, output)
     qualification = qualify(value)
+    from specrhythm.serving.target_dispatch import qualification_errors
+
+    dispatch_errors = qualification_errors(value, runtime, config["options"])
+    if dispatch_errors:
+        qualification["errors"].extend(dispatch_errors)
+        qualification["diagnostic_integrity"] = "FAILED"
+        qualification["failure_layer"] = "diagnostic_evidence"
     write(qualification, status)
     return qualification
 

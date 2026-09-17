@@ -19,11 +19,23 @@ def publish(path, value):
     path = Path(path)
     temporary = path.with_suffix(path.suffix + ".tmp")
     from specrhythm.continuation.trace import TRACE
+    from specrhythm.serving.target_dispatch import policy
 
-    with TRACE.span("control_snapshot_publish", file_name=path.name):
-        with TRACE.span("control_snapshot_encode_write", file_name=path.name):
-            with temporary.open("w") as handle:
-                json.dump(value, handle, allow_nan=False)
+    # A single coordinator publishes this path. No snapshot caching: every call
+    # encodes its current value and publishes at exactly the original boundary.
+    selected = policy() if str(path) == os.environ.get("SR_S2_CONTROL") else "reference"
+    with TRACE.span("control_snapshot_publish", file_name=path.name, encoding_policy=selected):
+        if selected == "encode-once":
+            with TRACE.span("control_snapshot_encode", file_name=path.name):
+                encoded = json.dumps(value, allow_nan=False)
+            with TRACE.span("control_snapshot_write", file_name=path.name,
+                            encoded_characters=len(encoded), text_write_calls=1):
+                with temporary.open("w") as handle:
+                    handle.write(encoded)
+        else:
+            with TRACE.span("control_snapshot_encode_write", file_name=path.name):
+                with temporary.open("w") as handle:
+                    json.dump(value, handle, allow_nan=False)
         with TRACE.span("control_snapshot_replace", file_name=path.name):
             temporary.replace(path)
 

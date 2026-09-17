@@ -29,6 +29,10 @@ TARGET_DIAGNOSTIC_ARGS=()
 if [[ -n "${SR_K3_TARGET_DIAGNOSTICS:-}" ]]; then
   TARGET_DIAGNOSTIC_ARGS=(--target-diagnostics "$SR_K3_TARGET_DIAGNOSTICS")
 fi
+TARGET_DISPATCH_ARGS=()
+if [[ -n "${SR_K3_TARGET_DISPATCH:-}" ]]; then
+  TARGET_DISPATCH_ARGS=(--target-dispatch "$SR_K3_TARGET_DISPATCH")
+fi
 export SR_PING_DELIVERY="$SR_K3_LOCAL_DELIVERY"
 ARCHIVE="${SR_PING_DELIVERY}.tar.gz"
 export SR_EAGER_CAUSAL_TRACE=light SR_EAGER_CAUSAL_LAYOUT=phased
@@ -119,7 +123,7 @@ for POINT in "${MODES[@]}"; do
   STAGE=prepare
   export SR_AUDIT_SERVING_MODE="$POINT" SR_FIXED_ROOT="$SR_PING_DELIVERY/points/$POINT"
   bash scripts/run_decode_scan.sh prepare --k3-configuration k3-b64-v1 --validation-profile "$SR_K3_VALIDATION_PROFILE" --s1 "$SR_FIXED_S1" --draft-audit runtime \
-    --observation "$SR_K3_OBSERVATION" ${DISPATCH_ARGS[@]+"${DISPATCH_ARGS[@]}"} ${TARGET_DIAGNOSTIC_ARGS[@]+"${TARGET_DIAGNOSTIC_ARGS[@]}"} --identity-matching bound-prefix --selection-seed 1666 \
+    --observation "$SR_K3_OBSERVATION" ${DISPATCH_ARGS[@]+"${DISPATCH_ARGS[@]}"} ${TARGET_DIAGNOSTIC_ARGS[@]+"${TARGET_DIAGNOSTIC_ARGS[@]}"} ${TARGET_DISPATCH_ARGS[@]+"${TARGET_DISPATCH_ARGS[@]}"} --identity-matching bound-prefix --selection-seed 1666 \
     --warmup-steps 2 --window-seconds 30 --repeats 1 --setup-timeout 900 --drain-timeout 60
   "$SR_FIXED_PYTHON" - <<'PY_CONFIG'
 import os,pathlib
@@ -132,6 +136,7 @@ o=s['options']
 assert o['draft_audit']=='runtime' and o['observation']==os.environ['SR_K3_OBSERVATION']
 assert o.get('draft_dispatch')==os.environ.get('SR_K3_DRAFT_DISPATCH')
 assert o.get('target_diagnostics')==os.environ.get('SR_K3_TARGET_DIAGNOSTICS')
+assert o.get('target_dispatch')==os.environ.get('SR_K3_TARGET_DISPATCH')
 assert o['identity_matching']=='bound-prefix' and o['samples'] is None
 assert (o['warmup_steps'],o['window_seconds'],o['repeats'],o['setup_timeout'],o['drain_timeout'])==(2,30,1,900,60)
 m=read_json(root/'inputs/execution-B64.json')

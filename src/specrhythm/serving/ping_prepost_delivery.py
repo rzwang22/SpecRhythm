@@ -194,7 +194,7 @@ def comparison(directory, *, modes=MODES):
         if mode.endswith("-k3"):
             points[-1]["cycle_accounting"] = {k: v for k, v in
                 (r.get("cycle_accounting") or {}).items()
-                if k not in ("steps", "request_cycles", "feedback_owner_queue")}
+                if k not in ("steps", "request_cycles", "feedback_owner_queue", "cadence_cycles")}
             points[-1]["draft_dispatch"] = {k: v for k, v in
                 r["pingpong"].get("draft_dispatch", {}).items() if k != "calls"}
             points[-1]["diagnostic_logging"] = r.get("diagnostic_logging")

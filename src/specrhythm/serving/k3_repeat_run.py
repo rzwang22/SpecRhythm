@@ -14,8 +14,11 @@ from specrhythm.serving.k3 import B64, B128, MODES, geometry
 from specrhythm.serving.k3_validation import plan
 
 CONFIGS = {"io-only": "legacy", "unified": "unified",
-           "baseline": "unified", "lean-target": "unified"}
-TARGET_PROFILES = {"baseline": "full", "lean-target": "lean"}
+           "baseline": "unified", "lean-target": "unified",
+           "lean-reference": "unified", "lean-dispatch-opt": "unified"}
+TARGET_PROFILES = {"baseline": "full", "lean-target": "lean",
+                   "lean-reference": "lean", "lean-dispatch-opt": "lean"}
+TARGET_DISPATCH = {"lean-reference": "reference", "lean-dispatch-opt": "encode-once"}
 REPEATS = ("0-forward", "1-reverse")
 
 
@@ -25,6 +28,8 @@ def declaration(configuration, k3_configuration=B64):
     return dict(
         schema_version="specrhythm.k3-repeat.v1",
         configuration=configuration,
+        **({"target_dispatch": TARGET_DISPATCH[configuration]}
+           if configuration in TARGET_DISPATCH else {}),
         **({"target_diagnostics": TARGET_PROFILES[configuration]}
            if configuration in TARGET_PROFILES else {}),
         observation="deferred-window",
@@ -71,6 +76,7 @@ def compare(directory):
                 and read_json(p)["options"].get("draft_dispatch") == config["draft_dispatch"]
                 and read_json(p)["options"].get("target_diagnostics")
                 == config.get("target_diagnostics")
+                and read_json(p)["options"].get("target_dispatch") == config.get("target_dispatch")
                 and read_json(p).get("k3_configuration") == config["k3_configuration"]
                 for p in paths
             )
@@ -164,6 +170,10 @@ def run(directory, repo, commit, configuration, k3_configuration=B64):
             env["SR_K3_TARGET_DIAGNOSTICS"] = config["target_diagnostics"]
         else:
             env.pop("SR_K3_TARGET_DIAGNOSTICS", None)
+        if "target_dispatch" in config:
+            env["SR_K3_TARGET_DISPATCH"] = config["target_dispatch"]
+        else:
+            env.pop("SR_K3_TARGET_DISPATCH", None)
         code = subprocess.call(
             [
                 "bash",
