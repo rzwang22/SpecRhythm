@@ -40,5 +40,10 @@ Capture/logits/top-k/contract spans are nested, not additive. Remaining required
 metadata copying, hashing/encoding and non-capture postprocessing are not assumed
 zero. READY wait partitions are partial observations, not exact causal labels.
 
-Fixed execution/entry SHAs and copyable commands are added at final delivery.
+Execution SHA: `4ff1170397db0393caa2d8a43c2089a8e602ddfd`.
+The executable `scripts/run_k3_target_pinned.sh` fixes this SHA and accepts exactly
+`baseline` or `lean-target` (default). A second positional scale or an unsupported
+`lean-target-dispatch` value is rejected. It resets inherited inner-run/profile
+flags so an earlier session cannot bypass capacity or choose a different profile.
+The entry commit and bootstrap commands are recorded at final delivery.
 New GPU results and performance conclusions remain PENDING.
