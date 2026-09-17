@@ -51,6 +51,9 @@ claims.
   affected204 passed / 2 new entry tests hit20s. Cause remains unconfirmed; no
   assertion/timeout changes. Final contract additions12 passed. CI is separate;
   see [B128 validation](validation/k3-b128.md).
+  Entry CI had a legacy refill progress assertion failure; a later documentation
+  HEAD had a legacy5s owner-settlement timeout. Both logs investigated and retained
+  separately from local timeouts; passing companion jobs do not resolve their causes.
   Operator GPU capacity, geometry, cleanup, overlap and performance PENDING.
   [B128 runbook](k3-b128-runbook.md); no server connection or GPU execution here.
 
