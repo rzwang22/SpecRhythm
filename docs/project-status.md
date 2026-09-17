@@ -5,6 +5,15 @@
 
 - Continuing from `35aeb26862923fad919a502ac454feef3b91eed4`; behavior reference
   `f7bfb43152f5655edbad9888c53c0a81e9d11954`. Draft remains open, no merge.
+- Execution `4ff1170397db0393caa2d8a43c2089a8e602ddfd`; fixed entry
+  `7f5d03002d2e24788ec9bedb792d974d8b55ec3f` pins that exact execution commit.
+- Final local full suite:3039 passed /5 subprocess-timeout failures /3 skipped;
+  remaining timeout causes unresolved, no budgets/assertions relaxed. Final related
+  production/entry sets:40 passed each on Python3.9 and3.12. Ruff, compileall,
+  Python3.9 grammar, Bash19 and diff checks PASS. Full details in validation report.
+- CI observation: execution and pinned-entry Python3.11 serving and pinned-source
+  jobs PASS; Python3.9/3.12 full-suite jobs still running on both triggers.
+  No overall CI PASS claim.
 - Same-version `baseline` and `lean-target`: lean omits optional full-logits CPU /
   log-softmax / top-k / duplicate argmax, initializes immutable workload index once,
   retains live identity/input/mapping/native/accounting evidence and actual sampling.

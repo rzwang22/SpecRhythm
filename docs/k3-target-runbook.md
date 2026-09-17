@@ -45,5 +45,51 @@ The executable `scripts/run_k3_target_pinned.sh` fixes this SHA and accepts exac
 `baseline` or `lean-target` (default). A second positional scale or an unsupported
 `lean-target-dispatch` value is rejected. It resets inherited inner-run/profile
 flags so an earlier session cannot bypass capacity or choose a different profile.
-The entry commit and bootstrap commands are recorded at final delivery.
+Fixed entry SHA: `7f5d03002d2e24788ec9bedb792d974d8b55ec3f`.
+The entry reads the execution SHA from its committed script; it does not run branch HEAD.
 New GPU results and performance conclusions remain PENDING.
+
+
+Run these independently, sequentially on the same idle A100 GPUs. The first block
+runs only baseline. The second runs only lean-target. Do not launch both together.
+Each uses a new detached worktree, unique local root, four first-repeat probes and
+eight windows. The runner rechecks actual loaded capacity for every fresh engine.
+A failed point stops its remaining points; preserve the returned single archive.
+
+```bash
+if bash -s -- baseline <<'SR_K3_PROFILE_BOOTSTRAP'
+set -Eeuo pipefail
+PROFILE="$1"
+REPO="${SR_K3_REPO:-/root/autodl-tmp/src/SpecRhythm}"
+ENTRY_SHA=7f5d03002d2e24788ec9bedb792d974d8b55ec3f
+git -C "$REPO" fetch origin codex/rolling-eager-v0.1
+ENTRY=$(mktemp /tmp/specrhythm-k3-target-entry.XXXXXX)
+git -C "$REPO" show "$ENTRY_SHA:scripts/run_k3_target_pinned.sh" > "$ENTRY"
+bash "$ENTRY" "$PROFILE"
+SR_K3_PROFILE_BOOTSTRAP
+then
+  printf 'Configuration complete; upload only its returned archive.\n'
+else
+  rc=$?
+  printf 'Stopped with original rc=%s; terminal stays open.\n' "$rc"
+fi
+```
+
+```bash
+if bash -s -- lean-target <<'SR_K3_PROFILE_BOOTSTRAP'
+set -Eeuo pipefail
+PROFILE="$1"
+REPO="${SR_K3_REPO:-/root/autodl-tmp/src/SpecRhythm}"
+ENTRY_SHA=7f5d03002d2e24788ec9bedb792d974d8b55ec3f
+git -C "$REPO" fetch origin codex/rolling-eager-v0.1
+ENTRY=$(mktemp /tmp/specrhythm-k3-target-entry.XXXXXX)
+git -C "$REPO" show "$ENTRY_SHA:scripts/run_k3_target_pinned.sh" > "$ENTRY"
+bash "$ENTRY" "$PROFILE"
+SR_K3_PROFILE_BOOTSTRAP
+then
+  printf 'Configuration complete; upload only its returned archive.\n'
+else
+  rc=$?
+  printf 'Stopped with original rc=%s; terminal stays open.\n' "$rc"
+fi
+```
