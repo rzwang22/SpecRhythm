@@ -26,7 +26,9 @@ EAGER_MODES = ("serial-eager-k3", "pingpong-eager-k3")
 GEOMETRY_VERSION = "specrhythm.k3-four-mode.v1"
 B16 = "k3-b16-v1"
 B64 = "k3-b64-v1"
-CONFIGURATIONS = (B16, B64)
+B128 = "k3-b128-v1"
+CONFIGURATIONS = (B16, B64, B128)
+ACTIVE_LIMITS = {B16: 16, B64: 64, B128: 128}
 
 
 def configuration_of(record):
@@ -74,7 +76,7 @@ def geometry(mode, configuration=B16):
 
     require(mode in MODES, "unknown K3 execution geometry", mode=mode)
     configuration_of({"k3_configuration": configuration})
-    active = 64 if configuration == B64 else 16
+    active = ACTIVE_LIMITS[configuration]
     serial = mode in SERIAL_MODES
     return dict(schema_version=GEOMETRY_VERSION, active_limit=active,
                 **configuration_fields(configuration),

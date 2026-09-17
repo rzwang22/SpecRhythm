@@ -673,3 +673,78 @@ validation/fence and yield to owner commands before unrelated recovery GPU work.
 No extra candidate or change to the Serial idle gate is allowed. Physical dispatch
 inventories explain unselected work; source tags do not create recovery queues.
 CPU regressions prove materialize membership and safe ordering, not GPU overlap.
+
+## Explicit B128 scale exploration (2026-09-17)
+
+`k3-b128-v1` is a new geometry, not a relabelled fixed64/P1–P4 experiment.
+`geometry(mode, configuration)` now maps B16/B64/B128 to active16/64/128.
+Missing configuration still means B16; invalid declarations never fall back.
+
+| Mode | Active | Home limits | Target requests/forward | Draft physical ceiling |
+|---|---:|---|---:|---:|
+| serial-k3 |128|A128|128|128|
+| serial-eager-k3 |128|A128|128|128|
+| pingpong-k3 |128|A64/B64|64|128|
+| pingpong-eager-k3 |128|A64/B64|64|128|
+
+The geometry reaches selected_point → manifest/capacity_metadata → loaded engine
+capacity check → coordinator/controller → K3Owner/K3Machine → resident scheduler →
+raw TP report → native_geometry → comparison/export. The existing engine configuration
+is already Target512 sequences / Draft128 sequences /4096 query positions. These
+are **configured limits, not physical capacity PASS**: every loaded Target rank and
+Draft must prove sufficient actual sequence/query limits, KV blocks and workspace.
+Serial128 requires up to512 Target input positions (one root + three candidates per
+request); PingPong64 requires up to256. Candidate count remains three, seed included.
+Ordinary Draft/Target require3/reserve4 speculative positions per request; eager
+Draft simultaneously requires/reserves6. No margin, model, numerical mode or K change.
+
+Initialization, rollback/correction, unified dispatch, eager dependencies and READY
+publication are unchanged. There is no new batching wait or scheduler policy.
+The default experiment is unified + deferred-window + performance-exploration.
+`io-only` retains legacy Draft dispatch with identical deferred I/O; the old B16/B64
+entries remain available. Target logits collection is not disabled or rewritten.
+Manifest diagnostics metadata is separate from effective Target worker environment
+and the measured capture spans; missing effective B128 diagnostics fail evidence.
+
+B128 warmup requires at least256 actual request verification opportunities **and**
+coverage of every currently active request at the measurement boundary. Repeated
+verification of only one home cannot open the window. Partial batches accumulate
+actual B; boundary replay enforces the same condition. If coverage needs more than
+two units, warmup continues under the unchanged setup deadline. B16/B64 warmup
+behavior is preserved. Frozen planned first128 IDs and actual128 IDs at measurement
+start are both reported so natural setup EOS/refill cannot be hidden.
+
+Native qualification requires one distinct128-request forward per Serial mode and
+one distinct64-request forward per PingPong mode, with both homes observed and both
+TP ranks bound to the actual scheduled identities. Multiple smaller calls, duplicate
+IDs, missing ranks, wrong home/active limits, or geometry mismatches fail. Draft
+physical bindings are separately checked for distinct requests and ceiling128.
+Partial batches retain population/claim and owner unfilled/deferred reasons.
+
+### Bounded diagnostics and interpretation
+
+No buffer or archive ceiling is increased:100000 pending records /256MiB encoded
+bytes per producer,64MiB final plugin report,4096 dispatch snapshots per phase,
+2GiB source file /4GiB unique bytes per repeat /8GiB combined unique payload,1200
+logical files. The verified prior B64 unified archive had503 unique objects and
+2,470,628,776 payload bytes; the largest observed B64 deferred buffer was about
+31630 rows /23.1MiB. Even a simple twofold size projection remains below these
+bounds, but is **not** an assurance that B128 cannot overflow. Overflow/missing
+records continue to fail; GPU evidence decides sufficiency. Setup resident360 and
+the number of performance points remain unchanged. The B128 local disk preflight
+floor is32GiB, allowing headroom for raw data, child/final archives and fallback
+repack. This is a free-space check, not a reservation or consistency guarantee.
+Final publication uses the original absolute60s drain deadline; no extra budget.
+
+Offline reports add capture_target_forward count/mean/P50/nearest-rank P95,
+window-clipped inclusive sum and separate thread union/window shares. Control
+snapshot publication uses the same non-additive treatment. Its source category is
+`control_json_write` (all observed s2_pool.publish calls, not a per-file isolation of
+only s2-control.json); raw live-control/deadline paths and logging receipts remain
+available. Raw Target GPU spans,
+GPU-end→sampling/feedback, feedback→READY, READY→claim, claim→GPU, unique physical
+Draft calls/Target step, mixed/exclusive recovery and native own-parent/cross-home
+coverage remain separate. `window_ms_per_active_opportunities` uses128 × window_ms
+/ΣactualB for this configuration. Both repetitions are retained with ranges; no
+subtracting observation costs and no claim that nonzero overlap hides recovery.
+READY changes and diagnostics optimization remain outside this scale experiment.

@@ -4,16 +4,26 @@ from collections import Counter
 
 from specrhythm.serving.common import require
 from specrhythm.serving.decode_scan_window import ScanWindow, warmup_step
-from specrhythm.serving.k3 import B16, geometry
+from specrhythm.serving.k3 import B16, B128, geometry
 
 
 class K3Window(ScanWindow):
     def __init__(self, options, batch, mode, configuration=B16):
+        self.configuration = configuration
         self.geometry = geometry(mode, configuration)
         require(type(batch) is int and batch == self.geometry["active_limit"],
                 "K3 window active/configuration mismatch")
         super().__init__(options, batch, not self.geometry["serial_idle_gate"])
         self.opportunities = Counter()
+
+    def warmup_satisfied(self, population=None):
+        if not super().warmup_satisfied(population):
+            return False
+        if self.configuration != B128:
+            return True
+        ids = (population or {}).get("request_ids", [])
+        return (len(ids) == len(set(ids)) == self.batch
+                and all(self.opportunities[rid] > 0 for rid in ids))
 
     def step_completed(self, row, now):
         if not row["B"]:

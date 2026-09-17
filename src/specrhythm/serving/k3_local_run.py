@@ -312,7 +312,8 @@ def main():
                 "SR_PING_RUN_TAG",
                 time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()) + "-" + str(os.getpid()),
             ),
-            minimum_free_bytes=int(os.environ.get("SR_K3_MIN_FREE_BYTES", 8 * 1024**3)),
+            minimum_free_bytes=int(os.environ.get("SR_K3_MIN_FREE_BYTES",
+                (32 if args.k3_configuration == "k3-b128-v1" else 8) * 1024**3)),
         )
     except Exception as error:
         print("Local-run/delivery infrastructure failure: " + repr(error), file=sys.stderr)

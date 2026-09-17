@@ -17,13 +17,17 @@ from specrhythm.serving.k3_repeat_run import CONFIGS, REPEATS, declaration
 REPO = Path(__file__).resolve().parents[1]
 
 
+@pytest.mark.parametrize("k3_configuration", ["k3-b64-v1", "k3-b128-v1"])
 @pytest.mark.parametrize("configuration", CONFIGS)
-def test_real_repeated_entry_first_error_one_archive(configuration, tmp_path, monkeypatch, capsys):
+def test_real_repeated_entry_first_error_one_archive(
+    configuration, tmp_path, monkeypatch, capsys, k3_configuration
+):
     repo, binary = tmp_path / "repo", tmp_path / "bin"
     (repo / "scripts").mkdir(parents=True)
     binary.mkdir()
     (repo / "src").symlink_to(REPO / "src", target_is_directory=True)
-    shutil.copyfile(REPO / "scripts/run_k3_b64.sh", repo / "scripts/run_k3_b64.sh")
+    for name in ("run_k3_b64.sh", "run_k3_b128.sh"):
+        shutil.copyfile(REPO / "scripts" / name, repo / "scripts" / name)
     sha = "a" * 40
     (binary / "git").write_text(
         '#!/bin/bash\nif [[ "$1" == rev-parse ]]; then echo ' + sha + "; fi\n")
@@ -42,7 +46,7 @@ exit 23
     for key in ("SR_K3_REPEAT_CHILD", "SR_K3_LOCAL_DELIVERY", "SR_K3_DRAFT_DISPATCH"):
         monkeypatch.delenv(key, raising=False)
     rc = run(repo, sha, local_base=tmp_path / "local", persistent=tmp_path / "durable",
-             tag="case", minimum_free_bytes=1, configuration="k3-b64-v1")
+             tag="case", minimum_free_bytes=1, configuration=k3_configuration)
     assert rc == 23
     output = capsys.readouterr().out
     assert output.count("UPLOAD ONLY:") == 1

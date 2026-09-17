@@ -50,7 +50,7 @@ def prepare(source, root, mode, *, modes=MODES, configuration="k3-b16-v1"):
     ids = [r["request_id"] for r in rows]
     manifest = copy.deepcopy(base)
     manifest.pop("sha256")
-    if configuration == "k3-b64-v1":
+    if configuration != "k3-b16-v1":
         from specrhythm.serving.k3_validation import STRICT
 
         manifest["validation_profile"] = STRICT

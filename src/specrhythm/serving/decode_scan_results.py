@@ -313,7 +313,9 @@ def timing(runtime, backend, point, opts):
         and wall is not None
         and wall >= opts["window_seconds"] * 1000
         and (full or (point["mode"] in PING_MODES and bool(nonempty)))
-        and scan["warmup_rotations"] == opts["warmup_steps"]
+        and (scan["warmup_rotations"] >= opts["warmup_steps"]
+             if configuration_of(point) == "k3-b128-v1"
+             else scan["warmup_rotations"] == opts["warmup_steps"])
     )
     if qualified:
         require(tokens > 0 and math.isfinite(wall) and wall > 0, "scan throughput nonpositive")

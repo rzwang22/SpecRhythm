@@ -1,4 +1,4 @@
-"""Two declared B64 repetitions, one package; no retries and no extra parameter grid."""
+"""Two declared scaled K3 repetitions, one package; no retries and no extra parameter grid."""
 
 import argparse
 import json
@@ -10,23 +10,26 @@ from pathlib import Path
 
 from specrhythm.phase4.manifest import atomic_write_json
 from specrhythm.serving.common import read_json, require
-from specrhythm.serving.k3 import MODES
+from specrhythm.serving.k3 import B64, B128, MODES, geometry
 from specrhythm.serving.k3_validation import plan
 
 CONFIGS = {"io-only": "legacy", "unified": "unified"}
 REPEATS = ("0-forward", "1-reverse")
 
 
-def declaration(configuration):
-    require(configuration in CONFIGS, "unknown B64 execution experiment")
+def declaration(configuration, k3_configuration=B64):
+    require(configuration in CONFIGS, "unknown K3 execution experiment")
+    require(k3_configuration in (B64, B128), "repetitions require explicit B64/B128")
     return dict(
         schema_version="specrhythm.k3-repeat.v1",
         configuration=configuration,
         observation="deferred-window",
         draft_dispatch=CONFIGS[configuration],
         validation_profile="performance-exploration",
-        k3_configuration="k3-b64-v1",
+        k3_configuration=k3_configuration,
         output_equivalence_status="NOT_RUN",
+        **({"capacity_policy": "four first-repeat probes; every fresh performance engine "
+             "also rechecks actual loaded capacity"} if k3_configuration == B128 else {}),
         repeats=[
             dict(name=n, modes=list(MODES if i == 0 else reversed(MODES)))
             for i, n in enumerate(REPEATS)
@@ -37,7 +40,8 @@ def declaration(configuration):
 def read_declaration(directory):
     value = read_json(directory / "experiment-plan.json")
     require(
-        value == declaration(value["configuration"]), "invalid repeated experiment declaration"
+        value == declaration(value["configuration"], value["k3_configuration"]),
+        "invalid repeated experiment declaration",
     )
     return value
 
@@ -61,6 +65,7 @@ def compare(directory):
             row["experiment_matched"] = all(
                 read_json(p)["options"].get("observation") == config["observation"]
                 and read_json(p)["options"].get("draft_dispatch") == config["draft_dispatch"]
+                and read_json(p).get("k3_configuration") == config["k3_configuration"]
                 for p in paths
             )
             row["valid"] = row["experiment_matched"]
@@ -92,13 +97,13 @@ def compare(directory):
     )
 
 
-def run(directory, repo, commit, configuration):
+def run(directory, repo, commit, configuration, k3_configuration=B64):
     require(not directory.exists(), "new repeated experiment directory required")
-    config = declaration(configuration)
+    config = declaration(configuration, k3_configuration)
     directory.mkdir(parents=True)
     atomic_write_json(directory / "experiment-plan.json", config)
     atomic_write_json(
-        directory / "validation-plan.json", plan("performance-exploration", "k3-b64-v1")
+        directory / "validation-plan.json", plan("performance-exploration", k3_configuration)
     )
     first, outcome = 0, dict(first_exit_code=0, stage="complete", mode=None)
     for i, name in enumerate(REPEATS):
@@ -107,6 +112,7 @@ def run(directory, repo, commit, configuration):
         env = {
             **os.environ,
             "SR_K3_REPEAT_CHILD": "1",
+            "SR_K3_SKIP_CAPACITY": "1" if k3_configuration == B128 and i else "0",
             "SR_K3_MANAGED_LOCAL": "1",
             "SR_K3_LOCAL_DELIVERY": str(root),
             "SR_K3_OBSERVATION": config["observation"],
@@ -114,7 +120,21 @@ def run(directory, repo, commit, configuration):
             "SR_K3_REVERSE": str(i),
             "SR_K3_VALIDATION_PROFILE": "performance-exploration",
         }
-        code = subprocess.call(["bash", str(repo / "scripts/run_k3_b64.sh"), commit], env=env)
+        code = subprocess.call(
+            [
+                "bash",
+                str(
+                    repo
+                    / (
+                        "scripts/run_k3_b"
+                        + str(geometry(MODES[0], k3_configuration)["active_limit"])
+                        + ".sh"
+                    )
+                ),
+                commit,
+            ],
+            env=env,
+        )
         code = 128 - code if code < 0 else code
         try:
             outcome = read_json(root / "runner-outcome.json")
@@ -145,10 +165,17 @@ def run(directory, repo, commit, configuration):
         if not first and not comparison["valid"]:
             first = 42
             outcome.update(first_exit_code=first, stage="repeated_comparison", mode=None)
-            atomic_write_json(directory / "first-failure.json", dict(
-                failure_layer="diagnostic_evidence", stage="repeated_comparison", mode=None,
-                command_exit_code=first, primary_error="repeated comparison incomplete",
-                evidence=str(directory / "comparison.json")))
+            atomic_write_json(
+                directory / "first-failure.json",
+                dict(
+                    failure_layer="diagnostic_evidence",
+                    stage="repeated_comparison",
+                    mode=None,
+                    command_exit_code=first,
+                    primary_error="repeated comparison incomplete",
+                    evidence=str(directory / "comparison.json"),
+                ),
+            )
     except (OSError, ValueError, KeyError, TypeError) as error:
         # A secondary reporting failure must never replace an existing child failure.
         detail = dict(stage="repeated_comparison", error=repr(error), original_exit_code=first)
@@ -163,16 +190,18 @@ def run(directory, repo, commit, configuration):
     return first
 
 
-
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--directory", type=Path, required=True)
     p.add_argument("--repo", type=Path, required=True)
     p.add_argument("--commit", required=True)
     p.add_argument("--configuration", choices=CONFIGS, required=True)
+    p.add_argument("--k3-configuration", choices=(B64, B128), default=B64)
     args = p.parse_args()
     try:
-        code = run(args.directory, args.repo, args.commit, args.configuration)
+        code = run(
+            args.directory, args.repo, args.commit, args.configuration, args.k3_configuration
+        )
     except Exception as error:
         print(json.dumps(dict(stage="repeat_wrapper", error=str(error))), file=sys.stderr)
         code = 44

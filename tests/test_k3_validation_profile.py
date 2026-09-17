@@ -16,7 +16,7 @@ from test_prepost_runtime_kind import produced as _produced
 
 from specrhythm.serving import decode_scan_results, fixed_results
 from specrhythm.serving.common import DataError, read_json
-from specrhythm.serving.k3 import B16, B64, MODES, validate_point
+from specrhythm.serving.k3 import B16, B64, B128, MODES, validate_point
 from specrhythm.serving.k3_acceptance import measurement, native_geometry
 from specrhythm.serving.k3_validation import (
     EXPLORATION,
@@ -183,8 +183,9 @@ def test_strict_joint_aggregate_mismatch_uses_actual_modes_and_raw_sources(
         assert i['first_exit_code'] == 1
 
 
+@pytest.mark.parametrize("configuration", [B64, B128])
 def test_comparison_profile_and_export_replay_use_real_native_proofs(
-    driven, inputs, tmp_path
+    driven, inputs, tmp_path, configuration
 ):
     """Comparison unit: synthetic host diagnostics + real drive-produced geometry."""
     from test_execution_evidence import qualified
@@ -195,10 +196,10 @@ def test_comparison_profile_and_export_replay_use_real_native_proofs(
 
     d = tmp_path/'comparison-delivery'
     (d/'points').mkdir(parents=True)
-    (d/'validation-plan.json').write_text(json.dumps(plan(EXPLORATION, B64)))
-    (d/'k3-capacity-contract.json').write_text(json.dumps(preflight(B64)))
+    (d/'validation-plan.json').write_text(json.dumps(plan(EXPLORATION, configuration)))
+    (d/'k3-capacity-contract.json').write_text(json.dumps(preflight(configuration)))
     for mode in MODES:
-        h = driven(mode, 'performance', full_run=True, configuration=B64,
+        h = driven(mode, 'performance', full_run=True, configuration=configuration,
                    validation_profile=EXPLORATION)
         root, light = retain(h)
         import shutil
@@ -210,7 +211,7 @@ def test_comparison_profile_and_export_replay_use_real_native_proofs(
 
         write_once(d/'points'/mode/'runs/actual-drive/point.json', h.point)
         (d/'points'/mode/'scan-config.json').write_text(json.dumps({
-            'validation_profile': EXPLORATION, 'k3_configuration': B64}))
+            'validation_profile': EXPLORATION, 'k3_configuration': configuration}))
         r = qualified(inputs)  # Explicit host/native timing unit fixture; never GPU evidence.
         r.update(mode=mode, **{k: light[k] for k in (
             'validation_profile', 'k3_configuration', 'execution_geometry', 'measurement_valid',
@@ -250,6 +251,9 @@ def test_comparison_profile_and_export_replay_use_real_native_proofs(
         broken.write_text(json.dumps({**original, key: value}))
         assert not comparison(restored, modes=MODES)['valid']
     broken.write_text(json.dumps(original))
+    (restored/'validation-plan.json').write_text(
+        json.dumps(plan(EXPLORATION, B128 if configuration == B64 else B64)))
+    assert not comparison(restored, modes=MODES)['valid']
     (restored/'validation-plan.json').unlink()
     assert not comparison(restored, modes=MODES)['valid']  # Legacy never implicitly opts in.
 

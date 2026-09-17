@@ -73,6 +73,10 @@ def driven(produced, monkeypatch, tmp_path):
             )
         }
         opts = m["fixed_diagnostic"]["options"]
+        if configuration == "k3-b128-v1":
+            from specrhythm.serving.k3_scale_report import metadata
+
+            m["fixed_diagnostic"]["diagnostic_configuration"] = metadata(opts)
         opts.update(
             setup_timeout=900,
             drain_timeout=60,
@@ -128,9 +132,16 @@ def driven(produced, monkeypatch, tmp_path):
                 if operation == "pp_admit":
                     n = payload["capacity"] if admission_limit is None else admission_limit
                     packet = read_json(h.directory / "s2-control.json")
+                    active_ids = payload["active_request_ids"]
+                    if configuration == "k3-b128-v1":
+                        # Simulate the real owner home preference. The historical
+                        # B16/B64 fixture always selected the first half, which
+                        # cannot prove coverage of all B128 warmup identities.
+                        active_ids = sorted(active_ids, key=lambda r:
+                            packet["requests"][r]["cohort"] != payload["normal_cohort"])
                     return dict(claims=[dict(request_id=r,
                                 home_cohort=packet["requests"][r]["cohort"])
-                                for r in payload["active_request_ids"][:n]])
+                                for r in active_ids[:n]])
                 if operation in ("pp_register", "pp_stop"):
                     return {}
                 if operation == "finish_request":

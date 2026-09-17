@@ -24,20 +24,18 @@ LEGACY_MINIMUM_RESERVE = 4
 
 
 def effective_capacity(actual):
-    """B64 requires loaded engine limits, in addition to the raw KV/workspace ranks."""
-    from specrhythm.serving.k3 import B64
-
+    """Scaled K3 requires loaded engine limits as well as raw KV/workspace ranks."""
     meta = actual["metadata"]
-    if configuration_of(meta) != B64:
+    if configuration_of(meta) == B16:
         return  # Historical B16 validation and evidence schema are unchanged.
     g = meta["execution_geometry"]
     targets, draft = actual.get("target_effective_by_rank"), actual.get("draft_effective")
     require(isinstance(targets, list) and len(targets) == 2 and isinstance(draft, dict),
-            "B64 loaded sequence/query capacity evidence missing")
+            "Scaled K3 loaded sequence/query capacity evidence missing")
     workers = actual.get("target_worker_ranks")
     require(isinstance(workers, list) and len(workers) == 2
             and targets == [r.get("s1_effective_capacity") for r in workers],
-            "B64 loaded capacity differs from raw worker snapshots")
+            "Scaled K3 loaded capacity differs from raw worker snapshots")
     prompt_query = max(r["prompt_length"] + 1 for r in actual["capacity_request_budgets"])
     for role, row, batch, query in [
         *(('target', r, g["target_request_ceiling"], 4 * g["target_request_ceiling"])
@@ -50,7 +48,7 @@ def effective_capacity(actual):
                 and type(row.get("max_num_batched_tokens")) is int
                 and row["max_num_seqs"] >= batch
                 and row["max_num_batched_tokens"] >= query,
-                "B64 loaded sequence/query capacity insufficient", role=role,
+                "Scaled K3 loaded sequence/query capacity insufficient", role=role,
                 required_requests=batch, required_query_positions=query, actual=row)
 
 
@@ -114,7 +112,7 @@ def check(definitions, rank, *, mode, active_limit, metadata, legacy=False):
                 and metadata["per_cohort_capacity"] == max(plan["home_capacities"].values())
                 and type(metadata["cohort_count"]) is int
                 and metadata["cohort_count"] == len(plan["home_capacities"]),
-                "B64 capacity home declaration differs")
+                "Scaled K3 capacity home declaration differs")
     declared_geometry = metadata.get("execution_geometry")
     if not legacy or declared_geometry is not None:
         require(matches_geometry(declared_geometry, mode, configuration)

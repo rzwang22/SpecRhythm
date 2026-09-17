@@ -417,7 +417,7 @@ def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5, 
                     })
                     publish_control(inflight)
                     checkpoint(directory, manifest, point, window, clock, steps, phases)
-                elif window.warmup_rotations >= options["warmup_steps"] and window.pending is None:
+                elif window.warmup_satisfied(boundary_population) and window.pending is None:
                     # Restore the full starting population without extra warmup forwards.
                     time.sleep(0.0005)
                     continue
@@ -557,6 +557,8 @@ def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5, 
         return {
             "schema_version": "specrhythm.fixed-runtime.v2",
             "point": point,
+            **({"diagnostic_configuration": diag["diagnostic_configuration"]}
+               if "diagnostic_configuration" in diag else {}),
             **not_run(manifest),
             "probe": probe,
             "capacity": {

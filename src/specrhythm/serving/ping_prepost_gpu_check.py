@@ -78,10 +78,10 @@ def coverage(runtime, backend):
 def run(source, directory, *, modes=MODES, protocol=PROTOCOL,
         coverage_check=coverage, require_mixed=True, native_check=None,
         configuration="k3-b16-v1"):
-    from specrhythm.serving.k3 import B64, configuration_fields, geometry
+    from specrhythm.serving.k3 import B16, configuration_fields, geometry
 
     fields = configuration_fields(configuration)
-    if configuration == B64:
+    if configuration != B16:
         from specrhythm.serving.k3_validation import STRICT
 
         fields["validation_profile"] = STRICT
@@ -140,7 +140,7 @@ def run(source, directory, *, modes=MODES, protocol=PROTOCOL,
         mode, root, point = None, directory, None
         result = compare_outputs(runtimes, modes=modes, require_mixed=require_mixed,
                                  **(dict(request_count=count, compare_termination=True)
-                                    if configuration == B64 else {}))
+                                    if configuration != B16 else {}))
         output_status = "PASS"
         layer = "joint_coverage"
         cov = coverage_check(runtimes[modes[-1]], backends[modes[-1]])

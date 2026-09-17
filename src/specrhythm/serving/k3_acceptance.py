@@ -4,7 +4,7 @@ import math
 
 from specrhythm.serving.common import require
 from specrhythm.serving.fixed_results import device_batches, stats
-from specrhythm.serving.k3 import B16, B64, configuration_of, geometry, matches_geometry
+from specrhythm.serving.k3 import B16, configuration_of, geometry, matches_geometry
 
 
 def full_batch_receipt(proof, mode, configuration=B16):
@@ -42,6 +42,8 @@ def native_geometry(runtime, mode, *, full_fixture=False, configuration=None):
             "K3 native configuration mismatch")
     configuration = declared
     g = geometry(mode, configuration)
+    require("k3_configuration" not in runtime or configuration_of(runtime) == configuration,
+            "K3 runtime/point configuration mismatch")
     point, capacity = runtime["point"], runtime["capacity"]
     require(point["mode"] == point["runtime_mode"] == mode, "K3 native report mode mismatch")
     require(type(point["batch"]) is int and point["batch"] == g["active_limit"],
@@ -50,14 +52,14 @@ def native_geometry(runtime, mode, *, full_fixture=False, configuration=None):
             and matches_geometry(capacity["execution_geometry"], mode, configuration),
             "K3 native geometry mismatch")
     ceiling = g["target_request_ceiling"]
-    if configuration == B64:
+    if configuration != B16:
         require(type(capacity["active_request_limit"]) is int
                 and capacity["active_request_limit"] == g["active_limit"]
                 and type(capacity["per_cohort_capacity"]) is int
                 and capacity["per_cohort_capacity"] == max(g["home_capacities"].values())
                 and type(capacity["cohort_count"]) is int
                 and capacity["cohort_count"] == len(g["home_capacities"]),
-                "B64 runtime capacity/home geometry mismatch")
+                "Scaled K3 runtime capacity/home geometry mismatch")
     require(type(capacity["max_requests_per_target_forward"]) is int
             and capacity["max_requests_per_target_forward"] == ceiling,
             "K3 native capacity/geometry ceiling mismatch")
@@ -72,19 +74,22 @@ def native_geometry(runtime, mode, *, full_fixture=False, configuration=None):
                 and set(ids) == {r["request_id"] for r in rows}
                 and len({r["internal_request_id"] for r in rows}) == b,
                 "K3 scheduled Target request cardinality mismatch")
-        if configuration == B64:
+        if configuration != B16:
             pop = step["population"]
-            require(type(pop["active_requests"]) is int and 0 <= pop["active_requests"] <= 64
-                    and type(pop["held_slots"]) is int and 0 <= pop["held_slots"] <= 64
+            require(type(pop["active_requests"]) is int and 0 <= pop["active_requests"]
+                    <= g["active_limit"]
+                    and type(pop["held_slots"]) is int and 0 <= pop["held_slots"]
+                    <= g["active_limit"]
                     and all(type(pop["cohort_held"][h]) is int
                             and 0 <= pop["cohort_held"][h] <= g["home_capacities"].get(h, 0)
-                            for h in ("A", "B")), "B64 active/home occupancy exceeds geometry")
+                            for h in ("A", "B")),
+                    "Scaled K3 active/home occupancy exceeds geometry")
             homes = step["home_cohorts"]
             claims = step["ping_admission"]["claims"]
             require(set(homes) == set(ids) and len(claims) == b
                     and {c["request_id"]: c["home_cohort"] for c in claims} == homes
                     and set(homes.values()) <= set(g["home_capacities"]),
-                    "B64 native request/home/claim association mismatch")
+                    "Scaled K3 native request/home/claim association mismatch")
             seen_homes.update(homes.values())
         if not b:
             continue
@@ -104,8 +109,8 @@ def native_geometry(runtime, mode, *, full_fixture=False, configuration=None):
     require(not full_fixture or bool(full),
             "K3 fixed full-batch fixture lacks one native Target forward at configured ceiling",
             mode=mode, expected_distinct_requests=ceiling)
-    require(not full_fixture or configuration != B64
-            or seen_homes == set(g["home_capacities"]), "B64 fixture missing home coverage")
+    require(not full_fixture or configuration == B16
+            or seen_homes == set(g["home_capacities"]), "Scaled K3 fixture missing home coverage")
     first = full[0] if full else None
     return dict(mode=mode, execution_geometry=g, full_batch_steps=len(full),
                 observed_home_cohorts=sorted(seen_homes),
@@ -130,6 +135,8 @@ def measurement(report, runtime, mode, configuration=B16, validation_profile=Non
     require(validation_profile is None or policy == validation_profile,
             "K3 measurement validation_profile mismatch")
     g = geometry(mode, configuration)
+    require("k3_configuration" not in report or configuration_of(report) == configuration,
+            "K3 measurement summary/point configuration mismatch")
     require(configuration_of(report["point"]) == configuration,
             "K3 measurement requested configuration mismatch")
     require(report["mode"] == report["point"]["mode"] == mode,

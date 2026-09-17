@@ -32,7 +32,7 @@ MODES = ("serial-k3", "serial-eager-k3", "pingpong-k3", "pingpong-eager-k3")
         ("none", "", False),
     ],
 )
-@pytest.mark.parametrize("script_name", ["run_k3_b16.sh", "run_k3_b64.sh"])
+@pytest.mark.parametrize("script_name", ["run_k3_b16.sh", "run_k3_b64.sh", "run_k3_b128.sh"])
 def test_one_bundle_first_error_stops_points_and_parent_remains_open(
     tmp_path, failure, point, export_error, script_name
 ):
@@ -97,6 +97,7 @@ if kind==os.environ['FAIL_STAGE'] and mode==os.environ['FAIL_POINT']: sys.exit(2
         "FAIL_STAGE": failure,
         "FAIL_POINT": point,
         "EXPORT_ERROR": "yes" if export_error else "no",
+        **({"SR_K3_REPEAT_CHILD": "1"} if script_name == "run_k3_b128.sh" else {}),
         **({"SR_K3_VALIDATION_PROFILE": "strict-output"} if failure == "correctness" else {}),
     }
     result = subprocess.run(
@@ -104,9 +105,9 @@ if kind==os.environ['FAIL_STAGE'] and mode==os.environ['FAIL_POINT']: sys.exit(2
     )
     assert result.returncode == 0 and "PARENT_ALIVE" in result.stdout, result.stderr
     calls = log.read_text().splitlines()
-    assert calls[0] == (" other" if script_name == "run_k3_b64.sh"
+    assert calls[0] == (" other" if script_name != "run_k3_b16.sh"
                         else " static_capacity_contract")
-    if script_name == "run_k3_b64.sh" and failure != "correctness":
+    if script_name != "run_k3_b16.sh" and failure != "correctness":
         assert not any(r.endswith(" correctness") for r in calls)
         if failure == "none":
             assert "Full output comparison NOT_RUN" in result.stdout

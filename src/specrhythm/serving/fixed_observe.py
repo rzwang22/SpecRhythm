@@ -287,6 +287,13 @@ def target_report(worker):
     logs = current()
     # The coordinator has already performed its normal final target_fence RPC.
     return {
+        "diagnostic_configuration": {
+            "target_diagnostics_enabled": bool(os.environ.get("SR_PHASE4_TARGET_DIAGNOSTICS")),
+            "target_diagnostics_path": os.environ.get("SR_PHASE4_TARGET_DIAGNOSTICS"),
+            "numerical_diagnostic_plan": os.environ.get("SR_PHASE4_NUMERICAL_DIAGNOSTIC_PLAN"),
+            "capture_function": "capture_target_forward",
+            "logits_algorithm": "unchanged float CPU / log_softmax / top10 / argmax",
+        },
         "identity_matching": report(worker.model_runner.drafter.identity),
         "device": worker.fixed_timeline.report(),
         "diagnostic_logging": logs.snapshot() if logs else None,

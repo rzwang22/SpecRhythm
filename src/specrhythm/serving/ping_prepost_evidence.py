@@ -59,6 +59,16 @@ def mechanism(runtime, backend):
         if not matches_geometry(ping.get("geometry"), runtime["point"]["mode"],
                                 configuration_of(runtime["point"])):
             errors.append("K3 actual owner execution geometry missing/different")
+    if uniform:
+        from specrhythm.serving.k3 import configuration_of, geometry
+
+        limit = geometry(runtime["point"]["mode"], configuration_of(runtime["point"]))[
+            "draft_physical_batch_ceiling"]
+        for f in physical.get("forwards", []):
+            ids = [b["request_id"] for b in f.get("bindings", [])]
+            if type(f.get("B")) is not int or not (0 < f["B"] <= limit) \
+                    or len(ids) != len(set(ids)) or len(ids) != f["B"]:
+                errors.append("K3 physical Draft request ceiling/uniqueness mismatch")
     if uniform and not accounting_complete(protocol.get("candidate_accounting")):
         errors.append("K3 final lifetime candidate accounting missing/inconsistent")
     retentions = {
@@ -468,7 +478,22 @@ def analyze(runtime, backend, light, *, draft_dispatch=None):
         policy_fields.update(native_geometry_status="PASS", native_target_geometry=proof,
                              measurement_valid=True)
     policy_fields.pop("k3_configuration", None)  # Geometry is recorded independently below.
+    from specrhythm.serving.k3_scale_report import capture_summary
+
+    if runtime["point"].get("k3_configuration") == "k3-b128-v1":
+        require(all(d.get("diagnostic_configuration", {}).get("target_diagnostics_enabled")
+                    is True for d in targets),
+                "B128 effective Target logits diagnostics missing/disabled")
+    calls = ping.get("draft_dispatch", {}).get("unique_physical_calls")
     return dict(
+        capture_target_forward=capture_summary(
+            {k: v for k, v in hosts.items() if k.startswith("target-rank-")}, start, end),
+        control_snapshot_publication=capture_summary(
+            {"coordinator": hosts["coordinator"]}, start, end, "control_json_write"),
+        physical_Draft_calls_per_Target_step=calls / len(steps) if calls is not None else None,
+        effective_target_diagnostic_configuration={
+            str(d["device"]["identity"]["global_rank"]): d.get("diagnostic_configuration")
+            for d in targets},
         **policy_fields,
         mode=light["mode"],
         **({"k3_configuration": runtime["point"]["k3_configuration"]}
@@ -562,8 +587,9 @@ def report(root, output, status, commit):
     from specrhythm.serving.k3_validation import matching
 
     matching(config, light)
+    runtime = reader.read(point / "runtime.json", required=True)
     value = analyze(
-        reader.read(point / "runtime.json", required=True),
+        runtime,
         reader.read(point / "draft-backend-report.json", required=True),
         light,
         draft_dispatch=config["options"].get("draft_dispatch"),
@@ -572,6 +598,13 @@ def report(root, output, status, commit):
         source_commit=commit,
         options=config["options"],
         workload_sha256=config["workload_sha256"],
+        diagnostic_configuration=runtime.get("diagnostic_configuration"),
+        planned_initial_request_ids=(config["selection"]["request_ids"][:light["point"]["batch"]]
+                                     if "selection" in config else None),
+        selected_initial_request_ids=runtime.get("decode_scan", {}).get(
+            "window_initial_population", {}).get("request_ids"),
+        selected_request_scope="actual active IDs at measurement start; planned IDs are "
+                               "frozen selection prefix before setup EOS/refill",
         inventory=list(reader.inventory.values()),
     )
     if light["mode"].endswith("-k3"):

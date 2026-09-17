@@ -37,7 +37,7 @@ NAMES = {
     "patch-manifest.json",
     "environment.json",
     "topology.json",
-    "execution-B16.json", "execution-B64.json",
+    "execution-B16.json", "execution-B64.json", "execution-B128.json",
     "execution-manifest.json",
     "point.json",
     "runtime.json",
@@ -83,6 +83,7 @@ RUNTIME_KEYS = {
     "host",
     "target_devices",
     "target_final_memory",
+    "diagnostic_configuration",
     "target_requests_final",
     "diagnostic_drain",
     "target_steps",
@@ -115,22 +116,23 @@ BACKEND_KEYS = {
 
 
 def byte_limits(directory):
-    """Explicit B64 offline evidence capacity; producer retention/logging is unchanged."""
-    from specrhythm.serving.k3 import B64, MODES, configuration_of, matches_geometry
+    """Explicit scaled K3 export bounds; producer retention/logging is unchanged."""
+    from specrhythm.serving.k3 import B16, MODES, configuration_of, matches_geometry
 
     path = directory / "k3-capacity-contract.json"
     if not path.exists():
         return FILE_LIMIT, TOTAL_LIMIT
     require(path.stat().st_size < 128 * 1024, "invalid static capacity receipt size")
     receipt = read_json(path)
-    if configuration_of(receipt) != B64:
+    if configuration_of(receipt) == B16:
         return FILE_LIMIT, TOTAL_LIMIT
     rows = receipt["reservations"]
     require(receipt["static_contract"] == "PASS" and len(rows) == 8
             and {(r["mode"], r["role"]) for r in rows}
             == {(m, role) for m in MODES for role in ("target", "draft")}
-            and all(matches_geometry(r["geometry"], r["mode"], B64) for r in rows),
-            "B64 export capacity requires explicit complete static configuration")
+            and all(matches_geometry(r["geometry"], r["mode"], configuration_of(receipt))
+                    for r in rows),
+            "Scaled K3 export capacity requires explicit complete static configuration")
     return 4 * FILE_LIMIT, 4 * TOTAL_LIMIT
 
 
@@ -170,6 +172,11 @@ def comparison(directory, *, modes=MODES):
                         "k3_configuration", "request_verification_opportunities",
                         "tokens_per_request_opportunity", "window_ms_per_active_opportunities",
                         "measurement_start_ns", "measurement_end_ns",
+                        "capture_target_forward", "control_snapshot_publication",
+                        "physical_Draft_calls_per_Target_step", "target_ranks",
+                        "effective_target_diagnostic_configuration", "diagnostic_configuration",
+                        "selected_initial_request_ids", "planned_initial_request_ids",
+                        "selected_request_scope", "execution_path",
                         "throughput_tok_s",
                         "window_ms",
                         "committed_tokens",
@@ -209,6 +216,8 @@ def comparison(directory, *, modes=MODES):
         matched = matched and bool(reports) and bool(reports[0].get("common_execution")) and all(
             r.get("common_execution") == reports[0]["common_execution"] for r in reports)
     matched = matched and all(profile_of(r) == policy for r in reports)
+    if plan:
+        matched = matched and all(configuration_of(r) == configuration_of(plan) for r in reports)
     valid = matched and all(
         qualify(r)["diagnostic_integrity"] == "COMPLETE"
         and all(
@@ -224,7 +233,7 @@ def comparison(directory, *, modes=MODES):
     failure_result = read_json(joint_failure) if joint_failure.exists() else {}
     native = {}
     if exploration:
-        from specrhythm.serving.k3 import B64, geometry
+        from specrhythm.serving.k3 import geometry
         from specrhythm.serving.k3_acceptance import full_batch_receipt
 
         native = {r["mode"]: r.get("native_target_geometry") for r in reports}
@@ -235,9 +244,9 @@ def comparison(directory, *, modes=MODES):
             and r.get("native_geometry_status") == "PASS"
             and r.get("original_run_details", {}).get("capacity_status") == "PASS"
             and r.get("original_run_details", {}).get("effective_exit_code") == 0
-            and full_batch_receipt(native.get(r["mode"]), r["mode"], B64)
+            and full_batch_receipt(native.get(r["mode"]), r["mode"], configuration_of(r))
             and set((native.get(r["mode"]) or {}).get("observed_home_cohorts", []))
-                == set(geometry(r["mode"], B64)["home_capacities"])
+                == set(geometry(r["mode"], configuration_of(r))["home_capacities"])
             for r in reports)
     else:
         if not joint.exists() or read_json(joint).get("GPU_correctness") != "PASS":
@@ -257,10 +266,11 @@ def comparison(directory, *, modes=MODES):
             valid = valid and all(full_batch_receipt(native.get(m), m, configuration_of(reports[0])
                                                               if reports else "k3-b16-v1")
                                   for m in modes)
-            if reports and configuration_of(reports[0]) == "k3-b64-v1":
+            if reports and configuration_of(reports[0]) != "k3-b16-v1":
                 joint_value = read_json(joint)
-                valid = valid and configuration_of(joint_value) == "k3-b64-v1"
-                valid = valid and joint_value.get("request_count") == 64
+                valid = valid and configuration_of(joint_value) == configuration_of(reports[0])
+                valid = valid and (joint_value.get("request_count")
+                                   == reports[0]["execution_geometry"]["active_limit"])
                 valid = valid and (joint_value.get("termination_comparison")
                                == "exact by request ID")
     ratios = []

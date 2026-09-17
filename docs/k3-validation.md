@@ -668,3 +668,8 @@ the eight role/mode static capacity contracts passed, with GPU capacity still PE
 Implementation CI push35059823704 and PR35059827533: Python3.11 contract and pinned
 Draft source-contract jobs passed; Python3.9/3.12 full jobs were in progress at this
 documentation snapshot. Completion/failed CI states must be read from those runs.
+
+## B128 scale extension
+
+See [production-path validation](validation/k3-b128.md) and [operator flow](k3-b128-runbook.md).
+This extends geometry and warmup/evidence, not the execution or diagnostic algorithms.

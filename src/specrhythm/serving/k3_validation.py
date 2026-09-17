@@ -1,7 +1,7 @@
 """Validation policy is independent of execution geometry and GPU algorithms."""
 
 from specrhythm.serving.common import read_json, require
-from specrhythm.serving.k3 import B64, configuration_of
+from specrhythm.serving.k3 import B64, B128, configuration_of
 
 STRICT = "strict-output"
 EXPLORATION = "performance-exploration"
@@ -21,8 +21,8 @@ def profile_of(record):
     require(isinstance(record, dict), "validation_profile requires an object record")
     value = record.get("validation_profile", STRICT)
     require(type(value) is str and value in PROFILES, "invalid validation_profile")
-    require(value != EXPLORATION or configuration_of(record) == B64,
-            "performance-exploration requires explicit k3-b64-v1")
+    require(value != EXPLORATION or configuration_of(record) in (B64, B128),
+            "performance-exploration requires explicit k3-b64-v1 or k3-b128-v1")
     return value
 
 

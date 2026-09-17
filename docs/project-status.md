@@ -1,6 +1,6 @@
 # SpecRhythm project status
 
-Last updated: 2026-09-16
+Last updated: 2026-09-17
 
 Maintenance rule: every code-changing PR updates this file with its scope, status, evidence,
 known limitations, and next gate before that PR is considered complete.
@@ -28,6 +28,29 @@ claims.
    confidence intervals, and failure analysis.
 
 ## Pull request progress
+
+### PR #5 — explicit A100 K3 B128 scale exploration (2026-09-17)
+
+- Continued from clean local/remote `e2dd4357099880c736bc30ee00a12b1886be5688`.
+  Added `k3-b128-v1`: Serial A128/Target128, PingPong A64/B64/Target64,
+  Draft ceiling128, resident360. B16/B64 entries/defaults remain available.
+- Geometry flows through real planning, engine-capacity checks, owner/controller,
+  scheduler, native TP qualification and export. True K3/reservations3→4 or eager6→6,
+  models/numerics, diagnostics, unified dispatch, serial gate and READY unchanged.
+- B128 default is unified/deferred-window/performance-exploration; four initial
+  capacity probes then forward/reverse eight fresh performance points. Warmup
+  requires256 actual opportunities and active128 identity coverage; each window30s,
+  setup900s/drain60s unchanged. Full output equivalence NOT_RUN, historical mismatch open.
+- Existing bounded buffers/exports retained; B128 local free-space floor32GiB.
+  Added offline per-thread capture statistics, actual128 selection metadata and
+  physical-calls/step reporting without changing capture or GPU work.
+- Local full suite: 2989 passed / 6 failed / 3 skipped; failures are unchanged
+  child-entry tests exceeding20s. Python3.9 affected206 passed; Python3.12
+  affected204 passed / 2 new entry tests hit20s. Cause remains unconfirmed; no
+  assertion/timeout changes. Final contract additions12 passed. CI is separate;
+  see [B128 validation](validation/k3-b128.md).
+  Operator GPU capacity, geometry, cleanup, overlap and performance PENDING.
+  [B128 runbook](k3-b128-runbook.md); no server connection or GPU execution here.
 
 ### PR #5 — B64 diagnostic persistence and unified dispatch (2026-09-16)
 
