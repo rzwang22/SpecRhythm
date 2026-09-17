@@ -1,5 +1,21 @@
 # SpecRhythm project status
 
+
+### PR #5 — B128 full/lean Target diagnostics (2026-09-17)
+
+- Continuing from `35aeb26862923fad919a502ac454feef3b91eed4`; behavior reference
+  `f7bfb43152f5655edbad9888c53c0a81e9d11954`. Draft remains open, no merge.
+- Same-version `baseline` and `lean-target`: lean omits optional full-logits CPU /
+  log-softmax / top-k / duplicate argmax, initializes immutable workload index once,
+  retains live identity/input/mapping/native/accounting evidence and actual sampling.
+- No additional dispatch variant: queued claims already run at the next safe owner
+  boundary without waiting for unrelated recovery completion. Added sparse admission
+  landmarks and partial READY wait partitions; unknown time stays unaccounted.
+- Same k3-b128-v1/unified/deferred-window/performance-exploration; full output
+  equivalence NOT_RUN. No new GPU execution or performance claim; operator results
+  PENDING. [Design](k3-design.md), [validation](validation/k3-target-profiles.md),
+  [fixed comparison runbook](k3-target-runbook.md).
+
 Last updated: 2026-09-17
 
 Maintenance rule: every code-changing PR updates this file with its scope, status, evidence,

@@ -13,7 +13,9 @@ from specrhythm.serving.common import read_json, require
 from specrhythm.serving.k3 import B64, B128, MODES, geometry
 from specrhythm.serving.k3_validation import plan
 
-CONFIGS = {"io-only": "legacy", "unified": "unified"}
+CONFIGS = {"io-only": "legacy", "unified": "unified",
+           "baseline": "unified", "lean-target": "unified"}
+TARGET_PROFILES = {"baseline": "full", "lean-target": "lean"}
 REPEATS = ("0-forward", "1-reverse")
 
 
@@ -23,6 +25,8 @@ def declaration(configuration, k3_configuration=B64):
     return dict(
         schema_version="specrhythm.k3-repeat.v1",
         configuration=configuration,
+        **({"target_diagnostics": TARGET_PROFILES[configuration]}
+           if configuration in TARGET_PROFILES else {}),
         observation="deferred-window",
         draft_dispatch=CONFIGS[configuration],
         validation_profile="performance-exploration",
@@ -65,6 +69,8 @@ def compare(directory):
             row["experiment_matched"] = all(
                 read_json(p)["options"].get("observation") == config["observation"]
                 and read_json(p)["options"].get("draft_dispatch") == config["draft_dispatch"]
+                and read_json(p)["options"].get("target_diagnostics")
+                == config.get("target_diagnostics")
                 and read_json(p).get("k3_configuration") == config["k3_configuration"]
                 for p in paths
             )
@@ -82,6 +88,7 @@ def compare(directory):
     return dict(
         **config,
         repetitions=repeats,
+        metric_summary=metric_summary(repeats),
         valid=all(r["valid"] for r in repeats),
         throughput_ranges={
             m: dict(
@@ -89,12 +96,45 @@ def compare(directory):
                 minimum=min(v) if v else None,
                 maximum=max(v) if v else None,
                 count=len(v),
+                mean=sum(v) / len(v) if v else None,
             )
             for m, v in values.items()
         },
         inference="two single windows per mode; no stable speedup claim; "
         "dispatch attribution requires the other same-I/O configuration",
     )
+
+
+def metric_summary(repeats):
+    """Equal-weight per-window means with all samples retained, never pooled spans."""
+    paths = (
+        "throughput_tok_s", "window_ms", "committed_tokens", "steps",
+        "request_verification_opportunities", "tokens_per_request_opportunity",
+        "window_ms_per_active_opportunities", "window_average_cadence_ms",
+        "complete_step_wall_ms.mean", "physical_Draft_calls_per_Target_step",
+        "dispatch.claim_to_Target_ms.mean", "dispatch.published_READY_to_claim_ms.mean",
+        "dispatch.observed_eligibility_to_claim_ms.mean", "K3_mechanism.feedback_to_ready_ms.mean",
+        "capture_target_forward.target-rank-0.mean_ms",
+    )
+    result = {}
+    for mode in MODES:
+        metrics = {}
+        for path in paths:
+            samples = []
+            for r in repeats:
+                points = [p for p in r.get("points", ()) if p["mode"] == mode]
+                value = points[0] if len(points) == 1 else None
+                for key in path.split("."):
+                    value = value.get(key) if isinstance(value, dict) else None
+                samples.append(dict(repeat=r["repeat"], value=value))
+            values = [s["value"] for s in samples if type(s["value"]) in (int, float)]
+            metrics[path] = dict(samples=samples, count=len(values),
+                                 missing=len(samples)-len(values),
+                                 mean=sum(values)/len(values) if values else None,
+                                 minimum=min(values) if values else None,
+                                 maximum=max(values) if values else None)
+        result[mode] = metrics
+    return result
 
 
 def run(directory, repo, commit, configuration, k3_configuration=B64):
@@ -120,6 +160,10 @@ def run(directory, repo, commit, configuration, k3_configuration=B64):
             "SR_K3_REVERSE": str(i),
             "SR_K3_VALIDATION_PROFILE": "performance-exploration",
         }
+        if "target_diagnostics" in config:
+            env["SR_K3_TARGET_DIAGNOSTICS"] = config["target_diagnostics"]
+        else:
+            env.pop("SR_K3_TARGET_DIAGNOSTICS", None)
         code = subprocess.call(
             [
                 "bash",

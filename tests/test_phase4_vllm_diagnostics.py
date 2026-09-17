@@ -125,7 +125,7 @@ def _install_rank_zero_vllm(monkeypatch) -> None:
     monkeypatch.setitem(sys.modules, "vllm.distributed.parallel_state", parallel)
 
 
-def _capture(tmp_path, monkeypatch, pending):
+def _capture(tmp_path, monkeypatch, pending, setup=None):
     _install_rank_zero_vllm(monkeypatch)
     fixture = Path(__file__).parent / "fixtures" / "phase4-r3-smoke.jsonl"
     output = tmp_path / "target-diagnostics.jsonl"
@@ -166,6 +166,8 @@ def _capture(tmp_path, monkeypatch, pending):
         if proposal_tokens
         else None
     )
+    if setup is not None:
+        setup(runner, logits)
     capture_target_forward(
         runner,
         scheduler_output=SimpleNamespace(

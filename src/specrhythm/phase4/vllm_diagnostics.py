@@ -110,6 +110,31 @@ def validate_logits_mapping(value: Mapping[str, Any]) -> list[str]:
 
 
 def validate_target_diagnostic(value: Mapping[str, Any]) -> list[str]:
+    """Full numerical-forensics contract (legacy callers remain strict)."""
+    return _validate_target_diagnostic(value, numerical=True)
+
+
+def validate_runtime_target_diagnostic(value: Mapping[str, Any]) -> list[str]:
+    from specrhythm.phase4.target_profile import NOT_COLLECTED, NUMERICAL_FIELDS
+
+    mode = value.get("target_diagnostic_profile", "full")
+    if mode == "full":
+        return validate_target_diagnostic(value)
+    errors = _validate_target_diagnostic(value, numerical=False)
+    if mode != "lean" or value.get("numerical_forensics") != NOT_COLLECTED:
+        errors.append("invalid Target diagnostic profile/coverage")
+    if any(k in value for k in NUMERICAL_FIELDS):
+        errors.append("lean diagnostics must not fabricate numerical evidence")
+    mapping = value.get("logits_position_mapping")
+    if isinstance(mapping, list):
+        for row in mapping:
+            if (not isinstance(row, Mapping)
+                    or row.get("proposal_matches_vllm_metadata") is not True):
+                errors.append("lean diagnostic missing actual speculative metadata association")
+    return errors
+
+
+def _validate_target_diagnostic(value: Mapping[str, Any], *, numerical: bool) -> list[str]:
     errors = []
     if value.get("schema_version") != DIAGNOSTIC_SCHEMA:
         errors.append("unsupported target diagnostic schema")
@@ -135,6 +160,8 @@ def validate_target_diagnostic(value: Mapping[str, Any]) -> list[str]:
         "dtype",
         "batch_invariant_requested",
     ):
+        if not numerical and key in ("top_raw_logits", "top_target_logprobs"):
+            continue
         if key not in value:
             errors.append(f"target diagnostic is missing {key}")
     prefix = value.get("committed_prefix_token_ids")
@@ -324,6 +351,10 @@ def capture_target_forward(
     output = os.environ.get(DIAGNOSTIC_ENV)
     if not output:
         return
+    from specrhythm.phase4.target_profile import coverage, profile
+    from specrhythm.phase4.target_profile import definitions as cached_definitions
+
+    lean = profile() == "lean"
     from vllm.distributed.parallel_state import get_tp_group
 
     if int(get_tp_group().rank_in_group) != 0:
@@ -344,14 +375,17 @@ def capture_target_forward(
         raise RuntimeError("SR_PHASE4_WORKLOAD is required for stable Target diagnostics")
     from specrhythm.phase4.batch_invariant import BATCH_INVARIANT_ENV
 
-    workload = Path(workload_path).resolve()
-    request_count = sum(
-        bool(line.strip()) for line in workload.read_text(encoding="utf-8").splitlines()
-    )
-    requests = load_smoke_requests(
-        workload, expected_count=request_count, require_task_mixture=False
-    )
-    definitions = {tuple(row.prompt_token_ids): row for row in requests}
+    if lean:
+        definitions_by_id, identity = cached_definitions(runner)
+    else:
+        workload = Path(workload_path).resolve()
+        request_count = sum(
+            bool(line.strip()) for line in workload.read_text(encoding="utf-8").splitlines()
+        )
+        requests = load_smoke_requests(
+            workload, expected_count=request_count, require_task_mixture=False
+        )
+        definitions = {tuple(row.prompt_token_ids): row for row in requests}
     scheduled_spec = scheduler_output.scheduled_spec_decode_tokens
     sampled_offsets = []
     flattened_offsets = []
@@ -363,7 +397,7 @@ def capture_target_forward(
         flattened_offsets.append(flat_cursor)
         sample_cursor += len(proposal) + 1
         flat_cursor += int(num_scheduled_tokens[index])
-    logits_cpu = logits.detach().float().cpu()
+    logits_cpu, logprobs = capture_target_numerics(logits) if not lean else (None, None)
     positions_cpu = positions.detach().cpu().tolist()
     logits_indices_cpu = logits_indices.detach().cpu().tolist()
     target_logits_indices_cpu = (
@@ -376,8 +410,12 @@ def capture_target_forward(
         if spec_decode_metadata is not None
         else []
     )
-    top_count = min(10, int(logits_cpu.shape[-1]))
-    logprobs = logits_cpu.log_softmax(dim=-1)
+    # These small mapping tensors are required execution evidence, not logits.
+    # Copy once per batch in lean (no new synchronization is introduced).
+    lean_query_start = (common_attention_metadata.query_start_loc_cpu.tolist()
+                        if lean and common_attention_metadata is not None else None)
+    lean_seq_lens = (common_attention_metadata.seq_lens.detach().cpu().tolist()
+                     if lean and common_attention_metadata is not None else None)
     attn_names = []
     for groups in getattr(runner, "attn_groups", ()):
         for group in groups:
@@ -392,6 +430,11 @@ def capture_target_forward(
         if runner.vllm_config.parallel_config.disable_custom_all_reduce
         else "vLLM-runtime-dispatch"
     )
+    numerical_rows = (None if lean else capture_target_numerical_rows(
+        logits_cpu, logprobs, [
+            list(range(offset, offset + max(len(scheduled_spec.get(rid, ())), 1)))
+            for rid, offset in zip(runner.input_batch.req_ids, sampled_offsets)
+        ]))
     log = CheckpointJsonl(Path(output).resolve())
     draft_cursor = 0
     for index, internal_id in enumerate(runner.input_batch.req_ids):
@@ -399,37 +442,25 @@ def capture_target_forward(
         tokens = tuple(
             int(item) for item in runner.input_batch.token_ids_cpu[index, :count].tolist()
         )
-        matches = [
-            definition
-            for prefix, definition in definitions.items()
-            if tokens[: len(prefix)] == prefix
-        ]
-        if len(matches) != 1:
-            raise RuntimeError("Target diagnostic cannot map a unique stable request")
-        definition = matches[0]
+        if lean:
+            definition = definitions_by_id[identity.bind(internal_id, tokens)]
+            frozen_prompt = tuple(definition.prompt_token_ids)
+            if tokens[:len(frozen_prompt)] != frozen_prompt:
+                raise RuntimeError(
+                    "Target identity prompt changed after diagnostic initialization")
+        else:
+            matches = [
+                definition
+                for prefix, definition in definitions.items()
+                if tokens[: len(prefix)] == prefix
+            ]
+            if len(matches) != 1:
+                raise RuntimeError("Target diagnostic cannot map a unique stable request")
+            definition = matches[0]
         proposal = [int(item) for item in scheduled_spec.get(internal_id, ())]
         sample_offset = sampled_offsets[index]
         flat_offset = flattened_offsets[index]
-        rows = list(range(sample_offset, sample_offset + max(len(proposal), 1)))
-        raw_top = []
-        prob_top = []
-        selected = []
-        for row_index in rows:
-            raw_values, raw_ids = logits_cpu[row_index].topk(top_count)
-            prob_values, prob_ids = logprobs[row_index].topk(top_count)
-            raw_top.append(
-                [
-                    {"token_id": int(token_id), "raw_logit": float(value)}
-                    for token_id, value in zip(raw_ids.tolist(), raw_values.tolist())
-                ]
-            )
-            prob_top.append(
-                [
-                    {"token_id": int(token_id), "log_probability": float(value)}
-                    for token_id, value in zip(prob_ids.tolist(), prob_values.tolist())
-                ]
-            )
-            selected.append(int(logits_cpu[row_index].argmax().item()))
+        raw_top, prob_top, selected = ((None, None, None) if lean else numerical_rows[index])
         query_length = int(num_scheduled_tokens[index])
         position_slice = [
             int(item)
@@ -446,13 +477,15 @@ def capture_target_forward(
         attention_sequence_length = None
         attention_causal = True
         if common_attention_metadata is not None:
-            query_start = common_attention_metadata.query_start_loc_cpu.tolist()
+            query_start = (lean_query_start if lean else
+                           common_attention_metadata.query_start_loc_cpu.tolist())
             if index + 1 < len(query_start):
                 attention_query_start = [
                     int(query_start[index]),
                     int(query_start[index + 1]),
                 ]
-            sequence_lengths = common_attention_metadata.seq_lens.detach().cpu().tolist()
+            sequence_lengths = (lean_seq_lens if lean else
+                                common_attention_metadata.seq_lens.detach().cpu().tolist())
             if index < len(sequence_lengths):
                 attention_sequence_length = int(sequence_lengths[index])
             causal = common_attention_metadata.causal
@@ -531,14 +564,16 @@ def capture_target_forward(
                     )
                 ),
             },
-            "top_raw_logits": raw_top,
-            "top_target_logprobs": prob_top,
-            "selected_target_token_id": selected,
+            **(coverage("lean") if lean else {
+                "top_raw_logits": raw_top,
+                "top_target_logprobs": prob_top,
+                "selected_target_token_id": selected,
+            }),
             "target_verification_shape": {
                 "request_count": len(runner.input_batch.req_ids),
                 "scheduled_input_positions": int(sum(num_scheduled_tokens)),
-                "sampled_logits_rows": int(logits_cpu.shape[0]),
-                "vocab_size": int(logits_cpu.shape[-1]),
+                "sampled_logits_rows": int(logits.shape[0]),
+                "vocab_size": int(logits.shape[-1]),
             },
             "attention_backend": sorted(set(attn_names)),
             "all_reduce_backend": all_reduce,
@@ -551,6 +586,8 @@ def capture_target_forward(
         }
         log.append(row)
         draft_cursor += len(proposal)
+    if lean:
+        return
     from specrhythm.phase4.numerical_diagnostics import (
         finalize_target_numerical_diagnostic,
     )
@@ -561,3 +598,37 @@ def capture_target_forward(
         target_forward_start_ns=target_forward_start_ns,
         target_forward_end_ns=target_forward_end_ns,
     )
+
+
+def capture_target_numerics(logits):
+    """Optional full-vocabulary forensics. The actual sampler never consumes this."""
+    cpu = logits.detach().float().cpu()
+    return cpu, cpu.log_softmax(dim=-1)
+
+
+def capture_target_numerical_rows(logits_cpu, logprobs, row_indices):
+    """Batch-level optional top-k/duplicate argmax span, no sampler consumers."""
+    top_count = min(10, int(logits_cpu.shape[-1]))
+    result = []
+    for rows in row_indices:
+        raw_top = []
+        prob_top = []
+        selected = []
+        for row_index in rows:
+            raw_values, raw_ids = logits_cpu[row_index].topk(top_count)
+            prob_values, prob_ids = logprobs[row_index].topk(top_count)
+            raw_top.append(
+                [
+                    {"token_id": int(token_id), "raw_logit": float(value)}
+                    for token_id, value in zip(raw_ids.tolist(), raw_values.tolist())
+                ]
+            )
+            prob_top.append(
+                [
+                    {"token_id": int(token_id), "log_probability": float(value)}
+                    for token_id, value in zip(prob_ids.tolist(), prob_values.tolist())
+                ]
+            )
+            selected.append(int(logits_cpu[row_index].argmax().item()))
+        result.append((raw_top, prob_top, selected))
+    return result

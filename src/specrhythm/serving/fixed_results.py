@@ -411,6 +411,9 @@ def summarize(manifest_path, directory, point, *, probe=False):
 
 
 def measurements(manifest, runtime, backend, point):
+    from specrhythm.phase4.target_profile import qualify
+
+    qualify(runtime, manifest["fixed_diagnostic"]["options"])
     start, end = runtime["measurement_start_ns"], runtime["measurement_end_ns"]
     require(start is not None and end > start, "no positive diagnostic measurement window")
     wall_ms = (end - start) / 1e6
@@ -1167,7 +1170,7 @@ def offline_audit(manifest_path, directory):
     from specrhythm.phase4.dual_correctness import _LEGAL_STATES, validate_verification_contracts
     from specrhythm.phase4.manifest import sha256_file
     from specrhythm.phase4.transport import CheckpointJsonl
-    from specrhythm.phase4.vllm_diagnostics import validate_target_diagnostic
+    from specrhythm.phase4.vllm_diagnostics import validate_runtime_target_diagnostic
     from specrhythm.phase4.vllm_dual import validate_target_rank_identity
     from specrhythm.serving.s2_overlap import stage_overlap
 
@@ -1187,10 +1190,10 @@ def offline_audit(manifest_path, directory):
     require(diagnostics, "offline audit missing Target diagnostic log")
     for r in diagnostics:
         require(
-            not validate_target_diagnostic(r),
+            not validate_runtime_target_diagnostic(r),
             "offline Target diagnostic invalid",
             artifact=str(directory / "target-diagnostics.jsonl"),
-            actual=validate_target_diagnostic(r),
+            actual=validate_runtime_target_diagnostic(r),
         )
     backend = read_json(directory / "draft-backend-report.json")
     checks = {}

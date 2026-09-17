@@ -173,6 +173,7 @@ def comparison(directory, *, modes=MODES):
                         "tokens_per_request_opportunity", "window_ms_per_active_opportunities",
                         "measurement_start_ns", "measurement_end_ns",
                         "capture_target_forward", "control_snapshot_publication",
+                        "target_diagnostic_substages", "target_diagnostic_substage_scope",
                         "physical_Draft_calls_per_Target_step", "target_ranks",
                         "effective_target_diagnostic_configuration", "diagnostic_configuration",
                         "selected_initial_request_ids", "planned_initial_request_ids",

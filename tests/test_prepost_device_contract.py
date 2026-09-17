@@ -6,6 +6,7 @@ report generator, existing preparation checks or qualification function is repla
 
 import copy
 import json
+import os
 import sys
 import tarfile
 from dataclasses import replace
@@ -98,6 +99,11 @@ def produced(tmp_path, monkeypatch, hardware):
         monkeypatch.setenv("SR_FIXED_IDENTITY_MATCHING", "linear")
         monkeypatch.setenv("SR_S2_MODE", mode)
         monkeypatch.setenv("SR_S1_EXECUTION_MANIFEST", str(path))
+        if "SR_FIXED_TARGET_DIAGNOSTICS" in os.environ:
+            monkeypatch.setenv("SR_S2_EXECUTION_MANIFEST", str(path))
+            monkeypatch.setenv("SR_PHASE4_WORKLOAD", str(path.parent / manifest["workload_file"]))
+            monkeypatch.setenv("SR_PHASE4_TARGET_DIAGNOSTICS",
+                               str(directory / "target-diagnostics.jsonl"))
         clock = NS(value=100)
         monkeypatch.setattr(fixed_observe, "time", NS(monotonic_ns=lambda: clock.value))
 

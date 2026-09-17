@@ -37,7 +37,7 @@ def driven(produced, monkeypatch, tmp_path):
     calls = []
 
     def build(mode, stage, driver=None, *, full_run=False, admission_limit=None,
-              configuration="k3-b16-v1", validation_profile=None):
+              configuration="k3-b16-v1", validation_profile=None, target_diagnostics=None):
         from specrhythm.serving.k3 import configuration_fields, geometry
         from specrhythm.serving.k3_validation import fields as validation_fields
 
@@ -46,6 +46,8 @@ def driven(produced, monkeypatch, tmp_path):
         active = geometry("serial-k3", configuration)["active_limit"]
         base = tmp_path / str(len(calls))
         calls.append((mode, stage))
+        if target_diagnostics is not None:
+            monkeypatch.setenv("SR_FIXED_TARGET_DIAGNOSTICS", target_diagnostics)
         h = produced(mode, True, root=base)  # Actual startup/snapshot, no decode hooks yet.
         directory = base / "drive-output"
         shutil.copytree(
@@ -73,6 +75,8 @@ def driven(produced, monkeypatch, tmp_path):
             )
         }
         opts = m["fixed_diagnostic"]["options"]
+        if target_diagnostics is not None:
+            opts["target_diagnostics"] = target_diagnostics
         if configuration == "k3-b128-v1":
             from specrhythm.serving.k3_scale_report import metadata
 
@@ -193,6 +197,9 @@ def driven(produced, monkeypatch, tmp_path):
                             position_ids=[n - 1, n],
                             target_forward_start_ns=now(),
                             structural_errors=[],
+                            **({"target_diagnostic_profile": "lean",
+                                "numerical_forensics": "NOT_COLLECTED_BY_PROFILE"}
+                               if target_diagnostics == "lean" else {}),
                         )
                     )
                     for worker in h.workers:

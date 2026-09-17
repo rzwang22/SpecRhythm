@@ -435,6 +435,7 @@ def analyze(runtime, backend, light, *, draft_dispatch=None):
             dict(
                 index=c["index"],
                 boundary_ns=c["boundary_ns"],
+                postprocessing=c["postprocessing"],
                 latencies_ms={
                     k: v
                     for k, v in c["latencies_ms"].items()
@@ -478,7 +479,7 @@ def analyze(runtime, backend, light, *, draft_dispatch=None):
         policy_fields.update(native_geometry_status="PASS", native_target_geometry=proof,
                              measurement_valid=True)
     policy_fields.pop("k3_configuration", None)  # Geometry is recorded independently below.
-    from specrhythm.serving.k3_scale_report import capture_summary
+    from specrhythm.serving.k3_scale_report import capture_summary, diagnostic_substages
 
     if runtime["point"].get("k3_configuration") == "k3-b128-v1":
         require(all(d.get("diagnostic_configuration", {}).get("target_diagnostics_enabled")
@@ -488,6 +489,10 @@ def analyze(runtime, backend, light, *, draft_dispatch=None):
     return dict(
         capture_target_forward=capture_summary(
             {k: v for k, v in hosts.items() if k.startswith("target-rank-")}, start, end),
+        target_diagnostic_substages=diagnostic_substages(
+            runtime, {k: v for k, v in hosts.items() if k.startswith("target-rank-")}, start, end),
+        target_diagnostic_substage_scope="children of capture, not additive with parent; "
+        "metadata/mapping/encoding residual is inclusive, not all sampling or pure CPU",
         control_snapshot_publication=capture_summary(
             {"coordinator": hosts["coordinator"]}, start, end, "control_json_write"),
         physical_Draft_calls_per_Target_step=calls / len(steps) if calls is not None else None,
@@ -588,6 +593,9 @@ def report(root, output, status, commit):
 
     matching(config, light)
     runtime = reader.read(point / "runtime.json", required=True)
+    from specrhythm.phase4.target_profile import qualify as qualify_target_profile
+
+    qualify_target_profile(runtime, config["options"])
     value = analyze(
         runtime,
         reader.read(point / "draft-backend-report.json", required=True),

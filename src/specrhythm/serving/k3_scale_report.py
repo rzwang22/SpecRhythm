@@ -52,15 +52,20 @@ def capture_summary(hosts, start, end, category="target_forward_diagnostics"):
 
 def metadata(options):
     """Declared fixed-runtime configuration, alongside raw worker effective metadata."""
+    from specrhythm.phase4.target_profile import coverage
+
+    selected = options.get("target_diagnostics", "full")
     return dict(
+        **coverage(selected),
         capture_function="specrhythm.phase4.vllm_diagnostics.capture_target_forward",
-        target_logits_diagnostics="ENABLED; existing raw top-10/argmax/log-softmax path",
+        target_logits_diagnostics=("ENABLED; existing raw top-10/argmax/log-softmax path"
+                                   if selected == "full" else "NOT_COLLECTED_BY_PROFILE"),
         numerical_diagnostic_plan="UNCHANGED; effective worker environment recorded separately",
         observation=options["observation"],
         draft_audit=options["draft_audit"],
         identity_matching=options["identity_matching"],
         draft_dispatch=options.get("draft_dispatch"),
-        capture_algorithm_changed=False,
+        capture_algorithm_changed=selected != "full",
         deferred_bounds=dict(
             records_per_process=100000,
             encoded_bytes_per_process=256 * 1024**2,
@@ -75,3 +80,26 @@ def metadata(options):
         ),
         overflow_policy="FAIL evidence; no capacity flush, silent dropping or deadline extension",
     )
+
+
+def diagnostic_substages(runtime, hosts, start, end):
+    from specrhythm.phase4.target_profile import NOT_COLLECTED
+    from specrhythm.serving.common import require
+
+    lean = runtime.get("diagnostic_configuration", {}).get("target_diagnostic_profile") == "lean"
+    result = {}
+    for category in ("target_optional_logits_cpu_logsoftmax", "target_optional_topk_argmax",
+                     "target_diagnostic_contract_scan"):
+        optional = "optional" in category
+        if lean and optional:
+            require(not any(r["category"] == category for h in hosts.values()
+                            for r in h.get("intervals", [])),
+                    "lean profile executed optional numerical forensics")
+            result[category] = dict(status=NOT_COLLECTED)
+        else:
+            result[category] = capture_summary(hosts, start, end, category)
+            if "target-rank-1" in result[category]:
+                result[category]["target-rank-1"] = dict(
+                    status="NOT_APPLICABLE", reason="input/numerical capture is TP rank0 only; "
+                    "rank1 native device/request evidence is separately required")
+    return result

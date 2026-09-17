@@ -139,6 +139,8 @@ def dispatch(runtime, groups, events):
                     ready_ns=c["ready_ns"],
                     owner_ready_published_ns=published.get((c["request_id"], c["prefix_version"])),
                     claimed_ns=c["claimed_ns"],
+                    wait_breakdown=ready_wait(runtime, step, c, published.get(
+                        (c["request_id"], c["prefix_version"]))),
                 )
                 for c in group["claims"].values()
             ],
@@ -205,6 +207,12 @@ def dispatch(runtime, groups, events):
         missing_READY_publications=sum(
             c["owner_ready_published_ns"] is None for r in out for c in r["request_versions"]
         ),
+        observed_eligibility_to_claim_ms=stats([
+            c["wait_breakdown"]["observed_eligibility_to_claim_ms"]
+            for r in out for c in r["request_versions"]
+            if c["wait_breakdown"].get("observed_eligibility_to_claim_ms") is not None
+        ]),
+        eligibility_scope="sampled after owner live selection; first eligibility remains unknown",
         scheduler_ms=stats([r["scheduler_ms"] for r in out if r["scheduler_ms"] is not None]),
         missing_scheduler_phase_steps=sum(
             any(v is None for v in r["scheduler_phases_ms"].values()) for r in out
@@ -352,4 +360,40 @@ def rejection_timeline(runtime, backend, groups, draft_rows):
         omitted_rows=max(0, len(rows) - 128),
         row_limit=128,
         clock_note="host landmarks and native bounds are distinct; no summed lane times",
+    )
+
+
+def ready_wait(runtime, step, claim, published):
+    """Observed partitions, never infer first eligibility from GPU idle or READY."""
+    if published is None:
+        return dict(status="MISSING_READY_PUBLICATION")
+    a, b = max(published, runtime["measurement_start_ns"]), claim["claimed_ns"]
+    if b < a:
+        return dict(status="OUTSIDE_WINDOW")
+    busy = [(s["start_ns"], s["end_ns"]) for s in runtime["target_steps"]]
+    gate = [(s["start_ns"], s["end_ns"]) for s in runtime.get("host", {}).get("intervals", [])
+            if s["category"] == "serial_k3_idle_gate"]
+    busy_ms = duration(intersect([(a, b)], busy))
+    gate_ms = duration(intersect([(a, b)], gate))
+    both = duration(intersect(intersect([(a, b)], busy), gate))
+    eligible = claim.get("eligibility_observed_ns")
+    available = step.get("ping_admission", {}).get("target_available_observed_ns")
+    return dict(
+        status="OBSERVED_PARTIAL",
+        clipped_READY_to_claim_ms=(b-a)/1e6,
+        Target_step_busy_ms=busy_ms,
+        Serial_gate_excluding_Target_ms=gate_ms-both,
+        unaccounted_ms=(b-a)/1e6-busy_ms-gate_ms+both,
+        Target_available_observed_ns=available,
+        eligibility_observed_ns=eligible,
+        READY_to_observed_eligibility_ms=(eligible-published)/1e6
+        if eligible is not None else None,
+        observed_eligibility_to_claim_ms=(claim["claimed_ns"]-eligible)/1e6
+        if eligible is not None else None,
+        first_legal_eligibility_ns=None,
+        scope="eligibility sampled once by authoritative owner after live views/selection; "
+        "earliest eligibility not observed. Busy is coordinator complete step "
+        "(includes CPU/output commit), "
+        "not GPU-only. Remainder may include admission/home/capacity, control, RPC or unknown. "
+        "No causal attribution or avoidable-wait claim; request spans must not be summed.",
     )

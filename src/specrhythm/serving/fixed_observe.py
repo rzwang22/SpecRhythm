@@ -118,6 +118,8 @@ def install_host_observation(role=None):
     wrap(transport.UnixDraftClient, "call", "ipc")
     wrap(dual_service.DualDraftClient, "call", "ipc")
     wrap(vllm_diagnostics, "capture_target_forward", "target_forward_diagnostics")
+    wrap(vllm_diagnostics, "capture_target_numerics", "target_optional_logits_cpu_logsoftmax")
+    wrap(vllm_diagnostics, "capture_target_numerical_rows", "target_optional_topk_argmax")
     wrap(s2_pool.ResidentPoolAudit, "check", "resident_block_audit")
     wrap(VllmDraftWorker, "fence", "draft_required_fence")
     # Wrap aliases in their defining modules before consumers import them.
@@ -248,6 +250,9 @@ def target_startup(worker):
     from specrhythm.serving.fixed_identity import install
 
     install(runner.drafter, "identity")
+    from specrhythm.phase4.target_profile import initialize
+
+    initialize(runner)
     if os.environ["SR_S2_MODE"] in ("serial-prepost3", "serial-eager-prepost3",
                           "pingpong-prepost3", "pingpong-eager-prepost3",
                           "serial-k3", "serial-eager-k3", "pingpong-k3", "pingpong-eager-k3"):
@@ -285,14 +290,20 @@ def target_report(worker):
     from specrhythm.serving.fixed_logging import current
 
     logs = current()
+    from specrhythm.phase4.target_profile import coverage, profile
+
+    selected_profile = profile()
     # The coordinator has already performed its normal final target_fence RPC.
     return {
         "diagnostic_configuration": {
+            **coverage(selected_profile),
             "target_diagnostics_enabled": bool(os.environ.get("SR_PHASE4_TARGET_DIAGNOSTICS")),
             "target_diagnostics_path": os.environ.get("SR_PHASE4_TARGET_DIAGNOSTICS"),
             "numerical_diagnostic_plan": os.environ.get("SR_PHASE4_NUMERICAL_DIAGNOSTIC_PLAN"),
             "capture_function": "capture_target_forward",
-            "logits_algorithm": "unchanged float CPU / log_softmax / top10 / argmax",
+            "logits_algorithm": ("unchanged float CPU / log_softmax / top10 / argmax"
+                                 if selected_profile == "full" else
+                                 "NOT_COLLECTED_BY_PROFILE"),
         },
         "identity_matching": report(worker.model_runner.drafter.identity),
         "device": worker.fixed_timeline.report(),
@@ -338,10 +349,10 @@ def capture(row):
                 }
             )
     if schema == "specrhythm.phase4-target-forward-diagnostic.v1":
-        from specrhythm.phase4.vllm_diagnostics import validate_target_diagnostic
+        from specrhythm.phase4.vllm_diagnostics import validate_runtime_target_diagnostic
 
         with TIMERS.span("target_diagnostic_contract_scan"):
-            errors = validate_target_diagnostic(row)
+            errors = validate_runtime_target_diagnostic(row)
         TARGET_ROWS.append(
             {
                 k: row.get(k)
@@ -359,6 +370,8 @@ def capture(row):
                 )
             }
             | {
+                **({k: row[k] for k in ("target_diagnostic_profile", "numerical_forensics")}
+                   if "target_diagnostic_profile" in row else {}),
                 "context_length": len(row["committed_prefix_token_ids"]),
                 "structural_errors": errors,
             }

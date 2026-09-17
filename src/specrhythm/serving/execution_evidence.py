@@ -16,6 +16,31 @@ def delta(a, b):
     return (b - a) / 1e6 if a is not None and b is not None else None
 
 
+def postprocessing_partition(targets, gpu_end, sampled):
+    """Partition a landmark interval on rank0; no cross-thread duration addition."""
+    if gpu_end is None or sampled is None or sampled < gpu_end:
+        return dict(status="MISSING_OR_UNORDERED_ENDPOINTS")
+    ranks = [t for t in targets if t.get("device", {}).get("identity", {}).get("global_rank") == 0]
+    if len(ranks) != 1:
+        return dict(status="MISSING_OR_DUPLICATE_RANK0")
+    spans = [r for r in ranks[0].get("host", {}).get("intervals", [])
+             if r["category"] == "target_forward_diagnostics"
+             and r["start_ns"] < sampled and r["end_ns"] > gpu_end]
+    lanes = {(r.get("pid"), r.get("thread_id")) for r in spans}
+    if not spans or len(lanes) != 1 or any(None in lane for lane in lanes):
+        return dict(status="MISSING_OR_AMBIGUOUS_CAPTURE_LANE")
+    captured = duration([(max(gpu_end, r["start_ns"]), min(sampled, r["end_ns"])) for r in spans])
+    return dict(
+        status="OBSERVED_PARTIAL", lane=list(next(iter(lanes))),
+        GPU_end_upper_to_sampled_ms=(sampled-gpu_end)/1e6,
+        capture_intersection_union_ms=captured,
+        outside_capture_ms=(sampled-gpu_end)/1e6-captured,
+        scope="GPU end upper bound -> CPU sampled-results hook. Outside capture includes "
+        "required sampling/result transfer and any uninstrumented work/waits; not exclusively "
+        "necessary CPU cost. Nested capture children are not added. Not a throughput correction.",
+    )
+
+
 def execution_path(
     runtime, backend, start, end, *, feedback_operation="synchronize_and_batch_propose"
 ):
@@ -111,6 +136,7 @@ def execution_path(
             dict(
                 index=index,
                 boundary_ns=[a, b],
+                postprocessing=postprocessing_partition(targets, gpu_end, sampled.get("start_ns")),
                 counters=dict(counts) if protocol is not None else None,
                 admitted_outcomes=dict(cycle_outcomes) if protocol is not None else None,
                 proposal_forward_B=[r["B"] for r in proposal],

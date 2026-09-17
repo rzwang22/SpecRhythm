@@ -59,6 +59,6 @@ jobs:
           ref: 752a3a504485790a2e8491cacbb35c137339ad34
           path: tmp/phase4b3-vllm-source
           sparse-checkout: vllm
-      - run: python -m pytest tests/test_phase4_vllm_draft.py tests/test_phase4_vllm_draft_source.py tests/test_phase4_pingpong_source.py tests/test_serving_s2_source.py tests/test_serving_fixed_source.py tests/test_prepost_target.py tests/test_prepost_integration.py tests/test_ping_prepost_integration.py tests/test_ping_prepost_scheduler.py tests/test_ping_prepost_routing.py tests/test_k3_target.py tests/test_k3_dispatch_chain.py tests/test_k3_prompt_proof.py tests/test_k3_resident_schedule.py tests/test_k3_matrix.py tests/test_k3_admission_frame.py tests/test_k3_b64_owner.py
+      - run: python -m pytest tests/test_phase4_vllm_draft.py tests/test_phase4_vllm_draft_source.py tests/test_phase4_pingpong_source.py tests/test_serving_s2_source.py tests/test_serving_fixed_source.py tests/test_prepost_target.py tests/test_prepost_integration.py tests/test_ping_prepost_integration.py tests/test_ping_prepost_scheduler.py tests/test_ping_prepost_routing.py tests/test_k3_target.py tests/test_k3_dispatch_chain.py tests/test_k3_prompt_proof.py tests/test_k3_resident_schedule.py tests/test_k3_matrix.py tests/test_k3_admission_frame.py tests/test_k3_b64_owner.py tests/test_target_lean.py
         env:
           SR_PHASE4B3_SOURCE_AUDIT: tmp/phase4b3-vllm-source

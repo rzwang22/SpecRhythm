@@ -45,12 +45,14 @@ fixed_schedulers, s2_schedulers, target_pool = _fixed, _s2, _pool
 hardware, observed_startup, phase4_config, startup = _hardware, _observed, _config, _startup
 
 
+@pytest.mark.parametrize("diagnostics", ["full", "lean"])
 @pytest.mark.parametrize("eager", [False, True])
 @pytest.mark.parametrize("target_first", [False, True])
 def test_actual_claim_schedule_verify_enters_before_other_recovery_finishes(
-    observed_startup, target_pool, monkeypatch, eager, target_first
+    observed_startup, target_pool, monkeypatch, eager, target_first, diagnostics
 ):
     h = observed_startup
+    monkeypatch.setenv("SR_FIXED_TARGET_DIAGNOSTICS", diagnostics)
     monkeypatch.setenv("SR_FIXED_POINT", str(h.directory / "cpu-point.json"))
     monkeypatch.setitem(s2_runtime.CLASSES, "serial", s2_runtime.CLASSES["pingpong-eager-k3"])
     h.run("serial")  # Real proposer factory; only fixture GPU/transport replaced.

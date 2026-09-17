@@ -748,3 +748,75 @@ coverage remain separate. `window_ms_per_active_opportunities` uses128 × window
 /ΣactualB for this configuration. Both repetitions are retained with ranges; no
 subtracting observation costs and no claim that nonzero overlap hides recovery.
 READY changes and diagnostics optimization remain outside this scale experiment.
+
+## B128 Target diagnostics profiles (2026-09-17)
+
+Behavior reference is `f7bfb43152f5655edbad9888c53c0a81e9d11954`; work continues
+from `35aeb26862923fad919a502ac454feef3b91eed4`. The independent experiment names
+are `baseline` (full Target diagnostics) and `lean-target` (lean). Both retain
+unified Draft dispatch and deferred-window persistence. There is **no new dispatch
+variant**: the inspected execution path and event-controlled regression do not
+establish an additional removable scheduling barrier. READY publication, claim
+selection, Serial's gate, feedback priority and token-step fences are unchanged.
+
+### Dependency audit
+
+| Work | Producer / consumer / execution point | Role and treatment |
+| --- | --- | --- |
+| Model logits and actual sampling | Pinned `gpu_model_runner.py` computes logits; its stock sampler and `_bookkeeping_sync` consume them; `prepost_target.install` projects actual results | Necessary execution; unchanged. No forensic argmax is used as feedback. |
+| Acceptance, correction, no-bonus commit | `prepost_target` → `PingPrePostProposer._finalize_round` → `pp_feedback` → owner/machine | Necessary protocol/state mutation; unchanged. Full output equivalence remains NOT_RUN. |
+| Request/proposal/version, KV/frontier, claim ownership | Scheduler, verify-start adapter, backend and owner | Online checks; unchanged. Live state is not memoized by the diagnostic cache. |
+| Physical query/input/positions/spec metadata and causal mask | `capture_target_forward` → `fixed_observe.capture` → compact `target_rows` → scan/geometry qualification | Required input evidence, retained. Small device index/position/sequence tensors still transfer to CPU; no new device-wide synchronization. Their cost is not claimed eliminated. |
+| Native forward / TP device/request evidence | `DeviceTimeline` pre/post hooks → target report → `target_groups` and geometry/overlap validation | Required independent device evidence on both ranks; unchanged. Home/version/proposal association uses authoritative claims and scheduler rows, not inferred from logits. |
+| Actual sampled and committed tokens | Stock bookkeeping → `prepost_target_sample`, round records, coordinator outputs | Required accounting; retained. Optional `selected_target_token_id` is not fabricated in lean; actual sample records remain the source. |
+| Workload parsing and prompt lookup | Previously each capture read/count/load/hash of frozen workload; lean initializes once in `fixed_observe.target_startup` | Immutable indexed definitions, validated against proposer's prompt identity. Each capture binds against CURRENT full token row. Existing identity map preserves aliases/history; current prompt changes/unknown matches reject. Owner/path replacement invalidates the index. No generated suffix, KV or prefix version cache. |
+| Full logits CPU copy, vocabulary log-softmax, top-10 and repeated argmax | `capture_target_forward`; only numerical diagnostic/divergence consumers use the results | Full retained; lean omits these computations and fields, explicitly NOT_COLLECTED_BY_PROFILE. Full forensic consumers keep the strict full validator and therefore reject lean as a numerical proof. |
+| Diagnostic rows, hash and JSON encoding | Capture → `CheckpointJsonl` → bounded deferred logger | Metadata/hash/encoding retained. Only the prior optional numerical payload is omitted; no extra per-token fsync/background logits copy. Final publication uses the original absolute deadline. |
+| Live control snapshots | Coordinator publishes; scheduler and proposer read `s2-control.json` | Necessary online control, unchanged. Not merged/deleted in this change. |
+
+The pinned integration patch invokes capture **after logits and before sampling /
+verify-end** (`integrations/vllm/patches/0001-custom-proposer-request-and-verify-hooks.patch`).
+Its return value is unused. Full numerical diagnostics are observational but
+synchronous and thus do delay the path to feedback. Historical B128 rank0 capture
+means were about 0.52s for PingPong and 1.07–1.13s for Serial, while GPU forward was
+roughly 0.11s and 0.22–0.23s. These inclusive spans contain children and waits;
+**they are not a measured removable CPU cost or a predicted throughput gain**.
+Source archive: `pingpong-k3-delivery-a100-k3-b128-unified-20260917T112150Z-423.tar.gz`.
+Its historical results and output-equivalence limits are unchanged.
+
+### READY and admission evidence
+
+`K3Owner.status` already returns an informational immutable snapshot without waiting
+for Draft. `PingPrePostController.select` queues an authoritative `pp_admit`;
+`EagerOwner._run` drains queued messages before the next GPU token step. The current
+in-flight fenced step must finish; later unrelated steps are not an admission
+prerequisite. `PingPrePostMachine.admit` checks live views, home/ceiling and ownership,
+including fallback to the other home. Existing real scheduler/adapter/owner tests
+hold A's next recovery step while B passes scheduler and verify-start. They now run
+under both full and lean. Serial still uses `k3_idle` on the authoritative owner.
+
+New bounded landmarks record coordinator Target availability at select entry,
+owner eligibility observation after live selection, claim and RPC return. These
+are **observations, not earliest eligibility timestamps**. Per-request/version
+READY→claim partitions intersect the complete coordinator Target-step intervals
+(including CPU and output commit), then Serial-gate intervals excluding overlaps.
+The remainder stays unaccounted: it may include control/RPC, self dependencies,
+home/capacity rules and scheduling. Admission's deferred inventory retains its
+`dependency`, `capacity` and `home_policy` reasons. No exact duration is assigned
+from these sparse samples. GPU-idle alone is not proof of Target CPU availability.
+
+Reports retain both TP bounds, native physical IDs, request/version/home joins,
+feedback→READY, READY→claim, claim→GPU and observed-eligibility→claim. Missing
+landmarks remain missing. Per-request times, nested diagnostics, cross-process
+spans and TP intervals are never added as total wall time. Optional numerical
+subspans are explicit NOT_COLLECTED_BY_PROFILE in lean; missing required input or
+native evidence still fails. GPU feedback latency/throughput benefit is PENDING.
+
+The GPU-end→sampled-results interval additionally reports the rank0 capture-span
+intersection union and its outside-capture remainder. Rank/thread ambiguity stays
+MISSING; the remainder includes real sampler/result transfer plus uninstrumented
+work/waits and is not labeled wholly necessary CPU time. Full numerical subspans
+are rank0-only; rank1's absent optional spans are NOT_APPLICABLE, while both TP
+ranks still require independent native device/request evidence. Long committed-
+prefix records and their hashes remain for the existing structural input contract;
+this patch does not claim to eliminate every metadata/encoding cost.

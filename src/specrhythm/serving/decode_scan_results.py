@@ -433,6 +433,9 @@ def summarize(manifest_path, directory, point, *, probe=False):
         base["prepared_pool"] = prepared_checks(m, r, directory, point)
         base["diagnostic_logging"] = logging_checks(directory, opts["observation"])
         base["identity_matching"] = identity_checks(r, opts["identity_matching"])
+        from specrhythm.phase4.target_profile import qualify as qualify_target_profile
+
+        qualify_target_profile(r, opts)
         from specrhythm.serving.device_contract import PREPOST_MODES, legacy_dual, qualify_prepost
 
         stage = "capacity_probe" if probe else "performance"

@@ -1,6 +1,9 @@
 """Coordinator opportunities over immutable homes; only owner claim mutates readiness."""
 
 
+import time
+
+
 class PingPrePostController:
     def __init__(self, mode=None, configuration="k3-b16-v1"):
         from specrhythm.serving.k3 import MODES, geometry
@@ -10,6 +13,7 @@ class PingPrePostController:
         self.admitted = 0
 
     def select(self, clock, client):
+        available = time.monotonic_ns()
         value = client.call(
             "pp_admit",
             dict(
@@ -22,6 +26,8 @@ class PingPrePostController:
                 capacity=self.geometry["target_request_ceiling"] if self.geometry else 8,
             ),
         )
+        value["target_available_observed_ns"] = available
+        value["admission_response_ns"] = time.monotonic_ns()
         # Empty polls do not consume A/B roles, but each snapshot has a fresh identity.
         self.opportunity += 1
         self.admitted += bool(value["claims"])

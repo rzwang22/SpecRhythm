@@ -125,6 +125,7 @@ class PingPrePostMachine(PrePostMachine):
         ):  # A busy home must not hide legal ordinary work in the other home.
             fallback = "B" if normal == "A" else "A"
             selected = select_target_admissions(views, normal_cohort=fallback, capacity=capacity)
+        eligibility_observed_ns = time.monotonic_ns()
         self.opportunity = payload["opportunity"]
         batch_id = f"ping-prepost-target-{self.opportunity}-{normal}"
         rows = []
@@ -140,6 +141,7 @@ class PingPrePostMachine(PrePostMachine):
                 opportunity_cohort=normal,
                 claim_id=batch_id + ":" + intent.proposal_id,
                 claimed_ns=time.monotonic_ns(),
+                eligibility_observed_ns=eligibility_observed_ns,
                 consumed=False,
             )
             self.claims[rid] = row
