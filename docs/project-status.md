@@ -31,7 +31,9 @@ claims.
 
 ### PR #5 — explicit A100 K3 B128 scale exploration (2026-09-17)
 
-- Continued from clean local/remote `e2dd4357099880c736bc30ee00a12b1886be5688`.
+- Execution `f7bfb43152f5655edbad9888c53c0a81e9d11954`; fixed entry
+  `23e748c1a1c093984a9b0abdab92d643f71b2624`.
+  Continued from clean local/remote `e2dd4357099880c736bc30ee00a12b1886be5688`.
   Added `k3-b128-v1`: Serial A128/Target128, PingPong A64/B64/Target64,
   Draft ceiling128, resident360. B16/B64 entries/defaults remain available.
 - Geometry flows through real planning, engine-capacity checks, owner/controller,

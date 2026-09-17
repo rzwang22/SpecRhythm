@@ -52,3 +52,33 @@ export state. Do not send separate subpackages. Each repeat reports raw ΣB,
 throughput,128-opportunity normalization, capture/dispatch/pipeline breakdown;
 no best-window selection. GPU capacity/correctness/cleanup/overlap/performance
 remain PENDING until operator evidence; full output equivalence stays NOT_RUN.
+
+## Fixed foreground command
+
+Entry commit: `23e748c1a1c093984a9b0abdab92d643f71b2624`.
+It pins execution `f7bfb43152f5655edbad9888c53c0a81e9d11954` (not branch HEAD).
+Run on the existing A100 host, with its existing models, environment and S1 source:
+
+```bash
+if bash <<'SR_K3_B128_BOOT'
+set -Eeuo pipefail
+REPO="${SR_K3_REPO:-/root/autodl-tmp/src/SpecRhythm}"
+ENTRY_SHA=23e748c1a1c093984a9b0abdab92d643f71b2624
+git -C "$REPO" fetch origin codex/rolling-eager-v0.1
+ENTRY="/tmp/specrhythm-k3-b128-entry-$(date -u +%Y%m%dT%H%M%SZ)-$$.sh"
+git -C "$REPO" show "$ENTRY_SHA:scripts/run_k3_b128_pinned.sh" > "$ENTRY"
+bash "$ENTRY" unified b128
+SR_K3_B128_BOOT
+then
+  printf 'Finished; return only the archive printed by the runner.\n'
+else
+  rc=$?
+  printf 'Stopped with original rc=%s; interactive shell remains open.\n' "$rc"
+fi
+```
+
+Only the runner prints `UPLOAD ONLY: <verified archive absolute path>`.
+For a separately requested same-version B64 repeat, replace the last child command
+with `bash "$ENTRY" unified b64`. For the retained I/O-only/legacy dispatch control,
+use `bash "$ENTRY" io-only b128`. Neither is run by default. Each invocation creates
+its own worktree, local directory and archive; no old results are overwritten.
