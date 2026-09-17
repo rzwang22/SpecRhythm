@@ -18,9 +18,14 @@ def publish(path, value):
     """Single-writer control snapshot; atomic visibility, no per-step fsync."""
     path = Path(path)
     temporary = path.with_suffix(path.suffix + ".tmp")
-    with temporary.open("w") as handle:
-        json.dump(value, handle, allow_nan=False)
-    temporary.replace(path)
+    from specrhythm.continuation.trace import TRACE
+
+    with TRACE.span("control_snapshot_publish", file_name=path.name):
+        with TRACE.span("control_snapshot_encode_write", file_name=path.name):
+            with temporary.open("w") as handle:
+                json.dump(value, handle, allow_nan=False)
+        with TRACE.span("control_snapshot_replace", file_name=path.name):
+            temporary.replace(path)
 
 
 def block_count(rows):

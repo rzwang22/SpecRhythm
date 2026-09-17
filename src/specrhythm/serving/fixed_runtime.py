@@ -288,22 +288,26 @@ def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5, 
 
     def publish_control(inflight=()):
         nonlocal last
-        current = {
-            **clock.control(),
-            **packet,
-            "max_requests_per_target_forward": maximum_batch,
-            **({"decode_scan_full_batch": None if ping_prepost else maximum_batch,
-                "decode_scan_deadline_ns": (window.start_ns + int(
-                    options["window_seconds"] * 1e9)) if window.start_ns is not None else None
-                } if scan else {}),
-            "diagnostic_phase": (
-                "drain" if window.end_ns else "measurement" if window.start_ns else "warmup"
-            ),
-            "population": population(clock, inflight),
-        }
-        if current != last:
+        with TRACE.span("control_snapshot_construct"):
+            current = {
+                **clock.control(),
+                **packet,
+                "max_requests_per_target_forward": maximum_batch,
+                **({"decode_scan_full_batch": None if ping_prepost else maximum_batch,
+                    "decode_scan_deadline_ns": (window.start_ns + int(
+                        options["window_seconds"] * 1e9)) if window.start_ns is not None else None
+                    } if scan else {}),
+                "diagnostic_phase": (
+                    "drain" if window.end_ns else "measurement" if window.start_ns else "warmup"
+                ),
+                "population": population(clock, inflight),
+            }
+        with TRACE.span("control_snapshot_compare"):
+            changed = current != last
+        if changed:
             publish(directory / "s2-control.json", current)
-            last = copy.deepcopy(current)
+            with TRACE.span("control_snapshot_copy"):
+                last = copy.deepcopy(current)
 
     try:
         while not clock.complete and not probe:

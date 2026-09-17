@@ -158,8 +158,10 @@ class EagerOwner:
                         continue
                     waiting.remove(item)
                 if not self.closed and self._has_work():
-                    machine.step()
-                    self._publish_status()
+                    with TRACE.span("owner_background_step"):
+                        machine.step()
+                    with TRACE.span("owner_status_publish"):
+                        self._publish_status()
             machine.owner_stopped = True
         except BaseException as error:
             self.failure = error

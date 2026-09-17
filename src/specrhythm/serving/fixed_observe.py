@@ -247,6 +247,17 @@ def target_startup(worker):
 
     current("target-rank-" + str(snapshot["global_rank"]))
     runner = worker.model_runner
+    # Host-only bounded spans; no tensor copies, synchronization or replacement
+    # of the pinned worker's state/input preparation. Absent hooks stay absent.
+    for method in ("_update_states", "_prepare_inputs"):
+        if hasattr(runner, method):
+            original = getattr(runner, method)
+            if not getattr(original, "_dispatch_observer", False):
+                def observed(*args, _original=original, _method=method, **kwargs):
+                    with TRACE.span("target_worker" + _method):
+                        return _original(*args, **kwargs)
+                observed._dispatch_observer = True
+                setattr(runner, method, observed)
     from specrhythm.serving.fixed_identity import install
 
     install(runner.drafter, "identity")

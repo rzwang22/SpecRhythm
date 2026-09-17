@@ -486,7 +486,11 @@ def analyze(runtime, backend, light, *, draft_dispatch=None):
                     is True for d in targets),
                 "B128 effective Target logits diagnostics missing/disabled")
     calls = ping.get("draft_dispatch", {}).get("unique_physical_calls")
+    from specrhythm.serving.k3_cycle_evidence import cycle_report
+
     return dict(
+        cycle_accounting=cycle_report(runtime, backend)
+        if light["mode"].endswith("-k3") else None,
         capture_target_forward=capture_summary(
             {k: v for k, v in hosts.items() if k.startswith("target-rank-")}, start, end),
         target_diagnostic_substages=diagnostic_substages(
