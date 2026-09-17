@@ -134,6 +134,7 @@ def collected_clock_fixture(monkeypatch):
 
 def test_real_owner_same_version_pairing_complete_and_missing(monkeypatch):
     import copy
+
     from specrhythm.serving.k3_cycle_evidence import compact_report
 
     r, b = collected_clock_fixture(monkeypatch)
@@ -152,6 +153,7 @@ def test_real_owner_same_version_pairing_complete_and_missing(monkeypatch):
     c = compact_report(v)
     assert "request_cycles" not in c and "cadence_cycles" not in c
     assert c["request_cycle_summary"] == v["request_cycle_summary"]
+    assert c["steps"] == v["steps"]
     for cycle in v["request_cycles"]:
         assert cycle["key"][1] > 0
         assert cycle["landmarks_ns"]["READY_published"] < cycle["landmarks_ns"]["claim"]
@@ -188,3 +190,20 @@ def test_lossless_repeated_scope_factoring_preserves_missing():
         assert r == old
     del rows[0]['wait_breakdown']['scope']
     assert factor_wait_scope(original) == original  # genuinely missing stays missing
+
+
+def test_compact_preserves_claim_thread_partitions_without_filling_missing():
+    from specrhythm.serving.k3_cycle_evidence import summarize_claim_threads
+
+    def step(rows):
+        return dict(ledger=ledger({"claim": 0, "gpu": 10}), claim_to_gpu_threads=rows)
+
+    p = partition([dict(category="control", start_ns=0, end_ns=4)], 0, 10)
+    q = partition([dict(category="prepare", start_ns=4, end_ns=10)], 0, 10)
+    result = summarize_claim_threads([step({"coordinator": {"lane": p}}),
+                                      step({"coordinator": {"lane": q}}), step({})])
+    lane = result["coordinator"]["lane"]
+    assert lane["complete_steps"] == 3 and lane["observed_steps"] == 2
+    assert lane["missing_steps"] == 1
+    assert lane["exclusive_ms"]["control"]["mean"] == 0.000002
+    assert lane["max_absolute_closure_residual_ns"] == 0

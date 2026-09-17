@@ -404,6 +404,33 @@ def cycle_report(runtime, backend):
     )
 
 
+
+def summarize_claim_threads(steps):
+    """Same complete step set, per lane; absent lane evidence remains missing.
+
+    Within an observed partition, absence of a category means no interval was
+    assigned to it, not missing instrumentation. Source retention is separate.
+    """
+    complete = [s for s in steps if s["ledger"]["status"] == "COMPLETE"]
+    keys = {(producer, lane) for s in complete
+            for producer, lanes in s.get("claim_to_gpu_threads", {}).items() for lane in lanes}
+    result = {}
+    for producer, lane in sorted(keys):
+        rows = [s.get("claim_to_gpu_threads", {}).get(producer, {}).get(lane) for s in complete]
+        present = [r for r in rows if r is not None]
+        result.setdefault(producer, {})[lane] = {
+            "complete_steps": len(complete), "observed_steps": len(present),
+            "missing_steps": len(rows) - len(present),
+            "max_absolute_closure_residual_ns": max(
+                abs(r["closure_residual_ns"]) for r in present
+            ),
+            **{kind: {category: stats([r[kind].get(category, 0.0) for r in present])
+                      for category in sorted({c for r in present for c in r[kind]})}
+               for kind in ("exclusive_ms", "inclusive_union_ms")},
+        }
+    return result
+
+
 def compact_report(value):
     """Keep all-sample statistics and declared examples within the existing 8 MiB report.
 
@@ -418,9 +445,8 @@ def compact_report(value):
             for k, v in value.items()
             if k not in ("request_cycles", "cadence_cycles", "feedback_owner_queue", "steps")
         },
-        "steps": [
-            {k: v for k, v in s.items() if k != "claim_to_gpu_threads"} for s in value["steps"]
-        ],
+        "steps": value["steps"],
+        "claim_to_gpu_thread_summary": summarize_claim_threads(value["steps"]),
         "feedback_owner_queue_summary": {
             k: stats([r[k] for r in queue])
             for k in ("wait_ms", "physical_host_call_union_ms", "other_or_unaccounted_ms")

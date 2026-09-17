@@ -20,6 +20,16 @@ from specrhythm.serving.target_dispatch import qualification_errors
 hardware, produced, driven = _hardware, _produced, _driven
 
 
+@pytest.fixture(autouse=True)
+def isolated_input_environment(monkeypatch):
+    # These tests construct their own worker/workload and must not consume an
+    # environment installed by another production-construction fixture.
+    for key in ("SR_S1_EXECUTION_MANIFEST", "SR_S2_EXECUTION_MANIFEST",
+                "SR_PHASE4_NUMERICAL_DIAGNOSTIC_PLAN", "SR_FIXED_TARGET_DIAGNOSTICS",
+                "SR_K3_TARGET_DISPATCH"):
+        monkeypatch.delenv(key, raising=False)
+
+
 @pytest.mark.parametrize("mode", MODES)
 @pytest.mark.parametrize("policy", ["reference", "encode-once"])
 def test_real_drive_publish_native_qualify_export(mode, policy, driven, monkeypatch, tmp_path):
@@ -162,12 +172,13 @@ def test_profiles_do_not_change_policy_or_hide_missing_evidence():
 def test_collected_control_cycle_qualification_then_archive_replay(policy, monkeypatch, tmp_path):
     import copy
     import time
+
     from test_k3_cycle_accounting import collected_clock_fixture
 
     from specrhythm.continuation import trace
+    from specrhythm.serving.fixed_plan import settings
     from specrhythm.serving.k3_cycle_evidence import compact_report, cycle_report
     from specrhythm.serving.k3_scale_report import metadata
-    from specrhythm.serving.fixed_plan import settings
 
     r, b = collected_clock_fixture(monkeypatch)
     opts = settings(target_dispatch=policy, target_diagnostics='lean')
@@ -181,7 +192,7 @@ def test_collected_control_cycle_qualification_then_archive_replay(policy, monke
     for s in r['target_steps']:
         # GPU/transport endpoints in this CPU fixture use a controlled clock.
         ticks = iter(range(s['start_ns']-9, s['start_ns']+20))
-        monkeypatch.setattr(time, 'monotonic_ns', lambda: next(ticks))
+        monkeypatch.setattr(time, 'monotonic_ns', lambda ticks=ticks: next(ticks))
         fixed_runtime.publish(path, {'pp_admission': s['ping_admission'], 'deadline_ns': 99999})
     monkeypatch.setattr(time, 'monotonic_ns', original_clock)
     r['host'] = {'intervals': [], 'causal_timeline': t.report()}
