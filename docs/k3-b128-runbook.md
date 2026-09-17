@@ -101,3 +101,13 @@ examples. Raw native/owner/transport records remain in the bundle for reconstruc
 all request ledgers; large derived arrays are not embedded repeatedly.
 Missing landmarks, clipped/incomplete cycles and unknown eligibility stay explicit.
 The first two windows per mode cannot establish a stable speedup by themselves.
+
+
+The dispatch entry pins execution `c1fca49f3f846ef94f0759b585fddaf091d78b62`.
+Its code includes the new observations and both policies; the only execution
+switch between the two controls is control encoding. The script itself belongs
+to the follow-up fixed-entry commit; fetch that commit before using it.
+Choose one configuration for each foreground invocation. Both invocations create
+new worktrees/local directories and independently produce one archive. Do not
+run them concurrently on the same GPUs. Original buffers, report caps and
+setup/drain deadlines are unchanged.
