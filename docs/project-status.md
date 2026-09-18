@@ -1,5 +1,8 @@
 # SpecRhythm project status
 
+Execution pin for the ordinary CPU comparison: `944328263b02a915f397bcb03c8c743c71e9a56c`
+(`scripts/run_ordinary_cpu_pinned.sh`). GPU results remain PENDING.
+
 ### PR #5 — ordinary shared controls and full Target block audit (2026-09-18)
 
 - Historical execution `4878f8beb8a36713e35ef3e0a1a6cfe1470967b5` now has real

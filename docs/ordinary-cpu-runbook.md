@@ -59,7 +59,8 @@ cleanup, calibrated overlap and performance are PENDING until this entry is run.
 
 ## Foreground command
 
-The delivery commit fills the exact execution and entry SHA below. Always read the
+Execution SHA: `944328263b02a915f397bcb03c8c743c71e9a56c`.
+The fixed entry is `scripts/run_ordinary_cpu_pinned.sh`; its `FINAL_SHA` is this exact commit. Always read the
 pinned entry from that commit; do not execute an old runbook checkout by accident.
 The outer `if` keeps the interactive shell open; the script preserves first failure
 and runs the existing bounded failure export. Required paths may be overridden
