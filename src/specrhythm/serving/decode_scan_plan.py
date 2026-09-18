@@ -23,13 +23,16 @@ from specrhythm.serving.s2_plan import MODES, RATIO, check_seal, sealed, selecti
 from specrhythm.serving.schema import load_requests
 
 BATCHES = (16, 32, 64, 128)
+EXPLICIT_MODES = (*MODES, "serial-eager", "serial-prepost3", "serial-eager-prepost3",
+                          "pingpong-prepost3", "pingpong-eager-prepost3",
+                          "serial-k3", "serial-eager-k3", "pingpong-k3", "pingpong-eager-k3")
 POOL_SIZE = 360
 SCHEMA = "specrhythm.decode-scan.v1"
 BOUNDARY = "prefilled resident pool; post-warmup full-batch decode; actual stop before drain"
 
 
-def options(**kwargs):
-    value = settings(observation="buffered-live", identity_matching="bound-prefix", **kwargs)
+def options(observation="buffered-live", **kwargs):
+    value = settings(observation=observation, identity_matching="bound-prefix", **kwargs)
     value["samples"] = None  # Results, never a measurement stop budget.
     return value
 
@@ -61,10 +64,24 @@ def select(main, small_ids, seed=1666):
     )
 
 
-def selected_point(mode, batch, repeat=0):
-    require(mode in MODES and batch in BATCHES, "unknown decode scan mode/B")
+def selected_point(mode, batch, repeat=0, *, k3_configuration="k3-b16-v1",
+                   validation_profile=None):
+    from specrhythm.serving.k3 import MODES as K3_MODES
+    from specrhythm.serving.k3 import configuration_fields, geometry
+    from specrhythm.serving.k3_validation import fields as validation_fields
+
+    fields = {**configuration_fields(k3_configuration),
+              **validation_fields(validation_profile, k3_configuration)}
+    if mode in K3_MODES:
+        require(type(batch) is int and batch == geometry(mode, k3_configuration)["active_limit"],
+                "K3 point batch/configuration mismatch; configured B"
+                + str(geometry(mode, k3_configuration)["active_limit"]))
+    require(mode in EXPLICIT_MODES and batch in BATCHES, "unknown decode scan mode/B")
+    require(mode not in ("pingpong-prepost3", "pingpong-eager-prepost3") or batch == 16,
+            "PingPong prepost3 currently requires total active B16")
     return dict(
         mode=mode,
+        **(fields if mode in K3_MODES else {}),
         runtime_mode=mode,
         kind="decode-scan",
         batch=batch,
@@ -75,7 +92,12 @@ def selected_point(mode, batch, repeat=0):
     )
 
 
-def manifest(execution, ids, workload_sha, opts, batch):
+def manifest(execution, ids, workload_sha, opts, batch, *, k3_configuration="k3-b16-v1",
+                   validation_profile=None):
+    from specrhythm.serving.k3 import configuration_fields
+    from specrhythm.serving.k3_scale_report import metadata
+    from specrhythm.serving.k3_validation import fields as validation_fields
+
     require(
         batch in BATCHES and len(ids) == len(set(ids)) == POOL_SIZE,
         "invalid scan batch or resident pool",
@@ -98,20 +120,24 @@ def manifest(execution, ids, workload_sha, opts, batch):
             "workload_sha256": workload_sha,
             "trace": trace,
             "active_limit": batch,
+            **configuration_fields(k3_configuration),
+            **validation_fields(validation_profile, k3_configuration),
             "actual_N": POOL_SIZE,
             "requested_N": POOL_SIZE,
             "fixed_diagnostic": {
                 "schema_version": SCHEMA,
                 "scenario": BOUNDARY,
                 "options": opts,
+                **({"diagnostic_configuration": metadata(opts)}
+                   if k3_configuration != "k3-b16-v1" else {}),
                 "capacity": {
                     m: capacity_metadata(
                         m,
                         active_limit=batch,
                         resident_requirement=POOL_SIZE,
-                        target_sequence_limit=512,
+                        target_sequence_limit=512, k3_configuration=k3_configuration,
                     )
-                    for m in MODES
+                    for m in EXPLICIT_MODES
                 },
                 "initial_request_ids": ids[:batch],
                 "cohorts": {"A": ids[: batch // 2], "B": ids[batch // 2 : batch]},
@@ -127,7 +153,16 @@ def manifest(execution, ids, workload_sha, opts, batch):
     )
 
 
-def prepare(root, s1, opts, *, seed=1666, s0=None):
+def prepare(root, s1, opts, *, seed=1666, s0=None, k3_configuration="k3-b16-v1",
+            validation_profile=None):
+    from specrhythm.serving.k3 import B16, configuration_fields, geometry
+    from specrhythm.serving.k3 import MODES as K3_MODES
+    from specrhythm.serving.k3_validation import fields as validation_fields
+
+    fields = {**configuration_fields(k3_configuration),
+              **validation_fields(validation_profile, k3_configuration)}
+    batches = (geometry("serial-k3", k3_configuration)["active_limit"],) \
+        if k3_configuration != B16 else BATCHES
     require(not root.exists(), "decode scan requires a new result root", artifact=str(root))
     old, _ = load_execution(s1 / "s1-mixed100/execution-manifest.json", verify_parent=True)
     require(read_json(s1 / "G3/comparison.json")["valid"] is True, "scan requires qualified S1 G3")
@@ -177,8 +212,9 @@ def prepare(root, s1, opts, *, seed=1666, s0=None):
             handle.write(json.dumps(row.to_dict(), ensure_ascii=False, sort_keys=True) + "\n")
     work_sha = sha256_file(workload)
     manifests = {}
-    for batch in BATCHES:
-        value = manifest(execution, selection["request_ids"], work_sha, opts, batch)
+    for batch in batches:
+        value = manifest(execution, selection["request_ids"], work_sha, opts, batch,
+                         k3_configuration=k3_configuration, validation_profile=validation_profile)
         name = f"execution-B{batch}.json"
         write_once(inputs / name, value)
         manifests[str(batch)] = {"path": "inputs/" + name, "sha256": value["sha256"]}
@@ -186,6 +222,7 @@ def prepare(root, s1, opts, *, seed=1666, s0=None):
         {
             "schema_version": SCHEMA,
             "source_s1": str(s1),
+            **fields,
             "parent": parent,
             "execution": execution,
             "selection": selection,
@@ -196,8 +233,20 @@ def prepare(root, s1, opts, *, seed=1666, s0=None):
             "points": [
                 selected_point(m, b, r)
                 for r in range(opts["repeats"])
-                for b in BATCHES
-                for m in MODES
+                for b in batches
+                for m in (() if k3_configuration != B16 else MODES)
+            ],
+            "optional_points": [
+                selected_point(m, b, r, k3_configuration=k3_configuration,
+                               validation_profile=validation_profile)
+                for r in range(opts["repeats"])
+                for b in batches
+                for m in ("serial-eager", "serial-prepost3", "serial-eager-prepost3",
+                          "pingpong-prepost3", "pingpong-eager-prepost3",
+                          "serial-k3", "serial-eager-k3", "pingpong-k3", "pingpong-eager-k3")
+                if (m in K3_MODES if k3_configuration != B16 else (b == 16 or m not in (
+                    "pingpong-prepost3", "pingpong-eager-prepost3",
+                          "serial-k3", "serial-eager-k3", "pingpong-k3", "pingpong-eager-k3")))
             ],
             "boundary": BOUNDARY,
             "capacity": "PENDING per fresh point before decode",

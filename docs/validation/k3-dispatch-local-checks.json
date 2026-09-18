@@ -1,0 +1,45 @@
+{
+  "initial_full_python312": {
+    "command": "python -m pytest -o addopts= -q",
+    "summary": "10 failed, 3061 passed, 3 skipped in 1342.31s (0:22:22)",
+    "failed_tests": [
+      "tests/test_k3_delivery.py::test_k3_actual_joint_first_failure_and_export[True-serial-eager-k3]",
+      "tests/test_k3_delivery.py::test_k3_actual_joint_first_failure_and_export[True-pingpong-k3]",
+      "tests/test_k3_delivery.py::test_k3_actual_joint_first_failure_and_export[True-pingpong-eager-k3]",
+      "tests/test_ping_joint_failure.py::test_joint_real_failure_mode_run_and_exit_codes[True-pingpong-eager-prepost3]",
+      "tests/test_prepost_runbook.py::test_runtime_pair_preserve_first_error_stop_and_parent_shell[capacity-serial-prepost3:runtime]",
+      "tests/test_prepost_runbook.py::test_runtime_pair_preserve_first_error_stop_and_parent_shell[evidence-serial-prepost3:runtime]",
+      "tests/test_prepost_runbook.py::test_runtime_pair_preserve_first_error_stop_and_parent_shell[evidence+exports-serial-prepost3:runtime]",
+      "tests/test_prepost_runbook.py::test_runtime_pair_preserve_first_error_stop_and_parent_shell[correctness-serial-prepost3:runtime]",
+      "tests/test_prepost_runbook.py::test_runtime_pair_preserve_first_error_stop_and_parent_shell[measurement-serial-eager-prepost3:runtime0]",
+      "tests/test_serving_fixed_logging.py::test_actual_fork_cannot_share_parent_buffer_or_forge_child_complete"
+    ],
+    "interpretation": "Original failures retained; unchanged legacy harness boundaries, root causes unresolved. Later passes do not explain earlier failures."
+  },
+  "final_full_python312": {
+    "command": "python -m pytest -o addopts= -q",
+    "summary": "3 failed, 3089 passed, 3 skipped in 1031.77s (0:17:11)",
+    "failed_tests": [
+      "tests/test_execution_pair_runbook.py::test_runtime_pair_preserve_first_error_stop_and_parent_shell[capacity-serial:runtime]",
+      "tests/test_phase4_dual.py::test_target_failure_terminates_draft_without_unbounded_wait",
+      "tests/test_phase4_natural_teardown.py::test_shared_shell_accepts_natural_teardown_and_removes_guard[target]"
+    ],
+    "interpretation": "Original failures retained; unchanged legacy harness boundaries, root causes unresolved. Later passes do not explain earlier failures."
+  },
+  "execution_sha": "c1fca49f3f846ef94f0759b585fddaf091d78b62",
+  "entry_sha": "9feb51a4d36e4acc0f682ea006a6842d327a69d4",
+  "related_python39": "90 passed",
+  "related_python312": "94 passed",
+  "fixed_entries_python312": "13 passed",
+  "fixed_entry_and_cycle_python39": "15 passed",
+  "final_cycle_python312": "8 passed",
+  "ruff": "PASS",
+  "compileall_python39": "PASS",
+  "compileall_python312": "PASS",
+  "static": {
+    "python39_syntax_files": 406,
+    "bash_scripts": 20,
+    "status": "PASS"
+  },
+  "scope": "CPU only; no GPU/server run; existing assertions and budgets unchanged"
+}

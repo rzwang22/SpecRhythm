@@ -1,0 +1,139 @@
+{
+  "scope": "CPU synthetic protocol; 1 request, prefix256, 32 rolling full-accept rounds; no GPU",
+  "implementation": "isolated immutable eligibility identity view",
+  "observation_parent": "33b6588004376e930ebabe1c9c768eca0b025371",
+  "semantics": "same helper and 3 samples as observation evidence; small unpaired host samples; no latency test threshold, no inference about server GPU or I/O overhead",
+  "measurements": [
+    {
+      "trace": false,
+      "elapsed_ms": [
+        9.240917,
+        8.360625,
+        10.2785
+      ],
+      "median_ms": 9.240917,
+      "snapshot_count": 0,
+      "selected": []
+    },
+    {
+      "trace": true,
+      "elapsed_ms": [
+        11.570667,
+        10.627584,
+        11.80475
+      ],
+      "median_ms": 11.570667,
+      "snapshot_count": 129,
+      "selected": [
+        {
+          "round_id": 0,
+          "history_proposals": 0,
+          "history_continuations": 0,
+          "copied_history_objects": 0,
+          "snapshot_kind": "immutable_request_identity",
+          "start_ns": 1843917917393541,
+          "end_ns": 1843917917394083
+        },
+        {
+          "round_id": 0,
+          "history_proposals": 1,
+          "history_continuations": 0,
+          "copied_history_objects": 0,
+          "snapshot_kind": "immutable_request_identity",
+          "start_ns": 1843917917654333,
+          "end_ns": 1843917917654916
+        },
+        {
+          "round_id": 0,
+          "history_proposals": 1,
+          "history_continuations": 0,
+          "copied_history_objects": 0,
+          "snapshot_kind": "immutable_request_identity",
+          "start_ns": 1843917917700916,
+          "end_ns": 1843917917701291
+        },
+        {
+          "round_id": 0,
+          "history_proposals": 1,
+          "history_continuations": 1,
+          "copied_history_objects": 0,
+          "snapshot_kind": "immutable_request_identity",
+          "start_ns": 1843917917808083,
+          "end_ns": 1843917917808458
+        },
+        {
+          "round_id": 16,
+          "history_proposals": 16,
+          "history_continuations": 16,
+          "copied_history_objects": 0,
+          "snapshot_kind": "immutable_request_identity",
+          "start_ns": 1843917923471958,
+          "end_ns": 1843917923472250
+        },
+        {
+          "round_id": 16,
+          "history_proposals": 17,
+          "history_continuations": 16,
+          "copied_history_objects": 0,
+          "snapshot_kind": "immutable_request_identity",
+          "start_ns": 1843917923526083,
+          "end_ns": 1843917923526375
+        },
+        {
+          "round_id": 16,
+          "history_proposals": 17,
+          "history_continuations": 16,
+          "copied_history_objects": 0,
+          "snapshot_kind": "immutable_request_identity",
+          "start_ns": 1843917923576500,
+          "end_ns": 1843917923576750
+        },
+        {
+          "round_id": 16,
+          "history_proposals": 17,
+          "history_continuations": 17,
+          "copied_history_objects": 0,
+          "snapshot_kind": "immutable_request_identity",
+          "start_ns": 1843917923693416,
+          "end_ns": 1843917923693708
+        },
+        {
+          "round_id": 31,
+          "history_proposals": 31,
+          "history_continuations": 31,
+          "copied_history_objects": 0,
+          "snapshot_kind": "immutable_request_identity",
+          "start_ns": 1843917928773291,
+          "end_ns": 1843917928773583
+        },
+        {
+          "round_id": 31,
+          "history_proposals": 32,
+          "history_continuations": 31,
+          "copied_history_objects": 0,
+          "snapshot_kind": "immutable_request_identity",
+          "start_ns": 1843917928832666,
+          "end_ns": 1843917928833041
+        },
+        {
+          "round_id": 31,
+          "history_proposals": 32,
+          "history_continuations": 31,
+          "copied_history_objects": 0,
+          "snapshot_kind": "immutable_request_identity",
+          "start_ns": 1843917928891291,
+          "end_ns": 1843917928891541
+        },
+        {
+          "round_id": 31,
+          "history_proposals": 32,
+          "history_continuations": 32,
+          "copied_history_objects": 0,
+          "snapshot_kind": "immutable_request_identity",
+          "start_ns": 1843917929027083,
+          "end_ns": 1843917929027375
+        }
+      ]
+    }
+  ]
+}

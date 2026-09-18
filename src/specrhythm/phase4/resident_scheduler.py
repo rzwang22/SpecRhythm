@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import os
 import time
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any, Optional
 
-from specrhythm.phase4.request_identity import FrozenPromptIdentityMap
+from specrhythm.phase4.request_identity import FrozenPromptIdentityMap, _NormalizedTokenRow
 from specrhythm.phase4.resident_initial_proposal import (
     ResidentInitialProposalLifecycle,
 )
@@ -74,88 +75,97 @@ class ResidentSetupScheduler(Scheduler):
         self._resident_cycle_id = 0
 
     def schedule(self, *args: Any, **kwargs: Any) -> Any:
-        self._bind_requests()
-        self._refresh_readiness()
-        self._refresh_deferred_initial_proposals()
-        if self._resident_initial_lifecycle is not None:
-            self._resident_initial_lifecycle.prepare_for_schedule(
-                self.requests, cycle_id=self._resident_cycle_id
-            )
-        self._resident_decisions = {}
-        decision_ns = time.monotonic_ns()
-        for internal_id, request in self.requests.items():
-            if request.is_finished():
-                continue
-            stable_id = self._resident_identity.stable_id(str(internal_id))
-            proposal_installed = self._initial_proposal_available(stable_id, request)
-            admissible, reason = resident_admission_decision(
-                num_output_tokens=int(request.num_output_tokens),
-                global_decode_ready=self._resident_ready is not None,
-                consumer=self._resident_consumer,
-                has_initial_proposal=proposal_installed,
-            )
-            if (self._resident_consumer == "serial" and self._resident_ready is not None
-                    and initial_target_tail(stable_id, int(request.num_output_tokens))):
-                admissible, reason = True, "s1-budget-target-tail"
-            self._resident_decisions[str(internal_id)] = (
-                admissible,
-                reason,
-                decision_ns,
-                stable_id,
-            )
-        output = super().schedule(*args, **kwargs)
-        if self._resident_initial_lifecycle is not None:
-            self._resident_initial_lifecycle.finish_schedule(
-                self.requests,
-                scheduled_tokens=output.num_scheduled_tokens,
-                scheduled_spec_decode_tokens=output.scheduled_spec_decode_tokens,
-                cycle_id=self._resident_cycle_id,
-            )
-        scheduled = output.num_scheduled_tokens
-        for internal_id, (admissible, reason, timestamp_ns, stable_id) in sorted(
-            self._resident_decisions.items()
-        ):
-            request = self.requests.get(internal_id)
-            scheduled_count = int(scheduled.get(internal_id, 0))
-            self._resident_events.append(
-                {
-                    "schema_version": ADMISSION_EVENT_SCHEMA,
-                    "cycle_id": self._resident_cycle_id,
-                    "timestamp_ns": timestamp_ns,
-                    "consumer": self._resident_consumer,
-                    "request_id": stable_id,
-                    "internal_request_id": internal_id,
-                    "num_output_tokens": (
-                        int(request.num_output_tokens) if request is not None else None
-                    ),
-                    "global_decode_ready": self._resident_ready is not None,
-                    "measurement_start_ns": (
-                        self._resident_ready.get("measurement_start_ns")
-                        if self._resident_ready is not None
-                        else None
-                    ),
-                    "s1_initial_target_tail": initial_target_tail(
-                        stable_id, int(request.num_output_tokens) if request is not None else 0
-                    ),
-                    "initial_proposal_installed": self._initial_proposal_was_installed(
-                        stable_id
-                    ),
-                    "initial_proposal_lifecycle_state": (
-                        self._resident_initial_lifecycle.state_for(stable_id).value
-                        if self._resident_initial_lifecycle is not None
-                        and stable_id in self._resident_initial_lifecycle.expected_request_ids
-                        else None
-                    ),
-                    "admissible": admissible,
-                    "reason": reason,
-                    "scheduled": scheduled_count > 0,
-                    "scheduled_token_count": scheduled_count,
-                    "explicit_request_predicate": True,
-                    "current_step_arithmetic": False,
-                }
-            )
+        with self._resident_span("binding", work := {}):
+            self._bind_requests(work)
+        with self._resident_span("readiness"):
+            self._refresh_readiness()
+            self._refresh_deferred_initial_proposals()
+            if self._resident_initial_lifecycle is not None:
+                self._resident_initial_lifecycle.prepare_for_schedule(
+                    self.requests, cycle_id=self._resident_cycle_id
+                )
+        with self._resident_span("decisions"):
+            self._resident_decisions = {}
+            decision_ns = time.monotonic_ns()
+            for internal_id, request in self.requests.items():
+                if request.is_finished():
+                    continue
+                stable_id = self._resident_identity.stable_id(str(internal_id))
+                proposal_installed = self._initial_proposal_available(stable_id, request)
+                admissible, reason = resident_admission_decision(
+                    num_output_tokens=int(request.num_output_tokens),
+                    global_decode_ready=self._resident_ready is not None,
+                    consumer=self._resident_consumer,
+                    has_initial_proposal=proposal_installed,
+                )
+                if (self._resident_consumer == "serial" and self._resident_ready is not None
+                        and initial_target_tail(stable_id, int(request.num_output_tokens))):
+                    admissible, reason = True, "s1-budget-target-tail"
+                self._resident_decisions[str(internal_id)] = (
+                    admissible,
+                    reason,
+                    decision_ns,
+                    stable_id,
+                )
+        with self._resident_span("stock"):
+            output = super().schedule(*args, **kwargs)
+        with self._resident_span("initial_finish"):
+            if self._resident_initial_lifecycle is not None:
+                self._resident_initial_lifecycle.finish_schedule(
+                    self.requests,
+                    scheduled_tokens=output.num_scheduled_tokens,
+                    scheduled_spec_decode_tokens=output.scheduled_spec_decode_tokens,
+                    cycle_id=self._resident_cycle_id,
+                )
+        with self._resident_span("admission_records"):
+            shared = {
+                "schema_version": ADMISSION_EVENT_SCHEMA,
+                "cycle_id": self._resident_cycle_id,
+                "consumer": self._resident_consumer,
+                "global_decode_ready": self._resident_ready is not None,
+                "measurement_start_ns": self._resident_ready.get("measurement_start_ns")
+                if self._resident_ready is not None else None,
+                "explicit_request_predicate": True,
+                "current_step_arithmetic": False,
+            }
+            record = self._resident_record_factory(shared)
+            scheduled = output.num_scheduled_tokens
+            for internal_id, (admissible, reason, timestamp_ns, stable_id) in sorted(
+                self._resident_decisions.items()
+            ):
+                request = self.requests.get(internal_id)
+                scheduled_count = int(scheduled.get(internal_id, 0))
+                self._resident_events.append(
+                    record({
+                        "timestamp_ns": timestamp_ns,
+                        "request_id": stable_id,
+                        "internal_request_id": internal_id,
+                        "num_output_tokens": (
+                            int(request.num_output_tokens) if request is not None else None
+                        ),
+                        "s1_initial_target_tail": initial_target_tail(
+                            stable_id, int(request.num_output_tokens) if request is not None else 0
+                        ),
+                        "initial_proposal_installed": self._initial_proposal_was_installed(
+                            stable_id
+                        ),
+                        "initial_proposal_lifecycle_state": (
+                            self._resident_initial_lifecycle.state_for(stable_id).value
+                            if self._resident_initial_lifecycle is not None
+                            and stable_id in self._resident_initial_lifecycle.expected_request_ids
+                            else None
+                        ),
+                        "admissible": admissible,
+                        "reason": reason,
+                        "scheduled": scheduled_count > 0,
+                        "scheduled_token_count": scheduled_count,
+                    })
+                )
         self._resident_cycle_id += 1
         return output
+
+    def _resident_record_factory(self, shared):
+        return lambda dynamic: {**shared, **dynamic}
 
     def _request_admissible_for_schedule(self, request: Any) -> bool:
         internal_id = str(request.request_id)
@@ -258,15 +268,30 @@ class ResidentSetupScheduler(Scheduler):
             return False
         return self._resident_initial_lifecycle.was_installed(stable_id)
 
-    def _bind_requests(self) -> None:
+    def _resident_span(self, name, work=None):
+        # Opt-in hook: legacy schedulers keep their existing observation policy.
+        return nullcontext()
+
+    def _binding_input(self):
+        return lambda raw: tuple(int(item) for item in raw)
+
+    def _bind_requests(self, work=None) -> None:
+        prepare = self._binding_input()
+        if work is not None:
+            work.update(live_requests=0, binding_token_visits=0, normalized_rows=0)
         for internal_id, request in self.requests.items():
             if request.is_finished():
                 continue
             if str(request.request_id) != str(internal_id):
                 raise RuntimeError("vLLM resident request table identity differs")
-            self._resident_identity.bind(
-                str(internal_id), tuple(int(item) for item in request.all_token_ids)
-            )
+            current = prepare(request.all_token_ids)
+            self._resident_identity.bind(str(internal_id), current)
+            if work is not None:
+                work["live_requests"] += 1
+                work["binding_token_visits"] += len(
+                    current.tokens if type(current) is _NormalizedTokenRow else current
+                )
+                work["normalized_rows"] += 1
 
 
 def _required_path(name: str) -> Path:

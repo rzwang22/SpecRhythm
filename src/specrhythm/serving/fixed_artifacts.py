@@ -6,6 +6,7 @@ import time
 import traceback
 from collections import Counter
 
+from specrhythm.continuation.trace import TRACE
 from specrhythm.serving.common import read_json
 from specrhythm.serving.s2_pool import publish
 
@@ -19,6 +20,11 @@ def record_error(directory, error, phase):
         "timestamp_ns": time.monotonic_ns(),
         "traceback": "".join(traceback.format_exception(type(error), error, error.__traceback__)),
     }
+    for key in ("deadline_context", "report_publication_context"):
+        if hasattr(error, key):
+            row[key] = getattr(error, key)
+    if hasattr(error, "response_error"):
+        row["response_error"] = error.response_error
     try:
         import fcntl
 
@@ -38,6 +44,7 @@ def record_error(directory, error, phase):
         print(f"[diagnostic secondary] cannot retain {phase} error: {save_error}", flush=True)
 
 
+@TRACE.observe("coordinator_checkpoint")
 def checkpoint(
     directory,
     manifest,
@@ -105,17 +112,77 @@ def checkpoint(
 def retained_report(directory, report):
     """Works after a killed coordinator too; missing final reports stay secondary."""
     result = dict(report)
+    read_errors = []
+
+    def optional(path, expected=dict):
+        try:
+            value = read_json(path)
+            if not isinstance(value, expected):
+                raise ValueError("invalid retained artifact type")
+            return value
+        except FileNotFoundError:
+            return None
+        except (OSError, ValueError) as error:
+            read_errors.append(dict(artifact=str(path), error=str(error),
+                                    exception_type=type(error).__name__,
+                                    status="UNREADABLE; original bytes retained for export"))
+            return None
+
+    life = optional(directory / "process-lifecycle.json")
+    backend_path = directory / "draft-backend-report.json"
+    if (result.get("mode", result.get("point", {}).get("mode")) == "serial-eager"
+            and backend_path.exists()):
+        eager = (optional(backend_path) or {}).get("rolling_eager")
+        if isinstance(eager, dict):
+            result["rolling_eager_retained"] = {
+                "counters": eager.get("counters"),
+                "pending_work": eager.get("pending_work"),
+                "owner_stopped": eager.get("owner_stopped"),
+                "GPU_overlap": "UNKNOWN",
+                "qualification": "raw lifetime evidence; not a window or cleanup PASS",
+            }
     for filename, field in (
         ("measurement-snapshot.json", "measurement_snapshot"),
         ("drain-state.json", "drain"),
         ("diagnostic-secondary-errors.json", "cleanup_diagnostics"),
+        ("startup-cleanup.json", "startup_cleanup"),
     ):
         path = directory / filename
-        if path.exists():
-            result[field] = read_json(path)
+        value = optional(path, list if field == "cleanup_diagnostics" else dict)
+        if value is not None:
+            result[field] = value
     primary = directory / "diagnostic-primary-error.json"
-    if primary.exists():
-        error = read_json(primary)
+    candidates = []
+    value = optional(primary)
+    if value is not None:
+        candidates.append({**value, "artifact": str(primary)})
+    for error in result.get("cleanup_diagnostics", []):
+        candidates.append({**error,
+                           "artifact": str(directory / "diagnostic-secondary-errors.json")})
+    decision_path = directory / "supervisor-decision.json"
+    decision = optional(decision_path) or (life or {}).get("supervisor_decision")
+    if decision is not None:
+        trigger = decision["trigger"]
+        # A nonzero coordinator exit triggers cleanup, but is not a new earlier
+        # cause than the worker error already retained by failed_report().
+        reaction = trigger["reason"] == "owned coordinator exit/descendant cleanup"
+        if reaction:
+            result["secondary_diagnostics"] = [*result.get("secondary_diagnostics", []),
+                dict(artifact=str(decision_path), supervisor_decision=decision,
+                     status="cleanup reaction to coordinator exit; not an inferred root cause")]
+    else:
+        reaction = False
+    if decision is not None and (not reaction or
+            (not result.get("primary_error") and not candidates)):
+        trigger = decision["trigger"]
+        candidates.append(dict(error=trigger.get("error", trigger["reason"]),
+                               phase="supervisor", failure_layer="supervisor",
+                               timestamp_ns=decision["timestamp_ns"],
+                               artifact=str(decision_path), supervisor_decision=decision))
+    if candidates:
+        # Monotonic occurrence times on this host, not which process won a file lock.
+        candidates.sort(key=lambda e: e.get("timestamp_ns", float("inf")))
+        error = candidates[0]
         result.update(
             valid=False,
             execution_status="FAILED",
@@ -123,16 +190,19 @@ def retained_report(directory, report):
             errors=[error["error"]],
             primary_error={
                 **error,
-                "artifact": str(primary),
+                "artifact": error["artifact"],
                 "field": error["phase"],
                 "actual": error["error"],
                 "expected": "success",
             },
+            failure_layer=error.get("failure_layer", result.get("failure_layer", "execution")),
+            ordered_failures=candidates,
         )
     if not result.get("valid"):
         result.update(execution_status="FAILED", measurement_status="INVALID")
     lifecycle = directory / "process-lifecycle.json"
-    life = read_json(lifecycle) if lifecycle.exists() else {}
+    life_present = life is not None
+    life = life or {}
     if life.get("failure_detection") and not result.get("primary_error"):
         detection = life["failure_detection"]
         result["primary_error"] = {
@@ -150,7 +220,7 @@ def retained_report(directory, report):
             "supervisor_failure": life.get("failure_detection"),
         }
     result["cleanup_status"] = (
-        ("PASS" if life.get("cleanup_valid") else "FAILED") if lifecycle.exists() else "UNKNOWN"
+        ("PASS" if life.get("cleanup_valid") else "FAILED") if life_present else "UNKNOWN"
     )
     result["measurement_availability"] = (
         "QUALIFIED"
@@ -167,6 +237,8 @@ def retained_report(directory, report):
                 if not (directory / name).exists()
             ],
         ]
+    if read_errors:
+        result["secondary_diagnostics"] = [*result.get("secondary_diagnostics", []), *read_errors]
     return result
 
 

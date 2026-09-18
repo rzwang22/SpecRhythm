@@ -1,0 +1,45 @@
+{
+  "base_sha": "bd38ae1ba3f2c6acb1de30fa98196f68da8c3ec6",
+  "preserved_execution_base": "c02ee7dec30ceff21e95eea8f3a42b4909d37202",
+  "full_pytest": {
+    "passed": 2223,
+    "skipped": 3,
+    "exit_code": 0,
+    "skips": [
+      "NVIDIA GPU opt-in",
+      "Linux zombie exit status",
+      "Linux subreaper contract"
+    ]
+  },
+  "python39_protocol_tests": {
+    "passed": 41,
+    "exit_code": 0
+  },
+  "final_reporting_regressions": {
+    "passed": 48,
+    "exit_code": 0
+  },
+  "ruff": "PASS",
+  "compileall": {
+    "3.11": "PASS",
+    "3.9": "PASS"
+  },
+  "python39_ast": {
+    "files": 318,
+    "status": "PASS"
+  },
+  "bash": {
+    "files": 17,
+    "status": "PASS"
+  },
+  "diff_check": "PASS",
+  "GPU_correctness": "PENDING",
+  "native_GPU_overlap": "PENDING",
+  "performance": "PENDING",
+  "scope": "CPU contracts only; physical CUDA numerical outputs/timings are not simulated evidence",
+  "execution_sha": "f01e8d037007540209999179357c3dd2ff2335a7",
+  "pinned_launcher_tests": {
+    "passed": 3,
+    "exit_code": 0
+  }
+}

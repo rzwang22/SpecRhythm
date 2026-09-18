@@ -207,6 +207,23 @@ def test_serial_install_bind_verify_and_commit(observed_startup, monkeypatch, ma
     assert first.identity.stable_id("opaque-0") != second.identity.stable_id("opaque-0")
 
 
+def test_feedback_landmarks_are_emitted_by_actual_proposer_hooks(observed_startup, monkeypatch):
+    from specrhythm.continuation.trace import TRACE, CausalTrace
+
+    fresh = CausalTrace(True, layout="phased")
+    for key, value in vars(fresh).items():
+        monkeypatch.setattr(TRACE, key, value)
+    h = observed_startup
+    monkeypatch.setattr(s2_runtime, "drive", lambda *a, **kw: serial_verifications(h))
+    h.run("serial")
+    rows = TRACE.report()["rows"]
+    sampled = [r for r in rows if r["category"] == "target_sampled_results_received"]
+    packed = [r for r in rows if r["category"] == "target_feedback_payload_ready"]
+    assert len(sampled) == len(packed) == 3
+    assert all(a["end_ns"] < b["start_ns"] for a, b in zip(sampled, packed))
+    assert [r["requests"][0]["round_id"] for r in packed] == [0, 1, 2]
+
+
 @pytest.mark.parametrize("matching", ["linear", "bound-prefix"])
 @pytest.mark.parametrize("fault,message", [
     ("unbound", "no frozen prompt binding"), ("changed", "changed stable prompt identity"),

@@ -73,10 +73,13 @@ class ScanWindow:
         self.warmup_history = []
         self.warmup_unpaired = []
 
+    def warmup_satisfied(self, population=None):
+        return self.warmup_rotations >= self.options["warmup_steps"]
+
     def ready(self, now, *, population):
         if (
             self.start_ns is None
-            and self.warmup_rotations >= self.options["warmup_steps"]
+            and self.warmup_satisfied(population)
             and self.pending is None
             and (not self.warmup_history or self.warmup_history[-1]["end_ns"] <= now)
             and full_population(population, self.batch, self.grouped)

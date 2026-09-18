@@ -13,15 +13,19 @@ import time
 from collections import defaultdict
 from pathlib import Path
 
+from specrhythm.io_context import IO_CONTEXT as IO_CONTEXT
+from specrhythm.io_context import file_context
+from specrhythm.phase4.resident_setup import ADMISSION_EVENT_SCHEMA
 from specrhythm.phase4.transport import canonical_json_bytes, payload_sha256
 from specrhythm.serving.common import read_json, require
 from specrhythm.serving.s2_pool import publish
 
-MODES = ("original-live", "buffered-live")
+MODES = ("original-live", "buffered-live", "deferred-window")
 MAX_RECORDS = 256
 MAX_BYTES = 1024 * 1024
 # Audited single-process writers. read-your-writes flushes preserve startup readers.
-# Admission/initial-proposal/timing records are deliberately left synchronous too.
+# Initial-proposal/timing records remain synchronous. Resident admission is an
+# after-schedule audit, never the in-memory admission predicate or control packet.
 POST_RUN_LOGS = frozenset(
     {
         "target-diagnostics.jsonl",
@@ -34,6 +38,7 @@ POST_RUN_LOGS = frozenset(
         "proposal-lifecycle-events.jsonl",
         "draft-work-events.jsonl",
         "draft-transport.jsonl",
+        "admission-events.jsonl",
     }
 )
 _CURRENT = None
@@ -63,6 +68,7 @@ class DiagnosticLogs:
         self.blocking_ns = self.flush_ns = 0
         self.streams = defaultdict(lambda: {"produced": 0, "written": 0})
         self.hashes = {}
+        self.native_streams = set()
         self.flush_reasons = defaultdict(int)
         self.secondary_errors = []
         self.error = None
@@ -98,6 +104,13 @@ class DiagnosticLogs:
             "pid": self.pid,
             "role": self.role,
             "observation": self.mode,
+            "resident_admission_policy": {
+                "version": "serial-resident-audit-buffer.v1",
+                "schema": ADMISSION_EVENT_SCHEMA,
+                "consumer": "serial",
+                "persistence": "bounded-batches" if self.mode == "buffered-live" else "per-record",
+                "other_records": "native; flush earlier same-file records before append",
+            },
             "max_buffer_records": self.max_records,
             "max_buffer_bytes": self.max_bytes,
             "produced_records": self.produced,
@@ -115,8 +128,11 @@ class DiagnosticLogs:
                 k: {
                     **v,
                     "written_bytes_sha256": self.hashes[k].hexdigest()
-                    if k in self.hashes
+                    if k in self.hashes and k not in self.native_streams
                     else None,
+                    "digest_scope": (
+                        "native framing; stream digest not collected"
+                        if k in self.native_streams else "buffered bytes after install"),
                 }
                 for k, v in self.streams.items()
             },
@@ -135,8 +151,15 @@ class DiagnosticLogs:
             "background_writer": False,
         }
 
-    def eligible(self, path):
-        return path.parent == self.directory and path.name in POST_RUN_LOGS
+    def eligible(self, path, value=None):
+        if path.parent != self.directory or path.name not in POST_RUN_LOGS:
+            return False
+        # None is a read-your-writes query. Only this audited producer schema is
+        # batched; similarly named control/ownership records stay synchronous.
+        return path.name != "admission-events.jsonl" or value is None or (
+            value.get("schema_version") == ADMISSION_EVENT_SCHEMA
+            and value.get("consumer") == "serial"
+        )
 
     def append(self, log, value, native):
         start = time.monotonic_ns()
@@ -146,22 +169,32 @@ class DiagnosticLogs:
                     not self.closed and self.error is None,
                     "diagnostic logger already finalized or failed",
                 )
-                key = log.path.name if self.eligible(log.path) else "unbuffered-protocol-or-other"
+                key = (log.path.name if log.path.parent == self.directory
+                       else "outside-point-directory")
                 self.produced += 1
                 self.streams[key]["produced"] += 1
-                if self.mode == "original-live" or not self.eligible(log.path):
-                    native(log, value)  # Preserve the real per-record write/flush/fsync.
+                if self.mode == "original-live" or not self.eligible(log.path, value):
+                    if any(path == log.path for path, _ in self.pending):
+                        self._flush("unbuffered-same-file")
+                    with file_context(log.path):
+                        native(log, value)  # Preserve per-record write/flush/fsync.
+                    self.native_streams.add(key)
                     self.written += 1
                     self.streams[key]["written"] += 1
                     self.fsyncs += 1
                     return
-                payload = dict(value)
-                require(
-                    "record_sha256" not in payload,
-                    "record_sha256 is reserved for checkpoint framing",
-                )
-                payload["record_sha256"] = payload_sha256(payload)
-                line = canonical_json_bytes(payload) + b"\n"
+                from specrhythm.phase4.admission_record import PreparedAdmission
+
+                if type(value) is PreparedAdmission:
+                    line = value.line
+                else:
+                    payload = dict(value)
+                    require(
+                        "record_sha256" not in payload,
+                        "record_sha256 is reserved for checkpoint framing",
+                    )
+                    payload["record_sha256"] = payload_sha256(payload)
+                    line = canonical_json_bytes(payload) + b"\n"
                 if self.pending and (
                     len(self.pending) >= self.max_records
                     or self.pending_bytes + len(line) > self.max_bytes
@@ -195,10 +228,11 @@ class DiagnosticLogs:
                     handles[path] = path.open("ab")
                 handle = handles[path]
                 require(handle.write(line) == len(line), "short diagnostic log write")
-            for handle in handles.values():
+            for path, handle in handles.items():
                 self._budget()
                 handle.flush()
-                self.fsync(handle.fileno())
+                with file_context(path, write_kind="buffered_checkpoint_jsonl"):
+                    self.fsync(handle.fileno())
                 self.fsyncs += 1
                 self._budget()
             for handle in handles.values():
@@ -207,7 +241,8 @@ class DiagnosticLogs:
             for path, line in rows:
                 self.written += 1
                 self.streams[path.name]["written"] += 1
-                self.hashes.setdefault(path.name, hashlib.sha256()).update(line)
+                if path.name not in self.native_streams:
+                    self.hashes.setdefault(path.name, hashlib.sha256()).update(line)
             self.flushes += 1
         except BaseException as error:
             failure = error
@@ -288,7 +323,12 @@ def current(role=None):
     if not os.environ.get("SR_FIXED_POINT"):
         return None
     if _CURRENT is None or _CURRENT.pid != os.getpid():
-        _CURRENT = DiagnosticLogs(
+        factory = DiagnosticLogs
+        if os.environ.get("SR_FIXED_OBSERVATION") == "deferred-window":
+            from specrhythm.serving.deferred_logging import DeferredLogs
+
+            factory = DeferredLogs
+        _CURRENT = factory(
             Path(os.environ["SR_FIXED_POINT"]).parent,
             os.environ.get("SR_FIXED_OBSERVATION", "original-live"),
             role or "unknown",
@@ -296,11 +336,16 @@ def current(role=None):
     if role and _CURRENT.role != role:
         _CURRENT.role = role
         _CURRENT._publish("RUNNING")
+    if _CURRENT.mode == "deferred-window":
+        from specrhythm.diagnostic_report import install
+
+        install(_CURRENT.defer_report)
     return _CURRENT
 
 
 def buffered():
-    return os.environ.get("SR_FIXED_OBSERVATION", "original-live") == "buffered-live"
+    return os.environ.get("SR_FIXED_OBSERVATION", "original-live") in (
+        "buffered-live", "deferred-window")
 
 
 def finish_current(role=None):
@@ -354,11 +399,12 @@ def qualify(directory, observation):
     result = {
         "observation": observation,
         "receipts": receipts,
-        "finalization_required": observation == "buffered-live",
+        "finalization_required": observation != "original-live",
     }
     if observation == "original-live":
         return result  # Old immutable artifacts predate receipts; native per-record fsync.
-    require(observation == "buffered-live", "unknown diagnostic log configuration")
+    require(observation in ("buffered-live", "deferred-window"),
+            "unknown diagnostic log configuration")
     require(
         sorted(r["role"] for r in receipts)
         == ["coordinator", "draft", "target-rank-0", "target-rank-1"],
@@ -389,6 +435,33 @@ def qualify(directory, observation):
             artifact=str(directory / f"fixed-logging-{row['pid']}.json"),
             actual=row,
         )
+    if observation == "deferred-window":
+        from specrhythm.phase4.manifest import sha256_file
+
+        for receipt in receipts:
+            require(set(receipt["published_files"]) == set(receipt["deferred_streams"]),
+                    "deferred stream publication receipt missing")
+            for name, raw in receipt["published_files"].items():
+                require((directory / name).stat().st_size == raw["bytes"]
+                        and sha256_file(directory / name) == raw["sha256"],
+                        "deferred stream checksum differs", artifact=name)
+            require(receipt["deferred_report_slots"] == len(receipt["reports"]),
+                    "deferred report producer lacks final receipt")
+            if receipt["deferred_report_requests"]:
+                require(set(receipt["reports"]) == {"plugin-report.json"},
+                        "deferred plugin report missing")
+            for name, stream in receipt["streams"].items():
+                digest = stream["written_bytes_sha256"]
+                if digest is not None:
+                    require(sha256_file(directory / name) == digest,
+                            "deferred log physical checksum differs", artifact=name)
+            for name, report in receipt["reports"].items():
+                require(report["status"] == "COMPLETE"
+                        and report["deadline_ns"] == drain["deadline_ns"]
+                        and report["end_ns"] <= drain["deadline_ns"]
+                        and (directory / name).stat().st_size == report["bytes"]
+                        and sha256_file(directory / name) == report["sha256"],
+                        "deferred report incomplete", artifact=name)
     return result
 
 
@@ -398,16 +471,22 @@ def install_checkpoint_logging(role, capture, timers):
 
     logs = current(role)
     append, read = CheckpointJsonl.append, CheckpointJsonl.read
+    if getattr(append, "_fixed_checkpoint_logging", False):
+        return logs
 
     def retain(log, row):
-        with timers.span("checkpoint_log_write"):
+        with timers.span("checkpoint_log_write", log_name=log.path.name):
             current().append(log, row, append)
         capture(row)  # Contract validation is immediate, not deferred with persistence.
 
     def read_visible(log):
-        current().before_read(log)
+        logs = current()
+        if logs.mode == "deferred-window":
+            return logs.read_snapshot(log, read)
+        logs.before_read(log)
         return read(log)
 
+    retain._fixed_checkpoint_logging = True
     CheckpointJsonl.append, CheckpointJsonl.read = retain, read_visible
     return logs
 

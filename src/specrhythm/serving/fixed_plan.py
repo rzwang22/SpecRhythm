@@ -22,6 +22,9 @@ from specrhythm.serving.s1_workload import load_execution, write_once
 from specrhythm.serving.s2_plan import sealed
 
 MODES = ("target", "serial", "serial-split", "pingpong")
+EXPLICIT_MODES = (*MODES, "serial-eager", "serial-prepost3", "serial-eager-prepost3",
+                          "pingpong-prepost3", "pingpong-eager-prepost3",
+                          "serial-k3", "serial-eager-k3", "pingpong-k3", "pingpong-eager-k3")
 SCENARIO = "prefill-complete, all requests ready; fixed-concurrency finite supply"
 POLICY = {
     f"cross_run_{key}_equality": "NOT_REQUIRED" for key in ("token", "length", "EOS", "round")
@@ -38,6 +41,11 @@ def settings(
     drain_timeout=60,
     observation="original-live",
     identity_matching="linear",
+    draft_audit="full",
+    draft_dispatch=None,
+    target_diagnostics=None,
+    target_dispatch=None,
+    target_cpu=None,
 ):
     for name, value, minimum in (
         ("warmup_steps", warmup_steps, 0),
@@ -61,7 +69,18 @@ def settings(
     from specrhythm.serving.fixed_identity import MODES as IDENTITY_MODES
 
     require(identity_matching in IDENTITY_MODES, "unknown fixed identity matching mode")
+    require(draft_audit in ("full", "runtime"), "unknown Draft audit mode")
+    require(draft_dispatch in (None, "legacy", "unified"), "unknown Draft dispatch")
+    require(target_diagnostics in (None, "full", "lean"), "unknown Target diagnostics")
+    require(target_cpu in (None, "reference", "block-sets"), "unknown Target CPU policy")
+    require(target_dispatch in (None, "reference", "encode-once", "dual-batch", "shared-command"),
+            "unknown Target dispatch")
     return dict(
+        **({"target_cpu": target_cpu} if target_cpu is not None else {}),
+        **({"target_dispatch": target_dispatch} if target_dispatch is not None else {}),
+        **({"target_diagnostics": target_diagnostics} if target_diagnostics is not None else {}),
+        **({"draft_dispatch": draft_dispatch} if draft_dispatch is not None else {}),
+        draft_audit=draft_audit,
         warmup_steps=warmup_steps,
         samples=samples,
         repeats=repeats,
@@ -74,29 +93,115 @@ def settings(
 
 
 def capacity_metadata(mode, resident_count=None, *, active_limit=64, resident_requirement=100,
-                      target_sequence_limit=128):
-    require(mode in MODES, "unknown fixed diagnostic mode", actual=mode)
-    grouped = mode in ("serial-split", "pingpong")
+                      target_sequence_limit=128, k3_configuration="k3-b16-v1"):
+    from specrhythm.serving.k3 import configuration_fields, geometry
+    from specrhythm.serving.k3_capacity import reservation
+
+    require(mode in EXPLICIT_MODES, "unknown fixed diagnostic mode", actual=mode)
+    grouped = mode in ("serial-split", "pingpong", "pingpong-prepost3", "pingpong-eager-prepost3",
+                          "serial-k3", "serial-eager-k3", "pingpong-k3", "pingpong-eager-k3")
+    serial_k3 = mode in ("serial-k3", "serial-eager-k3")
     return {
         "resident_request_requirement": resident_requirement,
         "resident_request_count": resident_count,
         "resident_count_semantics": "actual after prefill; null before state preparation",
         "active_request_limit": active_limit,
-        "cohort_count": 2 if grouped else 0,
-        "per_cohort_capacity": active_limit // 2 if grouped else None,
-        "max_requests_per_target_forward": active_limit // 2 if grouped else active_limit,
+        "cohort_count": 1 if serial_k3 else 2 if grouped else 0,
+        "per_cohort_capacity": (active_limit if serial_k3 else
+                                active_limit // 2 if grouped else None),
+        "max_requests_per_target_forward": active_limit // 2
+        if grouped and not serial_k3
+        else active_limit,
         "target_sequence_limit": target_sequence_limit,
         "target_query_token_limit": 4096,
         "draft_sequence_limit": 128,
         "draft_query_token_limit": 4096,
         "max_model_len": 4096,
-        "proposal_budget": 4,
+        "proposal_budget": 3 if mode.endswith("-k3") else 4,
+        **(
+            {
+                "eager_candidate_length": 4,
+                "predicted_bridge_tokens": 1,
+                "draft_speculative_capacity_tokens": 9,
+                "draft_extra_speculative_tokens": 5,
+            }
+            if mode == "serial-eager"
+            else {}
+        ),
+        **(
+            {
+                "prepost_protocol": "specrhythm.serial-prepost3.v1",
+                "draft_speculative_capacity_tokens": 7
+                if mode in ("serial-eager-prepost3", "pingpong-eager-prepost3")
+                else 4,
+                "eager_lookahead_steps": 3,
+                "post_verify_batch_steps": 1,
+            }
+            if mode
+            in (
+                "serial-prepost3",
+                "serial-eager-prepost3",
+                "pingpong-prepost3",
+                "pingpong-eager-prepost3",
+                "serial-k3",
+                "serial-eager-k3",
+                "pingpong-k3",
+                "pingpong-eager-k3",
+            )
+            else {}
+        ),
+        **(
+            {
+                "pingpong_protocol": "specrhythm.pingpong-prepost3.v1",
+                "admission_policy": "legal promoted priority, stable home fill, atomic claim",
+                "warmup_rotation": "two actual admissions; request IDs may repeat",
+                "readiness_policy": "independent parent settlement, no whole-cohort idle gate",
+                "home_cohort_immutable": True,
+            }
+            if mode
+            in (
+                "pingpong-prepost3",
+                "pingpong-eager-prepost3",
+                "serial-k3",
+                "serial-eager-k3",
+                "pingpong-k3",
+                "pingpong-eager-k3",
+            )
+            else {}
+        ),
+        **(
+            {
+                "prepost_protocol": "specrhythm.uniform-k3.v1",
+                "pingpong_protocol": "specrhythm.uniform-k3.v1",
+                "candidate_length": 3,
+                "serial_extension_steps": 2,
+                "execution_geometry": geometry(mode, k3_configuration),
+                **configuration_fields(k3_configuration),
+                **({"warmup_rotation": geometry(mode, k3_configuration)["warmup_unit"]}
+                   if k3_configuration != "k3-b16-v1" else {}),
+                "draft_speculative_capacity_tokens": reservation(mode, "draft")[
+                    "reserved_speculative_positions"
+                ],
+                "speculative_reservations": {
+                    role: reservation(mode, role) for role in ("target", "draft")
+                },
+                "eager_lookahead_steps": (
+                    3 if mode in ("serial-eager-k3", "pingpong-eager-k3") else 0),
+                "post_verify_batch_steps": (
+                    "0 for complete reuse; seed + up to 2 recovery extensions"),
+                "readiness_policy": "K3 complete; owner claim; informational status snapshot",
+                "admission_policy": "stable home; fallback other home; same with eager disabled",
+            }
+            if mode.endswith("-k3")
+            else {}
+        ),
         "actual_KV_limits": "model-loaded per-rank actual-capacity.json; never guessed",
     }
 
 
 def point(mode, *, kind="continuous", batch=None, half="A", repeat=0, warmup=False):
-    require(mode in MODES and kind in ("continuous", "initial-state"), "invalid diagnostic point")
+    require(mode in EXPLICIT_MODES and kind in ("continuous", "initial-state"),
+            "invalid diagnostic point")
     require(half in ("A", "B"), "invalid shape half")
     if kind == "initial-state":
         require(batch in (32, 64), "initial-state B must be 32 or 64")
@@ -153,7 +258,7 @@ def build_manifest(execution, ids, workload_sha, options):
                 "schema_version": "specrhythm.fixed-diagnostic.v1",
                 "scenario": SCENARIO,
                 "options": options,
-                "capacity": {m: capacity_metadata(m) for m in MODES},
+                "capacity": {m: capacity_metadata(m) for m in EXPLICIT_MODES},
                 "initial_request_ids": ids[:64],
                 "cohorts": {"A": ids[:32], "B": ids[32:64]},
                 "replacement_request_ids": ids[64:],

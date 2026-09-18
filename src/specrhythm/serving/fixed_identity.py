@@ -7,7 +7,7 @@ import threading
 import time
 from types import MappingProxyType
 
-from specrhythm.phase4.request_identity import FrozenPromptIdentityMap
+from specrhythm.phase4.request_identity import FrozenPromptIdentityMap, _NormalizedTokenRow
 from specrhythm.serving.common import require
 
 MODES = ("linear", "bound-prefix")
@@ -59,7 +59,9 @@ class BoundPromptIdentityMap(FrozenPromptIdentityMap):
 
     def _match_for_binding(self, internal_id, physical_token_prefix):
         c = self._counts
-        tokens = tuple(int(item) for item in physical_token_prefix)
+        prepared = type(physical_token_prefix) is _NormalizedTokenRow
+        tokens = (physical_token_prefix.tokens if prepared
+                  else tuple(int(item) for item in physical_token_prefix))
         c["linear_candidate_comparisons"] += len(self.stable_prompts)
         previous = self.internal_to_stable.get(internal_id)
         prompt = self.stable_prompts.get(previous)
@@ -70,7 +72,9 @@ class BoundPromptIdentityMap(FrozenPromptIdentityMap):
                 return previous
         c["full_scans"] += 1
         c["candidate_comparisons"] += len(self.stable_prompts)
-        return self.match(tokens)
+        # New/unbound/non-prefix-free K3 rows still scan all frozen prompts,
+        # reusing only normalization from THIS call. Legacy callers are unchanged.
+        return self._match_normalized_tokens(tokens) if prepared else self.match(tokens)
 
     def report(self):
         with self._lock:

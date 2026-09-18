@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import os
 import time
 
+from specrhythm.serving.fixed_audit import FixedAuditMixin
 from specrhythm.serving.fixed_observe import TIMERS, DeviceTimeline
 from specrhythm.serving.fixed_settle import (
     DiagnosticSerialMachine as diagnostic_serial_machine,
@@ -16,6 +18,13 @@ from specrhythm.serving.s2_draft import S2DraftBackend
 
 def serve(config, directory, socket_path, mode, *, backend_class=None):
     """Only the fixed diagnostic service opts into the explicit stop protocol."""
+    if mode in ("serial-eager", "serial-prepost3", "serial-eager-prepost3",
+                          "pingpong-prepost3", "pingpong-eager-prepost3",
+                          "serial-k3", "serial-eager-k3", "pingpong-k3", "pingpong-eager-k3"):
+        from specrhythm.serving.eager_draft import serve as serve_eager
+
+        return serve_eager(config, directory, socket_path, backend_class=backend_class,
+                           **({"prepost_mode": mode} if mode != "serial-eager" else {}))
     from specrhythm.phase4.dual_service import DualDraftUnixServer
     from specrhythm.phase4.transport import CheckpointJsonl
     from specrhythm.serving.fixed_artifacts import record_error
@@ -30,6 +39,10 @@ def serve(config, directory, socket_path, mode, *, backend_class=None):
         backend = (backend_class or FixedDraftBackend)(config)
         write_once(directory / "draft-startup.json", backend.provenance)
         cls = DiagnosticDualMachine if mode == "pingpong" else diagnostic_serial_machine
+        if mode == "target" and os.environ.get("SR_K3_MANAGED_LOCAL") == "1":
+            from specrhythm.serving.fixed_settle import PublishedDiagnosticSerialMachine
+
+            cls = PublishedDiagnosticSerialMachine
         return cls(backend, candidate_budget=4, report_path=report)
 
     if mode == "pingpong":
@@ -58,7 +71,10 @@ def serve(config, directory, socket_path, mode, *, backend_class=None):
         machine = factory()
         failure = None
         try:
-            DiagnosticSerialServer(socket_path, machine, event_log=events).serve(ready)
+            server = DiagnosticSerialServer(socket_path, machine, event_log=events)
+            server.serve(ready)
+            if server.drain_failure is not None:
+                raise server.drain_failure
         except BaseException as error:
             failure = error
             record_error(directory, error, "draft_server")
@@ -81,7 +97,7 @@ def serve(config, directory, socket_path, mode, *, backend_class=None):
     finish_current("draft")
 
 
-class FixedDraftBackend(S2DraftBackend):
+class FixedDraftBackend(FixedAuditMixin, S2DraftBackend):
     def __init__(self, config, *, worker=None):
         super().__init__(config, worker=worker)
         self.fixed_proposals = []
