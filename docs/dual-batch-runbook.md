@@ -1,5 +1,8 @@
 # Ordinary K3 double-batch control path
 
+Execution commit: `e3726521df751514877b21f819fe17d508fd3741`. The fixed launcher in `scripts/run_dual_batch_pinned.sh`
+checks and runs exactly this revision.
+
 The opt-in `target_dispatch=dual-batch` supports **ordinary `pingpong-k3` only**.
 The existing `reference` and `encode-once` paths, Serial gates and eager modes remain
 available. No new default, Target executor, GPU kernel or admission policy is enabled.
@@ -67,3 +70,21 @@ small reference/new output comparison does not resolve those differences.
 
 No GPU result is asserted at delivery. GPU capacity/correctness/cleanup, overlap
 and performance remain **PENDING** until the operator returns this one archive.
+
+## Foreground invocation
+
+From the delivered fixed-entry revision of this repository, run:
+
+```bash
+if bash scripts/run_dual_batch_pinned.sh; then
+  printf 'Return the single UPLOAD ONLY archive.\n'
+else
+  rc=$?
+  printf 'Stopped (rc=%s); later windows did not run. Terminal stays open.\n' "$rc"
+fi
+```
+
+The final delivery message provides the immutable entry SHA and the complete
+`git show <entry-SHA>:scripts/run_dual_batch_pinned.sh` extraction command, so an
+older local worktree's script cannot accidentally be used. The pinned script
+fetches, verifies the execution commit above and creates the new worktree itself.

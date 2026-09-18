@@ -70,7 +70,13 @@ A byte-identical snapshot in `/tmp` avoids that filesystem condition. The new Py
 3.12 venv initially lacked an editable package installation, causing subprocess
 module lookup failures; it was installed before final validation. These are recorded
 separately from code assertions; neither assertions nor timeout budgets were widened.
-Final test counts and CI state are recorded in the project status/delivery.
+The first completed full run was 3136 passed / 4 environment failures / 7 skipped;
+its failures were subprocess module lookup and a missing shell `python`. After
+editable installation and setting the venv PATH, final full Python3.12 validation
+was **3142 passed / 7 skipped**. Python3.9 production/protocol/report/deadline
+regressions: **169 passed / 4 ordinary-only skips**. All 7 new entry regressions
+and 6 command regressions passed. Ruff, compileall, Python3.9 grammar, all entry
+Bash syntax and diff checks passed. Actual CI is reported separately at delivery.
 
 GPU unavailable on this Mac. The configured A100 SSH endpoint refused connection;
 no GPU or remote environment changes were performed. CPU tests prove dependency
