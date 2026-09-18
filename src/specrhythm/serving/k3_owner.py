@@ -19,6 +19,14 @@ class K3Owner(PingPrePostOwner):
         return super().call(operation, payload)
 
     def _dispatch(self, operation, payload):
+        if operation == "pp_admit_command":
+            from specrhythm.serving.common import require
+            from specrhythm.serving.dual_batch import pack
+
+            require(not self.machine.geometry["eager"]
+                    and not self.machine.geometry["serial_idle_gate"],
+                    "dual-batch requires ordinary pingpong-k3")
+            return pack(self.machine.admit(payload))
         if operation == "k3_idle":
             return dict(idle=not self.machine.has_work())
         return super()._dispatch(operation, payload)

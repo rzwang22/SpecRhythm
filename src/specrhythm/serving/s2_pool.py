@@ -11,7 +11,11 @@ from specrhythm.serving.common import read_json, require
 
 
 def control():
-    return read_json(Path(os.environ["SR_S2_CONTROL"]))
+    from specrhythm.serving.dual_batch import current_control, decode_control
+
+    current = current_control()
+    return current if current is not None else decode_control(
+        read_json(Path(os.environ["SR_S2_CONTROL"])))
 
 
 def publish(path, value):
@@ -24,8 +28,13 @@ def publish(path, value):
     # A single coordinator publishes this path. No snapshot caching: every call
     # encodes its current value and publishes at exactly the original boundary.
     selected = policy() if str(path) == os.environ.get("SR_S2_CONTROL") else "reference"
+    if selected == "dual-batch":
+        from specrhythm.serving.dual_batch import encode_control, validate_mode
+
+        validate_mode(os.environ.get("SR_S2_MODE"))
+        value = encode_control(value)
     with TRACE.span("control_snapshot_publish", file_name=path.name, encoding_policy=selected):
-        if selected == "encode-once":
+        if selected in ("encode-once", "dual-batch"):
             with TRACE.span("control_snapshot_encode", file_name=path.name):
                 encoded = json.dumps(value, allow_nan=False)
             with TRACE.span("control_snapshot_write", file_name=path.name,

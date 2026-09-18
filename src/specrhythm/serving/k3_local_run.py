@@ -149,11 +149,12 @@ def deliver(local, persistent, expected):
 
 
 def run(repo, commit, *, local_base, persistent, tag, minimum_free_bytes=8 * 1024**3,
-        configuration="k3-b16-v1", validation_profile=None):
+        configuration="k3-b16-v1", validation_profile=None, dual_batch=False):
     from specrhythm.serving.k3 import geometry
     from specrhythm.serving.k3_validation import fields
 
     policy = fields(validation_profile, configuration)
+    modes = () if dual_batch else MODES
     batch = geometry("serial-k3", configuration)["active_limit"]
     root, persistent, receipt = prepare_local(
         local_base, persistent, tag, minimum_free_bytes=minimum_free_bytes
@@ -174,7 +175,8 @@ def run(repo, commit, *, local_base, persistent, tag, minimum_free_bytes=8 * 102
     print(json.dumps(receipt), flush=True)
     with (root / "runner.log").open("w") as log:
         process = subprocess.Popen(
-            ["bash", str(repo / f"scripts/run_k3_b{batch}.sh"), commit],
+            ["bash", str(repo / ("scripts/run_dual_batch.sh" if dual_batch else
+                                f"scripts/run_k3_b{batch}.sh")), commit],
             env=env,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -225,7 +227,7 @@ def run(repo, commit, *, local_base, persistent, tag, minimum_free_bytes=8 * 102
             archive,
             first_code=first["first_exit_code"],
             stage=first["stage"],
-            modes=MODES,
+            modes=modes,
         )
         export_code = result["export_validation_exit_code"]
         verified = validate_archive(archive)
@@ -258,7 +260,7 @@ def run(repo, commit, *, local_base, persistent, tag, minimum_free_bytes=8 * 102
                     fallback,
                     first_code=first["first_exit_code"],
                     stage=first["stage"],
-                    modes=MODES,
+                    modes=modes,
                 )
                 fallback_verified = validate_archive(fallback)
                 os.link(archive, archive.with_suffix(".before-delivery"))
@@ -290,6 +292,7 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--repo", required=True, type=Path)
     p.add_argument("--commit", required=True)
+    p.add_argument("--dual-batch", action="store_true")
     from specrhythm.serving.k3 import B16, CONFIGURATIONS
 
     p.add_argument("--k3-configuration", choices=CONFIGURATIONS, default=B16)
@@ -301,7 +304,7 @@ def main():
         code = run(
             args.repo.resolve(),
             args.commit, configuration=args.k3_configuration,
-            validation_profile=args.validation_profile,
+            validation_profile=args.validation_profile, dual_batch=args.dual_batch,
             local_base=Path(os.environ.get("SR_K3_LOCAL_BASE", "/tmp/specrhythm-runs")),
             persistent=Path(
                 os.environ.get(

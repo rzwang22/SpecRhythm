@@ -186,6 +186,12 @@ def execution_point(point, probe):
 def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5, probe=False):
     point = execution_point(point, probe)
     mode, runtime_mode = point["mode"], point["runtime_mode"]
+    from specrhythm.serving.dual_batch import CommandPublisher, validate_mode
+
+    dual_batch = options.get("target_dispatch") == "dual-batch"
+    if dual_batch:
+        validate_mode(mode)
+    command_publisher = CommandPublisher(directory / "s2-control.json") if dual_batch else None
     from specrhythm.serving.k3 import configuration_fields, configuration_of
     from specrhythm.serving.k3_validation import matching, not_run
 
@@ -302,6 +308,9 @@ def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5, 
                 ),
                 "population": population(clock, inflight),
             }
+        if command_publisher is not None:
+            command_publisher.publish(current)
+            return
         with TRACE.span("control_snapshot_compare"):
             changed = current != last
         if changed:
@@ -451,7 +460,12 @@ def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5, 
                 break
             try:
                 with TIMERS.span("target_step"):
-                    outputs = engine.step()
+                    if dual_batch:
+                        from specrhythm.serving.dual_batch import run_target
+
+                        outputs = run_target(engine)
+                    else:
+                        outputs = engine.step()
             except Exception as error:
                 if scan and isinstance(error, ScanBatchWait):
                     require(len(scheduler.s2_steps) == before,

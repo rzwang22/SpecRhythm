@@ -369,7 +369,7 @@ def main(argv=None):
                    help="explicit one-point diagnostic: waive only the B16 order prerequisite")
     p.add_argument("--draft-audit", choices=("full", "runtime"), default="full")
     p.add_argument("--target-diagnostics", choices=("full", "lean"))
-    p.add_argument("--target-dispatch", choices=("reference", "encode-once"))
+    p.add_argument("--target-dispatch", choices=("reference", "encode-once", "dual-batch"))
     p.add_argument("--draft-dispatch", choices=("legacy", "unified"))
     p.add_argument("--observation", choices=("buffered-live", "deferred-window"),
                    default="buffered-live")

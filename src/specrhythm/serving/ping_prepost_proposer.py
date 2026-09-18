@@ -5,6 +5,7 @@ import time
 
 from specrhythm.phase4.serial import Proposal, token_prefix_hash
 from specrhythm.serving.common import require
+from specrhythm.serving.dual_batch import control_transaction, enabled
 from specrhythm.serving.ping_prepost import PROTOCOL
 from specrhythm.serving.prepost_proposer import PrePostProposer
 from specrhythm.serving.s2_pool import control
@@ -25,6 +26,12 @@ class PingPrePostProposer(PrePostProposer):
         super().__init__(*args, **kwargs)
         self.client = FeedbackClient(self.client)
 
+    def _requests_next_proposal(self):
+        # pp_feedback consumes synchronizations only. It schedules recovery on
+        # the existing owner; it never uses Serial's synchronous proposal rows.
+        return not enabled()
+
+    @control_transaction
     def on_target_verify_start(self, *, request_ids, scheduled_spec_token_ids):
         if self.tp_rank == 0:
             packet = control()

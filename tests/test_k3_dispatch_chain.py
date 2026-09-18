@@ -45,19 +45,21 @@ fixed_schedulers, s2_schedulers, target_pool = _fixed, _s2, _pool
 hardware, observed_startup, phase4_config, startup = _hardware, _observed, _config, _startup
 
 
-@pytest.mark.parametrize("encoding", ["reference", "encode-once"])
+@pytest.mark.parametrize("encoding", ["reference", "encode-once", "dual-batch"])
 @pytest.mark.parametrize("diagnostics", ["full", "lean"])
 @pytest.mark.parametrize("eager", [False, True])
 @pytest.mark.parametrize("target_first", [False, True])
 def test_actual_claim_schedule_verify_enters_before_other_recovery_finishes(
     observed_startup, target_pool, monkeypatch, eager, target_first, diagnostics, encoding
 ):
+    if eager and encoding == "dual-batch":
+        pytest.skip("ordinary-only execution path; eager reference remains tested")
     h = observed_startup
-    monkeypatch.setenv("SR_K3_TARGET_DISPATCH", encoding)
     monkeypatch.setenv("SR_FIXED_TARGET_DIAGNOSTICS", diagnostics)
     monkeypatch.setenv("SR_FIXED_POINT", str(h.directory / "cpu-point.json"))
     monkeypatch.setitem(s2_runtime.CLASSES, "serial", s2_runtime.CLASSES["pingpong-eager-k3"])
     h.run("serial")  # Real proposer factory; only fixture GPU/transport replaced.
+    monkeypatch.setenv("SR_K3_TARGET_DISPATCH", encoding)
     s, packet, path = target_pool
     monkeypatch.setenv("SR_S2_CONTROL", str(path))
     monkeypatch.setenv("SR_S2_MODE", "pingpong-eager-k3" if eager else "pingpong-k3")
@@ -136,7 +138,7 @@ def test_actual_claim_schedule_verify_enters_before_other_recovery_finishes(
 
     def enqueue(command, **kwargs):
         put(command, **kwargs)
-        if command[0] == "pp_admit" and command[1]["opportunity"] == 1:
+        if command[0] in ("pp_admit", "pp_admit_command") and command[1]["opportunity"] == 1:
             queued.set()
 
     owner.commands.put = enqueue

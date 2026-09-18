@@ -24,6 +24,7 @@ TOTAL_LIMIT = 1024 * 1024 * 1024
 FILE_COUNT = 512  # Bounded raw logs/partial files/receipts; byte budgets remain unchanged.
 LOGICAL_LIMIT = 512  # Bounded enumeration, including new raw logs and publication states.
 NAMES = {
+    "dual-batch-plan.json", "smoke-comparison.json",
     "storage-preflight.json", "delivery-status.json", "runner-outcome.json",
     "plugin-report.json", "admission-events.jsonl", "round-events.jsonl",
     "target-diagnostics.jsonl", "transport-events.jsonl",
@@ -370,6 +371,26 @@ def export(directory, output, *, first_code=0, stage="complete", modes=MODES):
     expected = ["comparison.json"] if exploration else ["joint/result.json", "comparison.json"]
     if exploration:
         expected.extend(["validation-plan.json", "k3-capacity-contract.json"])
+    if (directory / "dual-batch-plan.json").exists():
+        from specrhythm.serving.dual_batch_run import MODE, ORDER
+
+        expected.extend(["dual-batch-plan.json", "smoke-comparison.json", "runner-outcome.json"])
+        roots = [directory / kind / dispatch
+                 for kind in ("capacity", "smoke") for dispatch in ORDER[:2]]
+        for index, dispatch in enumerate(ORDER):
+            case = directory / "windows" / (str(index) + "-" + dispatch)
+            expected.extend(str((case / name).relative_to(directory)) for name in (
+                "comparison.json", "points/" + MODE + "-audit-report.json",
+                "points/" + MODE + "-evidence-status.json"))
+            roots.append(case / "points" / MODE)
+        for root in roots:
+            runs = sorted((root / "runs").glob("*/point.json"))
+            if not runs:
+                expected.append(str(root.relative_to(directory)) + "/runs/<not-started>")
+            for point in runs:
+                expected.extend(str(point.with_name(name).relative_to(directory)) for name in (
+                    "point.json", "runtime.json", "draft-backend-report.json",
+                    "light-summary.json", "process-lifecycle.json"))
     for mode in modes:
         root = directory / "points" / mode
         runs = []

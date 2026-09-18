@@ -674,6 +674,9 @@ class RemoteDraftProposer:
     def supports_mm_inputs(self) -> bool:
         return False
 
+    def _requests_next_proposal(self):
+        return True
+
     def _rank_zero_propose(
         self, request_ids: Sequence[str], num_tokens_no_spec: Any, token_ids_cpu: Any
     ) -> dict[str, Any]:
@@ -748,7 +751,7 @@ class RemoteDraftProposer:
                     )
             if terminal:
                 terminal_ids.add(stable_id)
-            else:
+            elif self._requests_next_proposal():
                 remaining = definition.maximum_new_tokens - len(generated)
                 proposal_rows.append(
                     {

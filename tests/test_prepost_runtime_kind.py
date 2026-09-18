@@ -138,9 +138,11 @@ def driven(produced, monkeypatch, tmp_path):
                     return dict(idle=True)
                 if operation == "status":
                     return dict(inflight_request_ids=[], failures={})
-                if operation == "pp_admit":
+                if operation in ("pp_admit", "pp_admit_command"):
                     n = payload["capacity"] if admission_limit is None else admission_limit
                     packet = read_json(h.directory / "s2-control.json")
+                    from specrhythm.serving.dual_batch import decode_control
+                    packet = decode_control(packet)
                     active_ids = payload["active_request_ids"]
                     if configuration == "k3-b128-v1":
                         # Simulate the real owner home preference. The historical
@@ -148,9 +150,15 @@ def driven(produced, monkeypatch, tmp_path):
                         # cannot prove coverage of all B128 warmup identities.
                         active_ids = sorted(active_ids, key=lambda r:
                             packet["requests"][r]["cohort"] != payload["normal_cohort"])
-                    return dict(claims=[dict(request_id=r,
-                                home_cohort=packet["requests"][r]["cohort"])
+                    result = dict(claims=[dict(request_id=r,
+                                home_cohort=packet["requests"][r]["cohort"],
+                                **({"proposal": {"model_provenance": {}}}
+                                   if operation == "pp_admit_command" else {}))
                                 for r in active_ids[:n]])
+                    if operation == "pp_admit_command":
+                        from specrhythm.serving.dual_batch import pack
+                        return pack(result)
+                    return result
                 if operation in ("pp_register", "pp_stop"):
                     return {}
                 if operation == "finish_request":
@@ -175,7 +183,8 @@ def driven(produced, monkeypatch, tmp_path):
 
         class Engine:
             def step(self):
-                packet = read_json(h.directory / "s2-control.json")
+                from specrhythm.serving.s2_pool import control
+                packet = control()
                 ids = [r["request_id"] for r in packet["pp_admission"]["claims"]]
                 layout, output = [], []
                 for rid in ids:

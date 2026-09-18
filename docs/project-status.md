@@ -1,5 +1,24 @@
 # SpecRhythm project status
 
+### PR #5 — ordinary double-batch control path (2026-09-18)
+
+- Continues from `2e43b8b39f889470a3d3ebd35f34ceb7b429c6c8`; existing commits,
+  eager behavior and historical results retained. Draft, no merge.
+- Explicit `target_dispatch=dual-batch`, ordinary `pingpong-k3` only. Same owner,
+  engine and K3 state machine; compact admission command, call-scoped control read,
+  no full proposal-tree deepcopy, no unused next-proposal construction in feedback.
+- Existing nonblocking status, physical settlement and unified batching are reused.
+  Both complete resident/KV audits, ownership, live prefix checks, once-only claims,
+  READY order and absolute drain deadline remain. No new scheduler priority/async engine.
+- Fixed comparison: same-version reference/new capacity, bounded semantic smoke,
+  then reference/new/new/reference B128 A64/B64 30-second windows. One local package,
+  verified DPC copy/fallback, unchanged full-output equivalence NOT_RUN.
+- GPU capacity/correctness/cleanup, calibrated overlap and performance PENDING.
+  Mac has no CUDA; configured A100 SSH endpoint refused connection. Do not infer
+  speedup from CPU interleaving or reduced command work. Eager integration deferred.
+- [Implementation/validation](validation/ordinary-dual-batch.md),
+  [runbook](dual-batch-runbook.md). Final CPU/CI results recorded at delivery below.
+
 
 ### PR #5 — B128 full/lean Target diagnostics (2026-09-17)
 

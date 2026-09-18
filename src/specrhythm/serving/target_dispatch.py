@@ -1,9 +1,9 @@
-"""One independent optimization of synchronous control serialization, not scheduling policy."""
+"""Explicit reference, serialization and ordinary double-batch control paths."""
 
 import os
 
 ENV = "SR_K3_TARGET_DISPATCH"
-POLICIES = ("reference", "encode-once")
+POLICIES = ("reference", "encode-once", "dual-batch")
 
 
 def policy():

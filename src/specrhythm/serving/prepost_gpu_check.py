@@ -23,7 +23,8 @@ from specrhythm.serving.s1_workload import write_once
 from specrhythm.serving.s2_plan import sealed
 
 
-def prepare(source, root, mode, *, modes=MODES, configuration="k3-b16-v1"):
+def prepare(source, root, mode, *, modes=MODES, configuration="k3-b16-v1",
+            source_configuration=None, max_output_tokens=32):
     from specrhythm.serving.k3 import configuration_fields, configuration_of, geometry
 
     fields = configuration_fields(configuration)
@@ -31,13 +32,18 @@ def prepare(source, root, mode, *, modes=MODES, configuration="k3-b16-v1"):
     require(
         mode in ("target", *modes) and not root.exists(), "new joint correctness root required"
     )
-    base = read_json(source / f"inputs/execution-B{count}.json")
+    source_configuration = source_configuration or configuration
+    source_count = geometry("serial-k3", source_configuration)["active_limit"]
+    require(type(max_output_tokens) is int and 1 <= max_output_tokens <= 32,
+            "invalid bounded correctness output budget")
+    base = read_json(source / f"inputs/execution-B{source_count}.json")
     raw = [
         json.loads(line) for line in (source / "inputs/requests.jsonl").read_text().splitlines()
     ]
     # Same frozen prompts/seeds/models, explicit bounded output fixture only here.
-    rows = [{**r, "maximum_new_tokens": min(r["maximum_new_tokens"], 32)} for r in raw[:count]]
-    require(len(rows) == count and configuration_of(base) == configuration,
+    rows = [{**r, "maximum_new_tokens": min(r["maximum_new_tokens"], max_output_tokens)}
+            for r in raw[:count]]
+    require(len(rows) == count and configuration_of(base) == source_configuration,
             "joint correctness source count/configuration mismatch")
     root.mkdir(parents=True)
     for name in ("config.json", "patch-manifest.json", "environment.json", "topology.json"):
@@ -50,6 +56,9 @@ def prepare(source, root, mode, *, modes=MODES, configuration="k3-b16-v1"):
     ids = [r["request_id"] for r in rows]
     manifest = copy.deepcopy(base)
     manifest.pop("sha256")
+    if source_configuration != configuration:
+        manifest.pop("k3_configuration", None)
+        manifest.pop("validation_profile", None)
     if configuration != "k3-b16-v1":
         from specrhythm.serving.k3_validation import STRICT
 
@@ -85,7 +94,7 @@ def prepare(source, root, mode, *, modes=MODES, configuration="k3-b16-v1"):
     manifest["prepost_correctness_fixture"] = dict(
         source_workload_sha256=base["workload_sha256"],
         request_count=count,
-        max_output_tokens=32,
+        max_output_tokens=max_output_tokens,
         complete_outputs_required=True,
         performance_result=False,
     )

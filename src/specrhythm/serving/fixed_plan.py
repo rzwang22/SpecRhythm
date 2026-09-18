@@ -71,7 +71,8 @@ def settings(
     require(draft_audit in ("full", "runtime"), "unknown Draft audit mode")
     require(draft_dispatch in (None, "legacy", "unified"), "unknown Draft dispatch")
     require(target_diagnostics in (None, "full", "lean"), "unknown Target diagnostics")
-    require(target_dispatch in (None, "reference", "encode-once"), "unknown Target dispatch")
+    require(target_dispatch in (None, "reference", "encode-once", "dual-batch"),
+            "unknown Target dispatch")
     return dict(
         **({"target_dispatch": target_dispatch} if target_dispatch is not None else {}),
         **({"target_diagnostics": target_diagnostics} if target_diagnostics is not None else {}),

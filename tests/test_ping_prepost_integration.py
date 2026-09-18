@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 from types import SimpleNamespace as NS
 
+import pytest
 from test_ping_prepost import Backend
 from test_prepost_target import make_runner
 from test_prepost_target import runner_class as _runner_class
@@ -36,8 +37,9 @@ hardware, startup, phase4_config = _hardware, _startup, _config
 observed_startup, runner_class = _observed_startup, _runner_class
 
 
+@pytest.mark.parametrize("dual", [False, True])
 def test_stock_bookkeeping_ping_adapter_controller_owner_mixed_batch_roundtrip(
-    observed_startup, runner_class, monkeypatch
+    observed_startup, runner_class, monkeypatch, dual
 ):
     from test_prepost_target import Array, np
 
@@ -46,17 +48,30 @@ def test_stock_bookkeeping_ping_adapter_controller_owner_mixed_batch_roundtrip(
         s2_runtime.CLASSES, "serial", s2_runtime.CLASSES["pingpong-eager-prepost3"]
     )
     h.run("serial")  # Real config/proposer construction with fixture hardware.
+    if dual:
+        monkeypatch.setenv("SR_K3_TARGET_DISPATCH", "dual-batch")
+        monkeypatch.setenv("SR_S2_MODE", "pingpong-k3")
     proposer = h.workers[0].model_runner.drafter
     definitions = list(proposer.definitions.values())[:2]
     ids = [d.request_id for d in definitions]
-    owner = PingPrePostOwner(
-        lambda: PingPrePostMachine(
-            Backend(NS(max_model_len=4096), worker=OwnerWorker()), request_ids=ids
-        ),
+    if dual:
+        from test_k3 import Backend as SelectedBackend
+
+        from specrhythm.serving.k3_machine import K3Machine as Machine
+        from specrhythm.serving.k3_owner import K3Owner as Owner
+    else:
+        SelectedBackend, Machine, Owner = Backend, PingPrePostMachine, PingPrePostOwner
+    owner = Owner(
+        lambda: Machine(
+            SelectedBackend(NS(max_model_len=4096), worker=OwnerWorker()), request_ids=ids,
+            **({"eager": False, "mode": "pingpong-k3", "draft_dispatch": "unified"}
+               if dual else {})),
         timeout_seconds=3,
     )
 
     def rpc(operation, payload):
+        if dual and operation == "pp_feedback":
+            assert payload["proposals"] == []  # Real _rank_zero_propose fast path.
         value = owner.call(operation, payload)
         return {
             **value,
@@ -124,6 +139,8 @@ def test_stock_bookkeeping_ping_adapter_controller_owner_mixed_batch_roundtrip(
         publish(h.directory / "s2-control.json", packet)
         install(runner)
         expected_lengths = [[1, 1], [4, 4], [4, 1], [4, 1], [4, 4], [4, 4]]
+        if dual:
+            expected_lengths = [[3, 3]] * 6
         for cycle in range(6):
             assert all(e.wait(3) for e in ready.values())
             for event in ready.values():
