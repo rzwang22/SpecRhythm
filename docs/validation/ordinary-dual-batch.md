@@ -74,7 +74,7 @@ The first completed full run was 3136 passed / 4 environment failures / 7 skippe
 its failures were subprocess module lookup and a missing shell `python`. After
 editable installation and setting the venv PATH, final full Python3.12 validation
 was **3142 passed / 7 skipped**. Python3.9 production/protocol/report/deadline
-regressions: **169 passed / 4 ordinary-only skips**. All 7 new entry regressions
+regressions: **169 passed / 4 ordinary-only skips**. All 8 new entry regressions
 and 6 command regressions passed. Ruff, compileall, Python3.9 grammar, all entry
 Bash syntax and diff checks passed. Actual CI is reported separately at delivery.
 
@@ -83,3 +83,11 @@ no GPU or remote environment changes were performed. CPU tests prove dependency
 safety, not device intersection or performance. Historical output differences are
 unresolved. Eager remains on its existing path until ordinary reference/new GPU
 results justify a separate integration decision.
+
+Final delivery additionally tests the immutable launcher (success and error23),
+then the missing-comparison export guard: the exporter must retain MISSING/INVALID,
+never invent an empty-mode success if runner comparison publication failed.
+Post-full-suite delivery/export regressions: **32 passed on Python3.12**, **8 passed
+on Python3.9** for the final entry/report chain. These supplement the full suite
+above; they are not additional GPU evidence. The first targeted export invocation
+had a misspelled test filename (no tests collected), corrected before these results.

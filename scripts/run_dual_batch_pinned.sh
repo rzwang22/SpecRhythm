@@ -2,7 +2,7 @@
 # All strict/exit logic belongs to this independent child, never the caller's shell.
 if bash -s <<'SR_DUAL_CHILD'
 set -Eeuo pipefail
-FINAL_SHA=e3726521df751514877b21f819fe17d508fd3741
+FINAL_SHA=4878f8beb8a36713e35ef3e0a1a6cfe1470967b5
 REPO="${SR_K3_REPO:-/root/autodl-tmp/src/SpecRhythm}"
 git -C "$REPO" fetch origin codex/rolling-eager-v0.1
 git -C "$REPO" cat-file -e "${FINAL_SHA}^{commit}"

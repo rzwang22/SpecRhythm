@@ -1,6 +1,6 @@
 # Ordinary K3 double-batch control path
 
-Execution commit: `e3726521df751514877b21f819fe17d508fd3741`. The fixed launcher in `scripts/run_dual_batch_pinned.sh`
+Execution commit: `4878f8beb8a36713e35ef3e0a1a6cfe1470967b5`. The fixed launcher in `scripts/run_dual_batch_pinned.sh`
 checks and runs exactly this revision.
 
 The opt-in `target_dispatch=dual-batch` supports **ordinary `pingpong-k3` only**.

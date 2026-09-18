@@ -10,7 +10,7 @@
 - Existing nonblocking status, physical settlement and unified batching are reused.
   Both complete resident/KV audits, ownership, live prefix checks, once-only claims,
   READY order and absolute drain deadline remain. No new scheduler priority/async engine.
-- Execution `e3726521df751514877b21f819fe17d508fd3741`; the delivered `run_dual_batch_pinned.sh` pins it.
+- Execution `4878f8beb8a36713e35ef3e0a1a6cfe1470967b5`; the delivered `run_dual_batch_pinned.sh` pins it.
 - Fixed comparison: same-version reference/new capacity, bounded semantic smoke,
   then reference/new/new/reference B128 A64/B64 30-second windows. One local package,
   verified DPC copy/fallback, unchanged full-output equivalence NOT_RUN.
@@ -24,6 +24,8 @@
   full attempt had 4 environment failures (project not installed in the new venv,
   shell `python` absent); all four confirmed by their errors and passed after
   installing the package/setting PATH, with no code assertion or timeout change.
+  Post-suite fixed-entry/export regressions: 32 passed on Python3.12 and 8 passed
+  on Python3.9. Missing runner comparison cannot become empty-mode success.
   GPU and CI outcomes are separate; actual remote CI is reported at delivery.
 
 

@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 ENTRY = Path(__file__).resolve().parents[1] / "scripts/run_dual_batch_pinned.sh"
-SHA = "e3726521df751514877b21f819fe17d508fd3741"
+SHA = "4878f8beb8a36713e35ef3e0a1a6cfe1470967b5"
 
 
 @pytest.mark.parametrize("code", [0, 23])
