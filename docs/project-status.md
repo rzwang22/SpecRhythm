@@ -1869,3 +1869,8 @@ eight full-suite timing/deadline failures remain unresolved, with IDs preserved
 in `docs/validation/k3-report-local-checks.json`; no second full-suite PASS claim.
 The fixture/documentation follow-up changes no production source, so the fixed
 execution and launcher above remain valid. No new GPU run has been performed.
+
+CI update: entry a7d34cd run35312914255 finished FAILED:3.12=3082 passed/9 failed/
+36 skipped; all nine failures are the reproduced console-fixture profile conflict,
+fixed in b09827f. Both contract jobs PASS;3.9 cancelled. New follow-up CI is
+PENDING; no CI-success claim. The server execution code is unchanged by b09827f.

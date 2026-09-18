@@ -124,7 +124,7 @@ profile conflict rejection is unchanged. With an explicitly contaminated input
 environment, the affected/lean/entry suites passed 55 tests (2 source-audit skips)
 on Python 3.12; report/console suites passed all 24 tests on Python 3.9.
 The other eight full-suite failures were six old 20s subprocess timeouts, one
-supervisor deadline assertion (124 instead of 0), and one fork-buffer 3s drain
+supervisor deadline assertion (124 instead of 0), and one fork-buffer 2s drain
 expiry. Their causes remain unresolved. No assertion or timeout was relaxed.
 No second full-suite success is claimed. Full failure IDs and focused outcomes
 are retained in [local checks](k3-report-local-checks.json).
@@ -133,3 +133,9 @@ The test-input isolation follow-up changes no production source; pinned executio
 24a5042 and launcher a7d34cd still contain the complete server repair. Server
 revalidation is PENDING. Original run qualifications and diagnostic failure stay
 unchanged, and the incomplete eight-window experiment is not presented as complete.
+
+Completed fixed-entry CI snapshot (run35312914255, a7d34cd): Python3.12 had
+3082 passed/9 failed/36 skipped. Its nine failures are exactly the inherited
+full-plan conflict in console fixtures, addressed by b09827f test isolation.
+Both contract jobs passed; Python3.9 was cancelled. Subsequent CI is PENDING,
+not presumed passed from the focused result. The previous CI failure is retained.
