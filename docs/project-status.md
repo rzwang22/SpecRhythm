@@ -30,7 +30,9 @@ Execution pin for the ordinary CPU comparison: `944328263b02a915f397bcb03c8c743c
   failure (expected a still-live child; observed cleanup PASS with no child/signals).
   Isolated teardown16 passed/1 skipped does not establish a repair. Related final
   Python3.12:129 passed; Python3.9:199 passed. No assertions or budgets widened.
-  CI and immutable execution pin are recorded at final delivery.
+  Fixed entry `ea4c825372ad01b5cf68847d8db3182c107f0f92` pins the execution above;
+  the runbook has the exact foreground command. CI is reported from the actual
+  GitHub run, separately from the retained local test failure.
 
 ### PR #5 — ordinary double-batch control path (2026-09-18)
 

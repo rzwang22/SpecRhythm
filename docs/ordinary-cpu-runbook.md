@@ -65,3 +65,31 @@ pinned entry from that commit; do not execute an old runbook checkout by acciden
 The outer `if` keeps the interactive shell open; the script preserves first failure
 and runs the existing bounded failure export. Required paths may be overridden
 explicitly via SR_K3_REPO, SR_FIXED_PYTHON, SR_FIXED_S1, SR_K3_LOCAL_BASE and SR_PING_RESULTS.
+
+Fixed entry commit: `ea4c825372ad01b5cf68847d8db3182c107f0f92`.
+It pins execution `944328263b02a915f397bcb03c8c743c71e9a56c` (including the runner,
+shared controls, audit option, qualification and exporter). This is the single
+foreground command for the existing A100 environment:
+
+```bash
+if bash -s <<'SR_CPU_FOREGROUND'
+set -Eeuo pipefail
+REPO="${SR_K3_REPO:-/root/autodl-tmp/src/SpecRhythm}"
+git -C "$REPO" fetch origin codex/rolling-eager-v0.1
+ENTRY=$(mktemp /tmp/specrhythm-ordinary-cpu-entry.XXXXXX.sh)
+git -C "$REPO" show ea4c825372ad01b5cf68847d8db3182c107f0f92:scripts/run_ordinary_cpu_pinned.sh > "$ENTRY"
+bash "$ENTRY"
+SR_CPU_FOREGROUND
+then
+  printf 'Completed. Upload the single UPLOAD ONLY archive.\n'
+else
+  rc=$?
+  printf 'Stopped (rc=%s); local evidence retained; terminal remains open.\n' "$rc" >&2
+fi
+```
+
+The launcher was executed under CPU checkout/GPU substitutes for exit0 and exit23;
+it clears stale controls, checks this exact commit, creates one worktree and emits
+one upload path through the existing local wrapper. This validates the entry
+contract, not A100 execution or DPC consistency. The full test suite's earlier
+natural-teardown observation failure is retained in the validation record.
