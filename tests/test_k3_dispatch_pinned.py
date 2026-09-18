@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 ENTRY = Path(__file__).resolve().parents[1] / "scripts/run_k3_dispatch_pinned.sh"
-SHA = "c1fca49f3f846ef94f0759b585fddaf091d78b62"
+SHA = "24a5042d8bce503699bb040f293541f853e1e6b1"
 
 
 @pytest.mark.parametrize(

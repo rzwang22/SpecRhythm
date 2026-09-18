@@ -8,7 +8,7 @@ case "$EXPERIMENT" in
   lean-reference|lean-dispatch-opt) ;;
   *) printf 'Choose lean-reference or lean-dispatch-opt (both lean).\n' >&2; exit 2 ;;
 esac
-FINAL_SHA=c1fca49f3f846ef94f0759b585fddaf091d78b62
+FINAL_SHA=24a5042d8bce503699bb040f293541f853e1e6b1
 REPO="${SR_K3_REPO:-/root/autodl-tmp/src/SpecRhythm}"
 git -C "$REPO" fetch origin codex/rolling-eager-v0.1
 git -C "$REPO" cat-file -e "${FINAL_SHA}^{commit}"
