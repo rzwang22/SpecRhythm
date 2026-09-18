@@ -1846,3 +1846,26 @@ rewrite the original status. K3 terminal output is a small summary, with all
 artifacts retained. Publication failure status and primary error context survive.
 No scheduling, GPU, protocol, I/O buffering or deadline change. New GPU tests
 remain PENDING; output equivalence remains NOT_RUN. See validation/k3-report-size-fix.md.
+
+Delivery implementation `24a5042d8bce503699bb040f293541f853e1e6b1` and fixed entry
+`a7d34cdbe5e65606a14eab3cec9b3704a8f53d74` have been ordinary-pushed to Draft PR#5.
+Both lean-reference and lean-dispatch-opt select that identical repaired execution.
+The new fixed launcher passed all seven CPU tests on both Python3.9 and3.12.
+Python3.9 affected regressions:31 passed. Ruff, compileall3.9/3.12, Python3.9
+syntax parsing and20 Bash checks passed. Related3.12 run:65 passed/two unchanged
+20s subprocess harness timeouts, retained separately from new report tests.
+
+Prior HEAD bbd0481 CI is now known FAILED (run35261230780):3.12 had one old
+owner settlement deadline failure;3.9 cancelled; both contract jobs passed.
+This predates the report repair, is not this server's diagnostic-size cause,
+and remains unresolved. Current fixed entry CI run35312914255 has both contract
+jobs PASS and3.9/3.12 full jobs running at this snapshot; no full-CI success claim.
+
+Full local3.12 result:3105 passed/17 failed/3 skipped. Nine new console fixture
+failures were traced to an inherited full numerical plan and corrected by test
+input isolation; production conflict checks remain. Explicitly contaminated
+focused3.12 run:55 passed/2 source skips;3.9 report/console:24 passed. The other
+eight full-suite timing/deadline failures remain unresolved, with IDs preserved
+in `docs/validation/k3-report-local-checks.json`; no second full-suite PASS claim.
+The fixture/documentation follow-up changes no production source, so the fixed
+execution and launcher above remain valid. No new GPU run has been performed.

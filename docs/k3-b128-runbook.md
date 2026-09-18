@@ -125,7 +125,7 @@ argument for the independent optimization run. Do not execute both concurrently.
 if bash -s -- lean-reference <<'SR_K3_DISPATCH_BOOT'
 set -Eeuo pipefail
 REPO="${SR_K3_REPO:-/root/autodl-tmp/src/SpecRhythm}"
-ENTRY_SHA=9feb51a4d36e4acc0f682ea006a6842d327a69d4
+ENTRY_SHA=a7d34cdbe5e65606a14eab3cec9b3704a8f53d74
 git -C "$REPO" fetch origin codex/rolling-eager-v0.1
 ENTRY="$(mktemp /tmp/specrhythm-k3-dispatch-entry.XXXXXX.sh)"
 git -C "$REPO" show "$ENTRY_SHA:scripts/run_k3_dispatch_pinned.sh" > "$ENTRY"
@@ -146,7 +146,7 @@ selected argument:
 if bash -s -- lean-dispatch-opt <<'SR_K3_DISPATCH_BOOT'
 set -Eeuo pipefail
 REPO="${SR_K3_REPO:-/root/autodl-tmp/src/SpecRhythm}"
-ENTRY_SHA=9feb51a4d36e4acc0f682ea006a6842d327a69d4
+ENTRY_SHA=a7d34cdbe5e65606a14eab3cec9b3704a8f53d74
 git -C "$REPO" fetch origin codex/rolling-eager-v0.1
 ENTRY="$(mktemp /tmp/specrhythm-k3-dispatch-entry.XXXXXX.sh)"
 git -C "$REPO" show "$ENTRY_SHA:scripts/run_k3_dispatch_pinned.sh" > "$ENTRY"
@@ -176,3 +176,13 @@ upload them separately. Missing/corrupt shards still fail comparison/export.
 Terminal results now print bounded status/throughput/path summaries; complete
 result JSON remains in the run directory and bundle. There is no algorithm or
 logging-buffer change. Both lean-reference and lean-dispatch-opt use the repair.
+
+Repair execution: `24a5042d8bce503699bb040f293541f853e1e6b1`. Fixed launcher:
+`a7d34cdbe5e65606a14eab3cec9b3704a8f53d74`. The two copyable lean commands
+above read this launcher from Git; its FINAL_SHA points to the repaired producer,
+restoring consumer and bounded console implementation. Both profiles keep the
+same I/O/geometry and differ only in the existing control encoding switch.
+Run lean-reference first, then independently select lean-dispatch-opt. Neither
+command reuses the failed root. The first error still stops later points; one
+verified archive is copied to DPC or falls back to the retained local archive.
+GPU revalidation remains PENDING; output equivalence remains NOT_RUN.
