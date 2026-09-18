@@ -630,15 +630,38 @@ def report(root, output, status, commit):
         value["common_execution"] = {k: config["execution"][k] for k in (
             "models", "config_sha256", "patch_manifest_sha256", "numerical_mode",
             "engine_core", "async_scheduling", "eos_token_ids", "launch_environment", "capacity")}
-    write(value, output)
+    return publish_qualified(value, runtime, config["options"], output, status)
+
+
+def publish_qualified(value, runtime, options, output, status):
+    """Retain original qualification if derived-report publication fails."""
+    from specrhythm.serving.audit_details import publish
+
     qualification = qualify(value)
     from specrhythm.serving.target_dispatch import qualification_errors
 
-    dispatch_errors = qualification_errors(value, runtime, config["options"])
+    dispatch_errors = qualification_errors(value, runtime, options)
     if dispatch_errors:
         qualification["errors"].extend(dispatch_errors)
         qualification["diagnostic_integrity"] = "FAILED"
         qualification["failure_layer"] = "diagnostic_evidence"
+    try:
+        receipt = publish(value, output)
+    except (OSError, ValueError, TypeError) as error:
+        qualification.update(diagnostic_integrity="FAILED", failure_layer="diagnostic_evidence",
+                             report_publication=dict(status="FAILED", type=type(error).__name__,
+                                 error=str(error), details=getattr(error, "details", {}),
+                                 output=str(output)))
+        qualification["errors"].append("report publication: " + str(error))
+        try:
+            write(qualification, status)
+        except (OSError, ValueError, TypeError) as secondary:
+            import sys
+
+            print("Secondary evidence-status publication failure: " + str(secondary),
+                  file=sys.stderr)
+        raise
+    qualification["report_publication"] = dict(status="COMPLETE", **receipt)
     write(qualification, status)
     return qualification
 
@@ -662,7 +685,9 @@ def main(argv=None):
     require(args.validation_profile is None or profile_of(config) == args.validation_profile,
             "diagnostic requested validation_profile differs")
     result = report(args.root, args.output, args.status, args.commit)
-    print(json.dumps(result))
+    print(json.dumps({k: result.get(k) for k in (
+        "diagnostic_integrity", "failure_layer", "original_qualification", "errors"
+    )} | {"evidence_status": str(args.status), "audit_report": str(args.output)}))
     require(
         result["diagnostic_integrity"] == "COMPLETE",
         "PingPong diagnostic evidence failed",

@@ -436,7 +436,12 @@ def main(argv=None):
         else:
             require(0 <= args.wait_seconds <= 300, "invalid controlled stop wait")
             value = stop(root, args.wait_seconds)
-        print(json.dumps(value, ensure_ascii=False, indent=2), flush=True)
+        displayed = value
+        if args.command == "prepare" and args.k3_configuration != B16:
+            displayed = dict(command="prepare", root=str(root),
+                             k3_configuration=args.k3_configuration,
+                             full_report=str(root / "scan-config.json"))
+        print(json.dumps(displayed, ensure_ascii=False, indent=2), flush=True)
         return 0
     except (DataError, OSError, ValueError, KeyError) as error:
         print_failure(error, label="decode-scan")

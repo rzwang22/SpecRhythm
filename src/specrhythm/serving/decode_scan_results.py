@@ -542,7 +542,6 @@ def emit_result(directory, result, point):
     if "validation_profile" in point:
         value["measurement_valid"] = value["formal_comparison_eligible"]
     value = compact(value)
-    print("[decode scan] " + json.dumps(value, ensure_ascii=False), flush=True)
     write_once(directory / "result.json", value)
     write_once(directory / "light-summary.json", value)
     flat = {k: v for k, v in value.items() if not isinstance(v, (dict, list))}
@@ -550,4 +549,10 @@ def emit_result(directory, result, point):
         writer = csv.DictWriter(handle, fieldnames=list(flat))
         writer.writeheader()
         writer.writerow(flat)
+    displayed = value
+    if point["mode"].endswith("-k3"):
+        from specrhythm.serving.scan_console import summary
+
+        displayed = summary(value, directory / "light-summary.json")
+    print("[decode scan] " + json.dumps(displayed, ensure_ascii=False), flush=True)
     return value

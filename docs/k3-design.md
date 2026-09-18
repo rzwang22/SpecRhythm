@@ -834,3 +834,14 @@ and writing, not the snapshot contents, publication boundaries or consumers.
 It caches no prefix/KV, readiness or eligibility. `reference` is the compatibility
 path. Both variants retain all live audits, Serial gates and READY ordering.
 Performance and new native overlap are PENDING server evidence.
+
+## Bounded post-run joined report tables (2026-09-18)
+
+K3 report summaries keep the8MiB limit. Request/step detail tables grow with
+actual work and are now losslessly externalized into at most eight8MiB JSONL
+shards. Summary indexes bind source/mode/window/workload and each shard's size,
+SHA256, table/count/order. All original checks precede projection; publication
+readback, comparison and single-package export validate and reconstruct the same
+rows. No live state, GPU work, control switch, logging policy or measurement
+boundary changes. A missing shard is missing evidence, never zero observations.
+See [failure analysis](validation/k3-report-size-fix.md).

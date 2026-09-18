@@ -393,7 +393,8 @@ def analyze(runtime, backend, light):
 
 def write(value, output):
     payload = (json.dumps(value, separators=(",", ":"), sort_keys=True) + "\n").encode()
-    require(len(payload) <= MAX_OUTPUT, "compact report exceeds 8 MiB bound")
+    require(len(payload) <= MAX_OUTPUT, "compact report exceeds 8 MiB bound",
+            actual_bytes=len(payload), maximum_bytes=MAX_OUTPUT, output=str(output))
     with Path(output).open("xb") as f:
         f.write(payload)
     return {

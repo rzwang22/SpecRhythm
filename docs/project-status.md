@@ -1827,3 +1827,22 @@ CI snapshot for entry9feb51a, run35260463228: Python3.11 contract and pinned-vLL
 source contract PASS; Python3.9/3.12 full jobs RUNNING. Their completion is not
 claimed. The documentation follow-up may have its own pending CI run. New GPU
 capacity/cleanup/overlap/performance PENDING; output equivalence NOT_RUN.
+
+### 2026-09-18 — B128 joined-report size and console repair
+
+Verified the lean-reference465 archive:252 logical paths/230 unique payloads,
+all size/SHA256 checks pass. Four capacity points passed. Forward Serial,
+Serial-eager and ordinary PingPong performance execution/measurement/cleanup
+passed; ordinary PingPong then failed diagnostic report publication at8MiB.
+The66-step analysis body is8416255 bytes before source metadata. Eager PingPong
+and reverse repeat did not start. Original diagnostic failure/code1 retained;
+no GPU execution failure or new output-equivalence claim.
+
+New post-run summary/table separation preserves every joined row with bounded
+8MiB shards (at most8), count/order/hash verification and single-bundle export.
+The real archived producer chain now writes a513123-byte summary plus7957178-byte
+detail and requalifies COMPLETE in a separate offline derivation. This does not
+rewrite the original status. K3 terminal output is a small summary, with all
+artifacts retained. Publication failure status and primary error context survive.
+No scheduling, GPU, protocol, I/O buffering or deadline change. New GPU tests
+remain PENDING; output equivalence remains NOT_RUN. See validation/k3-report-size-fix.md.

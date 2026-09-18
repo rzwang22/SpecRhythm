@@ -67,6 +67,7 @@ def summarize(root, exit_code, stage):
         run_qualifications=runs,
         diagnostic_integrity=status.get("diagnostic_integrity", "MISSING"),
         primary_diagnostic_errors=status.get("errors"),
+        report_publication=status.get("report_publication"),
         missing_fsync_attribution=missing,
         performance_conclusion=status.get("performance_conclusion", "PENDING"),
         evidence_status=str(status_path),

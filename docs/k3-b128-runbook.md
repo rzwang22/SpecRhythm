@@ -165,3 +165,14 @@ Each invocation prints one `UPLOAD ONLY:` for its own verified single archive,
 performance windows, both comparisons, raw evidence, cycle projections, first
 failure and export/copy outcomes are inside that archive. No extra collection
 commands or separate JSON uploads are required.
+
+## Report publication repair (2026-09-18)
+
+The66-step lean-reference ordinary PingPong window exceeded the compact summary's
+8MiB limit after successful execution/measurement/cleanup. Old failure remains.
+New K3 summaries reference ordered, hashed `*-audit-report-details.NNN.jsonl`
+shards; they are automatically inside the same single upload archive. Do not
+upload them separately. Missing/corrupt shards still fail comparison/export.
+Terminal results now print bounded status/throughput/path summaries; complete
+result JSON remains in the run directory and bundle. There is no algorithm or
+logging-buffer change. Both lean-reference and lean-dispatch-opt use the repair.

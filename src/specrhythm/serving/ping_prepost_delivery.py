@@ -154,7 +154,9 @@ def comparison(directory, *, modes=MODES):
             points.append(dict(mode=mode, status="MISSING_OR_NOT_STARTED"))
             continue
         require(path.stat().st_size <= 8 * 1024 * 1024, "compact point report too large")
-        r = read_json(path)
+        from specrhythm.serving.audit_details import restore_file
+
+        r = restore_file(read_json(path), path.parent)
         require(r["mode"] == mode, "comparison report/file mode mismatch", artifact=str(path))
         reports.append(r)
         points.append(
@@ -359,6 +361,7 @@ def export(directory, output, *, first_code=0, stage="complete", modes=MODES):
         and (p.name in NAMES or (p.name.startswith("fixed-logging-")
                                and p.suffix == ".json")
              or p.name.endswith(("-audit-report.json", "-evidence-status.json"))
+             or ("-audit-report-details." in p.name and p.name.endswith(".jsonl"))
              or (p.name.startswith(".draft-backend-report.json.") and p.name.endswith(".partial")))
     )
     inventory, objects, emitted, total, failures = [], {}, set(), 0, []
@@ -460,6 +463,13 @@ def export(directory, output, *, first_code=0, stage="complete", modes=MODES):
                         qualify_logging(source.parent, "deferred-window")
                     except (OSError, ValueError, KeyError, TypeError) as error:
                         evidence_errors.append(name + ": diagnostic publication: " + str(error))
+                if source.name.endswith("-audit-report.json") and isinstance(value, dict):
+                    from specrhythm.serving.audit_details import restore_file
+
+                    try:
+                        restore_file(value, source.parent)
+                    except (OSError, ValueError, KeyError, TypeError) as error:
+                        evidence_errors.append(name + ": audit details: " + str(error))
                 if source.name.startswith(".draft-backend-report.json."):
                     row["publication"] = "PARTIAL_UNPUBLISHED"
                     evidence_errors.append(name + ": unfinished report bytes retained")
