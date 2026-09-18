@@ -101,7 +101,10 @@ def test_runner_first_error_stops_smoke_and_windows_and_exports_raw(tmp_path, mo
     assert not (directory / "smoke").exists() and not (directory / "windows").exists()
 
 
-def test_real_local_shell_preserves_first_error_and_only_one_upload(tmp_path, monkeypatch, capsys):
+@pytest.mark.parametrize("cpu_comparison", [False, True])
+def test_real_local_shell_preserves_first_error_and_only_one_upload(
+    tmp_path, monkeypatch, capsys, cpu_comparison
+):
     import os
     import shutil
     import sys
@@ -113,7 +116,8 @@ def test_real_local_shell_preserves_first_error_and_only_one_upload(tmp_path, mo
     (repo / "scripts").mkdir(parents=True)
     binary.mkdir()
     (repo / "src").symlink_to(source / "src", target_is_directory=True)
-    shutil.copyfile(source / "scripts/run_dual_batch.sh", repo / "scripts/run_dual_batch.sh")
+    script = "run_ordinary_cpu.sh" if cpu_comparison else "run_dual_batch.sh"
+    shutil.copyfile(source / "scripts" / script, repo / "scripts" / script)
     (binary / "git").write_text(
         '#!/bin/bash\nif [[ "$1" == rev-parse ]]; then echo ' + "a" * 40 + '; fi\n')
     (binary / "git").chmod(0o755)
@@ -123,7 +127,9 @@ def test_real_local_shell_preserves_first_error_and_only_one_upload(tmp_path, mo
     monkeypatch.setenv("SR_FIXED_S1", str(tmp_path / "missing-sealed-s1"))
     code = local.run(repo, "a" * 40, local_base=tmp_path / "local",
         persistent=tmp_path / "durable", tag="dual", minimum_free_bytes=1,
-        configuration=B128, validation_profile="performance-exploration", dual_batch=True)
+        configuration=B128, validation_profile="performance-exploration",
+        dual_batch=not cpu_comparison,
+        cpu_comparison=cpu_comparison)
     output = capsys.readouterr().out
     assert code != 0 and output.count("UPLOAD ONLY:") == 1
     archive = Path(output.split("UPLOAD ONLY: ")[1].strip())

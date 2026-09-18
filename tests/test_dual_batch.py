@@ -27,9 +27,9 @@ from specrhythm.serving.ping_prepost_controller import PingPrePostController
 fixed_schedulers, s2_schedulers, target_pool = _fixed, _s2, _pool
 
 
-@pytest.fixture
-def dual(monkeypatch):
-    monkeypatch.setenv("SR_K3_TARGET_DISPATCH", "dual-batch")
+@pytest.fixture(params=["dual-batch", "shared-command"])
+def dual(monkeypatch, request):
+    monkeypatch.setenv("SR_K3_TARGET_DISPATCH", request.param)
     monkeypatch.setenv("SR_S2_MODE", "pingpong-k3")
 
 

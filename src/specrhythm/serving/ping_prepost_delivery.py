@@ -84,6 +84,7 @@ RUNTIME_KEYS = {
     "host",
     "target_devices",
     "target_final_memory",
+    "target_pool_final",
     "diagnostic_configuration",
     "target_requests_final",
     "diagnostic_drain",
@@ -379,14 +380,19 @@ def export(directory, output, *, first_code=0, stage="complete", modes=MODES):
         from specrhythm.serving.dual_batch_run import MODE, ORDER
 
         expected.extend(["dual-batch-plan.json", "smoke-comparison.json", "runner-outcome.json"])
-        roots = [directory / kind / dispatch
-                 for kind in ("capacity", "smoke") for dispatch in ORDER[:2]]
-        for index, dispatch in enumerate(ORDER):
-            case = directory / "windows" / (str(index) + "-" + dispatch)
-            expected.extend(str((case / name).relative_to(directory)) for name in (
-                "comparison.json", "points/" + MODE + "-audit-report.json",
-                "points/" + MODE + "-evidence-status.json"))
-            roots.append(case / "points" / MODE)
+        experiment = read_json(directory / "dual-batch-plan.json")
+        order = experiment.get("order", ORDER)
+        cases = experiment.get("cases", {d: {"mode": MODE} for d in ORDER[:2]})
+        roots = [directory / "capacity" / name for name in cases]
+        roots += [directory / "smoke" / name
+                  for name in experiment.get("smoke_cases", list(cases))]
+        for index, name in enumerate(order):
+            mode = cases[name]["mode"]
+            case = directory / "windows" / (str(index) + "-" + name)
+            expected.extend(str((case / entry).relative_to(directory)) for entry in (
+                "comparison.json", "points/" + mode + "-audit-report.json",
+                "points/" + mode + "-evidence-status.json"))
+            roots.append(case / "points" / mode)
         for root in roots:
             runs = sorted((root / "runs").glob("*/point.json"))
             if not runs:

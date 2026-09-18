@@ -149,12 +149,13 @@ def deliver(local, persistent, expected):
 
 
 def run(repo, commit, *, local_base, persistent, tag, minimum_free_bytes=8 * 1024**3,
-        configuration="k3-b16-v1", validation_profile=None, dual_batch=False):
+        configuration="k3-b16-v1", validation_profile=None, dual_batch=False,
+        cpu_comparison=False):
     from specrhythm.serving.k3 import geometry
     from specrhythm.serving.k3_validation import fields
 
     policy = fields(validation_profile, configuration)
-    modes = () if dual_batch else MODES
+    modes = () if dual_batch or cpu_comparison else MODES
     batch = geometry("serial-k3", configuration)["active_limit"]
     root, persistent, receipt = prepare_local(
         local_base, persistent, tag, minimum_free_bytes=minimum_free_bytes
@@ -175,7 +176,8 @@ def run(repo, commit, *, local_base, persistent, tag, minimum_free_bytes=8 * 102
     print(json.dumps(receipt), flush=True)
     with (root / "runner.log").open("w") as log:
         process = subprocess.Popen(
-            ["bash", str(repo / ("scripts/run_dual_batch.sh" if dual_batch else
+            ["bash", str(repo / ("scripts/run_ordinary_cpu.sh" if cpu_comparison else
+                                "scripts/run_dual_batch.sh" if dual_batch else
                                 f"scripts/run_k3_b{batch}.sh")), commit],
             env=env,
             stdout=subprocess.PIPE,
@@ -293,6 +295,7 @@ def main():
     p.add_argument("--repo", required=True, type=Path)
     p.add_argument("--commit", required=True)
     p.add_argument("--dual-batch", action="store_true")
+    p.add_argument("--cpu-comparison", action="store_true")
     from specrhythm.serving.k3 import B16, CONFIGURATIONS
 
     p.add_argument("--k3-configuration", choices=CONFIGURATIONS, default=B16)
@@ -305,6 +308,7 @@ def main():
             args.repo.resolve(),
             args.commit, configuration=args.k3_configuration,
             validation_profile=args.validation_profile, dual_batch=args.dual_batch,
+            cpu_comparison=args.cpu_comparison,
             local_base=Path(os.environ.get("SR_K3_LOCAL_BASE", "/tmp/specrhythm-runs")),
             persistent=Path(
                 os.environ.get(

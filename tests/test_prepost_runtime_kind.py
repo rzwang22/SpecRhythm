@@ -38,7 +38,7 @@ def driven(produced, monkeypatch, tmp_path):
 
     def build(mode, stage, driver=None, *, full_run=False, admission_limit=None,
               configuration="k3-b16-v1", validation_profile=None, target_diagnostics=None,
-              target_dispatch=None):
+              target_dispatch=None, target_cpu=None):
         from specrhythm.serving.k3 import configuration_fields, geometry
         from specrhythm.serving.k3_validation import fields as validation_fields
 
@@ -49,6 +49,8 @@ def driven(produced, monkeypatch, tmp_path):
         calls.append((mode, stage))
         if target_diagnostics is not None:
             monkeypatch.setenv("SR_FIXED_TARGET_DIAGNOSTICS", target_diagnostics)
+        if target_cpu is not None:
+            monkeypatch.setenv("SR_K3_TARGET_CPU", target_cpu)
         if target_dispatch is not None:
             monkeypatch.setenv("SR_K3_TARGET_DISPATCH", target_dispatch)
         h = produced(mode, True, root=base)  # Actual startup/snapshot, no decode hooks yet.
@@ -80,6 +82,8 @@ def driven(produced, monkeypatch, tmp_path):
         opts = m["fixed_diagnostic"]["options"]
         if target_diagnostics is not None:
             opts["target_diagnostics"] = target_diagnostics
+        if target_cpu is not None:
+            opts["target_cpu"] = target_cpu
         if target_dispatch is not None:
             opts["target_dispatch"] = target_dispatch
         if configuration == "k3-b128-v1":
@@ -110,6 +114,10 @@ def driven(produced, monkeypatch, tmp_path):
             kind="joint-correctness" if correct else "decode-scan",
         )
         scheduler = NS(s2_steps=[], requests=dict.fromkeys(by_id), s2_pool=NS(report=lambda: {}))
+        if target_cpu is not None:
+            from specrhythm.serving.s2_pool import ResidentPoolAudit
+
+            scheduler.s2_pool = ResidentPoolAudit("target")
         warm = {
             rid: NS(
                 prefix_version=1,

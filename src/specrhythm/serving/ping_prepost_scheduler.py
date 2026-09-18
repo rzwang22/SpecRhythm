@@ -7,11 +7,11 @@ from specrhythm.continuation.trace import TRACE
 from specrhythm.phase4.request_identity import _NormalizedTokenRow
 from specrhythm.phase4.serial import Proposal, token_prefix_hash
 from specrhythm.serving.common import require
-from specrhythm.serving.dual_batch import control_transaction
 from specrhythm.serving.fixed_scheduler import FixedBatch
 from specrhythm.serving.k3 import RESIDENT_POLICY
 from specrhythm.serving.s2_pool import control
 from specrhythm.serving.s2_scheduler import S2SerialScheduler
+from specrhythm.serving.shared_control import control_transaction
 
 
 class PingPrePostScheduler(FixedBatch, S2SerialScheduler):

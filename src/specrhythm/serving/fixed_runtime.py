@@ -186,11 +186,14 @@ def execution_point(point, probe):
 def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5, probe=False):
     point = execution_point(point, probe)
     mode, runtime_mode = point["mode"], point["runtime_mode"]
-    from specrhythm.serving.dual_batch import CommandPublisher, validate_mode
+    from specrhythm.serving.shared_control import CommandPublisher, validate_mode
 
-    dual_batch = options.get("target_dispatch") == "dual-batch"
+    dual_batch = options.get("target_dispatch") in ("dual-batch", "shared-command")
     if dual_batch:
         validate_mode(mode)
+    if options.get("target_cpu", "reference") != "reference":
+        require(mode in ("serial-k3", "pingpong-k3") and dual_batch,
+                "block-sets requires explicit ordinary K3 shared control")
     command_publisher = CommandPublisher(directory / "s2-control.json") if dual_batch else None
     from specrhythm.serving.k3 import configuration_fields, configuration_of
     from specrhythm.serving.k3_validation import matching, not_run
@@ -461,7 +464,7 @@ def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5, 
             try:
                 with TIMERS.span("target_step"):
                     if dual_batch:
-                        from specrhythm.serving.dual_batch import run_target
+                        from specrhythm.serving.shared_control import run_target
 
                         outputs = run_target(engine)
                     else:

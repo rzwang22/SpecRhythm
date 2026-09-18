@@ -11,7 +11,7 @@ from specrhythm.serving.common import read_json, require
 
 
 def control():
-    from specrhythm.serving.dual_batch import current_control, decode_control
+    from specrhythm.serving.shared_control import current_control, decode_control
 
     current = current_control()
     return current if current is not None else decode_control(
@@ -28,13 +28,13 @@ def publish(path, value):
     # A single coordinator publishes this path. No snapshot caching: every call
     # encodes its current value and publishes at exactly the original boundary.
     selected = policy() if str(path) == os.environ.get("SR_S2_CONTROL") else "reference"
-    if selected == "dual-batch":
-        from specrhythm.serving.dual_batch import encode_control, validate_mode
+    if selected in ("dual-batch", "shared-command"):
+        from specrhythm.serving.shared_control import encode_control, validate_mode
 
         validate_mode(os.environ.get("SR_S2_MODE"))
         value = encode_control(value)
     with TRACE.span("control_snapshot_publish", file_name=path.name, encoding_policy=selected):
-        if selected in ("encode-once", "dual-batch"):
+        if selected in ("encode-once", "dual-batch", "shared-command"):
             with TRACE.span("control_snapshot_encode", file_name=path.name):
                 encoded = json.dumps(value, allow_nan=False)
             with TRACE.span("control_snapshot_write", file_name=path.name,
@@ -55,7 +55,10 @@ def block_count(rows):
 
 class ResidentPoolAudit:
     def __init__(self, role):
+        from specrhythm.serving.target_cpu import policy
+
         self.role = role
+        self.ownership_check = policy() if role == "target" else "reference"
         self.initial = None
         self.peak_blocks = 0
         self.checks = 0
@@ -73,6 +76,16 @@ class ResidentPoolAudit:
                 require(
                     blocks and len(set(blocks)) == len(blocks), "invalid private KV block table"
                 )
+                if self.ownership_check == "block-sets":
+                    # Same complete typed ownership check. No per-block diagnostic
+                    # kwargs/owner dict entry, no reuse across snapshots or groups.
+                    prior = owners.setdefault(group, set())
+                    require(all(type(b) is int and b >= 0 for b in blocks)
+                            and prior.isdisjoint(blocks),
+                            "resident KV blocks shared across requests",
+                            role=self.role, request_id=rid)
+                    prior.update(blocks)
+                    continue
                 for block in blocks:
                     require(
                         type(block) is int and block >= 0 and (group, block) not in owners,
@@ -118,6 +131,7 @@ class ResidentPoolAudit:
     def report(self):
         return {
             "role": self.role,
+            "ownership_check": self.ownership_check,
             "initial_requests": len(self.initial or {}),
             "initial_blocks": block_count(self.initial or {}),
             "peak_blocks": self.peak_blocks,

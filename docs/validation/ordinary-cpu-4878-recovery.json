@@ -1,0 +1,256 @@
+[
+  {
+    "index": 1,
+    "cross_home_applicability": "OTHER_HOME_PRESENT",
+    "status": "COMPLETE",
+    "physical_recovery_calls": 261,
+    "finished_wholly_in_other_home_claim_to_GPU": 93,
+    "unclassified_calls": 168,
+    "missing_native": 0,
+    "examples": [
+      {
+        "physical_forward_id": "draft-physical-137",
+        "B": 64,
+        "target_step": 45,
+        "claim_ns": 7241284585418098,
+        "draft_start_lower_ns": 7241284608926808,
+        "draft_end_upper_ns": 7241284632668666,
+        "target_start_lower_ns": 7241284673033967,
+        "draft_finish_before_target_ms": 40.365301,
+        "example_binding": {
+          "home": "A",
+          "prefix_version": 22,
+          "proposal_id": "",
+          "request_id": "sr-c6fd4c5bc623ca136c924dbe915c49c1837c97e1e42c6e9a1236021c9819828e",
+          "round_id": 22,
+          "source": "rejection",
+          "task_kind": "normal_extension",
+          "token_step": 1,
+          "work_kind": "normal_extension"
+        },
+        "parent_and_READY": {
+          "status": "COMPLETE",
+          "parent_prefix_version": 21,
+          "parent_claim": {
+            "request_id": "sr-c6fd4c5bc623ca136c924dbe915c49c1837c97e1e42c6e9a1236021c9819828e",
+            "prefix_version": 21,
+            "proposal_id": "sr-c6fd4c5bc623ca136c924dbe915c49c1837c97e1e42c6e9a1236021c9819828e:prepost:21",
+            "claim_id": "ping-prepost-target-44-A:sr-c6fd4c5bc623ca136c924dbe915c49c1837c97e1e42c6e9a1236021c9819828e:prepost:21",
+            "home_cohort": "A",
+            "claimed_ns": 7241284157282674
+          },
+          "parent_GPU_end_upper_ns": 7241284399584930,
+          "owner_feedback_ns": 7241284460123977,
+          "next_READY": {
+            "candidate_EOS": false,
+            "candidate_length": 3,
+            "category": "prepost_record",
+            "continuation_id": null,
+            "decision_version": 0,
+            "diagnostic_phase": "measurement",
+            "end_ns": 7241284689712248,
+            "event": "ready",
+            "home_cohort": "A",
+            "pid": 4197,
+            "prefix_version": 22,
+            "proposal_id": "sr-c6fd4c5bc623ca136c924dbe915c49c1837c97e1e42c6e9a1236021c9819828e:prepost:22",
+            "ready_ns": 7241284689187986,
+            "remaining_output_budget": 468,
+            "request_id": "sr-c6fd4c5bc623ca136c924dbe915c49c1837c97e1e42c6e9a1236021c9819828e",
+            "short_reason": null,
+            "start_ns": 7241284689712248,
+            "thread_id": 140520894895808,
+            "thread_name": "serial-eager-owner",
+            "timestamp_ns": 7241284689703475
+          }
+        }
+      },
+      {
+        "physical_forward_id": "draft-physical-122",
+        "B": 64,
+        "target_step": 40,
+        "claim_ns": 7241282670906339,
+        "draft_start_lower_ns": 7241282694059621,
+        "draft_end_upper_ns": 7241282717629604,
+        "target_start_lower_ns": 7241282802104280,
+        "draft_finish_before_target_ms": 84.474676,
+        "example_binding": {
+          "home": "B",
+          "prefix_version": 20,
+          "proposal_id": "",
+          "request_id": "sr-e94e376418e38da9b28d488724d89271f590f035a7d307fccf44694c49c6e156",
+          "round_id": 20,
+          "source": "rejection",
+          "task_kind": "normal_extension",
+          "token_step": 1,
+          "work_kind": "normal_extension"
+        },
+        "parent_and_READY": {
+          "status": "COMPLETE",
+          "parent_prefix_version": 19,
+          "parent_claim": {
+            "request_id": "sr-e94e376418e38da9b28d488724d89271f590f035a7d307fccf44694c49c6e156",
+            "prefix_version": 19,
+            "proposal_id": "sr-e94e376418e38da9b28d488724d89271f590f035a7d307fccf44694c49c6e156:prepost:19",
+            "claim_id": "ping-prepost-target-39-B:sr-e94e376418e38da9b28d488724d89271f590f035a7d307fccf44694c49c6e156:prepost:19",
+            "home_cohort": "B",
+            "claimed_ns": 7241282350661534
+          },
+          "parent_GPU_end_upper_ns": 7241282541803680,
+          "owner_feedback_ns": 7241282601210159,
+          "next_READY": {
+            "candidate_EOS": false,
+            "candidate_length": 3,
+            "category": "prepost_record",
+            "continuation_id": null,
+            "decision_version": 0,
+            "diagnostic_phase": "measurement",
+            "end_ns": 7241282766680462,
+            "event": "ready",
+            "home_cohort": "B",
+            "pid": 4197,
+            "prefix_version": 20,
+            "proposal_id": "sr-e94e376418e38da9b28d488724d89271f590f035a7d307fccf44694c49c6e156:prepost:20",
+            "ready_ns": 7241282766140610,
+            "remaining_output_budget": 975,
+            "request_id": "sr-e94e376418e38da9b28d488724d89271f590f035a7d307fccf44694c49c6e156",
+            "short_reason": null,
+            "start_ns": 7241282766680462,
+            "thread_id": 140520894895808,
+            "thread_name": "serial-eager-owner",
+            "timestamp_ns": 7241282766672377
+          }
+        }
+      }
+    ],
+    "example_rule": "median/P90 finish-to-Target gap",
+    "limit": "classification of individual physical calls, not whole K3 jobs; no earliest eligibility, no claim that all remainder is avoidable; host monotonic / calibrated native uncertainty bounds"
+  },
+  {
+    "index": 2,
+    "cross_home_applicability": "OTHER_HOME_PRESENT",
+    "status": "COMPLETE",
+    "physical_recovery_calls": 264,
+    "finished_wholly_in_other_home_claim_to_GPU": 94,
+    "unclassified_calls": 170,
+    "missing_native": 0,
+    "examples": [
+      {
+        "physical_forward_id": "draft-physical-65",
+        "B": 64,
+        "target_step": 21,
+        "claim_ns": 7241664662803679,
+        "draft_start_lower_ns": 7241664685265831,
+        "draft_end_upper_ns": 7241664709784985,
+        "target_start_lower_ns": 7241664747761174,
+        "draft_finish_before_target_ms": 37.976189,
+        "example_binding": {
+          "home": "A",
+          "prefix_version": 10,
+          "proposal_id": "",
+          "request_id": "sr-43f9b5ce7d32f7c6d51db9d5d71ee542a1e9db750c55a65de3b83755671d6495",
+          "round_id": 10,
+          "source": "rejection",
+          "task_kind": "normal_extension",
+          "token_step": 1,
+          "work_kind": "normal_extension"
+        },
+        "parent_and_READY": {
+          "status": "COMPLETE",
+          "parent_prefix_version": 9,
+          "parent_claim": {
+            "request_id": "sr-43f9b5ce7d32f7c6d51db9d5d71ee542a1e9db750c55a65de3b83755671d6495",
+            "prefix_version": 9,
+            "proposal_id": "sr-43f9b5ce7d32f7c6d51db9d5d71ee542a1e9db750c55a65de3b83755671d6495:prepost:9",
+            "claim_id": "ping-prepost-target-20-A:sr-43f9b5ce7d32f7c6d51db9d5d71ee542a1e9db750c55a65de3b83755671d6495:prepost:9",
+            "home_cohort": "A",
+            "claimed_ns": 7241664334439382
+          },
+          "parent_GPU_end_upper_ns": 7241664525096132,
+          "owner_feedback_ns": 7241664584583580,
+          "next_READY": {
+            "candidate_EOS": false,
+            "candidate_length": 3,
+            "category": "prepost_record",
+            "continuation_id": null,
+            "decision_version": 0,
+            "diagnostic_phase": "measurement",
+            "end_ns": 7241664765770544,
+            "event": "ready",
+            "home_cohort": "A",
+            "pid": 4698,
+            "prefix_version": 10,
+            "proposal_id": "sr-43f9b5ce7d32f7c6d51db9d5d71ee542a1e9db750c55a65de3b83755671d6495:prepost:10",
+            "ready_ns": 7241664765334723,
+            "remaining_output_budget": 483,
+            "request_id": "sr-43f9b5ce7d32f7c6d51db9d5d71ee542a1e9db750c55a65de3b83755671d6495",
+            "short_reason": null,
+            "start_ns": 7241664765770544,
+            "thread_id": 140189590316736,
+            "thread_name": "serial-eager-owner",
+            "timestamp_ns": 7241664765764911
+          }
+        }
+      },
+      {
+        "physical_forward_id": "draft-physical-119",
+        "B": 64,
+        "target_step": 39,
+        "claim_ns": 7241670584886800,
+        "draft_start_lower_ns": 7241670609445519,
+        "draft_end_upper_ns": 7241670633730298,
+        "target_start_lower_ns": 7241670696823674,
+        "draft_finish_before_target_ms": 63.093376,
+        "example_binding": {
+          "home": "A",
+          "prefix_version": 19,
+          "proposal_id": "",
+          "request_id": "sr-c6fd4c5bc623ca136c924dbe915c49c1837c97e1e42c6e9a1236021c9819828e",
+          "round_id": 19,
+          "source": "rejection",
+          "task_kind": "normal_extension",
+          "token_step": 1,
+          "work_kind": "normal_extension"
+        },
+        "parent_and_READY": {
+          "status": "COMPLETE",
+          "parent_prefix_version": 18,
+          "parent_claim": {
+            "request_id": "sr-c6fd4c5bc623ca136c924dbe915c49c1837c97e1e42c6e9a1236021c9819828e",
+            "prefix_version": 18,
+            "proposal_id": "sr-c6fd4c5bc623ca136c924dbe915c49c1837c97e1e42c6e9a1236021c9819828e:prepost:18",
+            "claim_id": "ping-prepost-target-38-A:sr-c6fd4c5bc623ca136c924dbe915c49c1837c97e1e42c6e9a1236021c9819828e:prepost:18",
+            "home_cohort": "A",
+            "claimed_ns": 7241670169243610
+          },
+          "parent_GPU_end_upper_ns": 7241670454705508,
+          "owner_feedback_ns": 7241670513940882,
+          "next_READY": {
+            "candidate_EOS": false,
+            "candidate_length": 3,
+            "category": "prepost_record",
+            "continuation_id": null,
+            "decision_version": 0,
+            "diagnostic_phase": "measurement",
+            "end_ns": 7241670685327518,
+            "event": "ready",
+            "home_cohort": "A",
+            "pid": 4698,
+            "prefix_version": 19,
+            "proposal_id": "sr-c6fd4c5bc623ca136c924dbe915c49c1837c97e1e42c6e9a1236021c9819828e:prepost:19",
+            "ready_ns": 7241670684800146,
+            "remaining_output_budget": 472,
+            "request_id": "sr-c6fd4c5bc623ca136c924dbe915c49c1837c97e1e42c6e9a1236021c9819828e",
+            "short_reason": null,
+            "start_ns": 7241670685327518,
+            "thread_id": 140189590316736,
+            "thread_name": "serial-eager-owner",
+            "timestamp_ns": 7241670685317936
+          }
+        }
+      }
+    ],
+    "example_rule": "median/P90 finish-to-Target gap",
+    "limit": "classification of individual physical calls, not whole K3 jobs; no earliest eligibility, no claim that all remainder is avoidable; host monotonic / calibrated native uncertainty bounds"
+  }
+]

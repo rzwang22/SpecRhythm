@@ -142,6 +142,7 @@ def execute(root, gate, mode, manifest_path, directory, *, probe=False, policy=N
         options = manifest["fixed_diagnostic"]["options"]
         env["SR_FIXED_TARGET_DIAGNOSTICS"] = options.get("target_diagnostics", "full")
         env["SR_K3_TARGET_DISPATCH"] = options.get("target_dispatch", "reference")
+        env["SR_K3_TARGET_CPU"] = options.get("target_cpu", "reference")
         env["SR_FIXED_DRAFT_AUDIT"] = options.get("draft_audit", "full")
         env["SR_FIXED_OBSERVATION"] = options.get("observation", "original-live")
         if "draft_dispatch" in options:

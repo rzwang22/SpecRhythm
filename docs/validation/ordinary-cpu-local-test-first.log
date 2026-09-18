@@ -1,0 +1,114 @@
+........................................................................ [  2%]
+........................................................................ [  4%]
+........................................................................ [  6%]
+........................................................................ [  9%]
+........................................................................ [ 11%]
+........................................................................ [ 13%]
+.......................................s..s........s..s................. [ 15%]
+........................................................................ [ 18%]
+........................................................................ [ 20%]
+........................................................................ [ 22%]
+........................................................................ [ 24%]
+........................................................................ [ 27%]
+....................................s................................... [ 29%]
+........................................................................ [ 31%]
+........................................................................ [ 34%]
+........................................................................ [ 36%]
+........................................................................ [ 38%]
+........................................................................ [ 40%]
+........................................................................ [ 43%]
+........................................................................ [ 45%]
+........................................................................ [ 47%]
+........................................................................ [ 49%]
+........................................................................ [ 52%]
+.............................s.........F................................ [ 54%]
+................................................................s....... [ 56%]
+........................................................................ [ 58%]
+........................................................................ [ 61%]
+........................................................................ [ 63%]
+........................................................................ [ 65%]
+........................................................................ [ 68%]
+........................................................................ [ 70%]
+........................................................................ [ 72%]
+........................................................................ [ 74%]
+........................................................................ [ 77%]
+........................................................................ [ 79%]
+........................................................................ [ 81%]
+........................................................................ [ 83%]
+........................................................................ [ 86%]
+........................................................................ [ 88%]
+........................................................................ [ 90%]
+........................................................................ [ 92%]
+........................................................................ [ 95%]
+........................................................................ [ 97%]
+........................................................................ [ 99%]
+........                                                                 [100%]
+=================================== FAILURES ===================================
+______ test_shared_shell_accepts_natural_teardown_and_removes_guard[dual] ______
+
+tmp_path = PosixPath('/private/var/folders/jb/xpmnnwl57xl5gl72ytngmsrh0000gn/T/pytest-of-wangrunze/pytest-1405/test_shared_shell_accepts_natu2')
+mode = 'dual'
+
+    @pytest.mark.parametrize('mode', ['target', 'serial', 'dual'])
+    def test_shared_shell_accepts_natural_teardown_and_removes_guard(tmp_path, mode):
+        bin_dir = tmp_path / 'bin'
+        bin_dir.mkdir()
+        fake = bin_dir / 'specrhythm'
+        fake.write_text(f'#!{sys.executable}\n' + coordinator(tmp_path, 'natural'))
+        fake.chmod(0o755)
+        draft = tmp_path / 'draft.py'
+        draft.write_text('''import signal, socket, sys, time
+    signal.signal(signal.SIGUSR1, lambda *_: sys.exit(0))
+    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    server.bind(sys.argv[1])
+    server.listen(1)
+    time.sleep(60)
+    ''')
+        environment = dict(os.environ, CPU_DRAFT_SCRIPT=str(draft), CPU_MODE=mode,
+                           CPU_RUN_ROOT=str(tmp_path / mode), PYTHONPATH=str(REPO / 'src'))
+        for key in ('SR_PHASE4B_CONFIG', 'SR_PHASE4B_ENVIRONMENT', 'SR_PHASE4B_TOPOLOGY',
+                    'SR_PHASE4B_PATCH_MANIFEST'):
+            environment[key] = 'cpu-fixture'
+        environment.update(
+            SR_PHASE4B_COMMIT=f'cpu{os.getpid():x}', PHASE4B_PYTHON=sys.executable,
+            PATH=os.pathsep.join([str(bin_dir), str(Path(sys.executable).parent), os.environ['PATH']]),
+            PHASE4B_NATURAL_TEARDOWN_GRACE_SECONDS='2', PHASE4B_CLEANUP_POLL_SECONDS='0.01',
+        )
+        script = '''set +e
+    set +u
+    set +o pipefail
+    trap - ERR
+    source integrations/vllm/phase4b_run_helpers.sh
+    source integrations/vllm/phase4b1_gate_helpers.sh
+    source integrations/vllm/phase4b2_run_helpers.sh
+    phase4b1_start_draft () {
+      python "$CPU_DRAFT_SCRIPT" "$3" >"$2/draft-service.log" 2>&1 &
+      PHASE4B1_DRAFT_PID="$!"
+      export CPU_DRAFT_PID="$!"
+      for attempt in {1..100}; do
+        if test -S "$3"; then return 0; fi
+        sleep 0.01
+      done
+      return 124
+    }
+    phase4b2_run_mode "$CPU_MODE" "$CPU_RUN_ROOT" workload 100 reference
+    RC="$?"
+    echo "CPU_RUN_RC=$RC"
+    echo "INTERACTIVE_SHELL_SURVIVED"
+    '''
+        try:
+            result = subprocess.run(
+                ['bash', '-e', '-u', '-o', 'pipefail', '-c', script], cwd=REPO, env=environment,
+                capture_output=True, text=True, timeout=15,
+            )
+            assert result.returncode == 0, result.stderr
+            assert 'CPU_RUN_RC=0' in result.stdout, result.stdout + result.stderr
+            assert 'INTERACTIVE_SHELL_SURVIVED' in result.stdout
+            assert 'cleanup failed: lifecycle guard remains' not in result.stderr
+            report = json.loads((tmp_path / mode / 'process-lifecycle.json').read_text())
+>           assert report['post_coordinator_descendants_observed'] is True
+E           assert False is True
+
+tests/test_phase4_natural_teardown.py:272: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_phase4_natural_teardown.py::test_shared_shell_accepts_natural_teardown_and_removes_guard[dual]

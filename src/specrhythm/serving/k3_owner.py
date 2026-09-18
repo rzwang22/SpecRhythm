@@ -21,10 +21,11 @@ class K3Owner(PingPrePostOwner):
     def _dispatch(self, operation, payload):
         if operation == "pp_admit_command":
             from specrhythm.serving.common import require
-            from specrhythm.serving.dual_batch import pack
+            from specrhythm.serving.shared_control import pack, validate_mode
 
-            require(not self.machine.geometry["eager"]
-                    and not self.machine.geometry["serial_idle_gate"],
+            mode = "serial-k3" if self.machine.geometry["serial_idle_gate"] else "pingpong-k3"
+            validate_mode(mode)
+            require(not self.machine.geometry["eager"],
                     "dual-batch requires ordinary pingpong-k3")
             return pack(self.machine.admit(payload))
         if operation == "k3_idle":

@@ -845,3 +845,12 @@ readback, comparison and single-package export validate and reconstruct the same
 rows. No live state, GPU work, control switch, logging policy or measurement
 boundary changes. A missing shard is missing evidence, never zero observations.
 See [failure analysis](validation/k3-report-size-fix.md).
+
+
+## Ordinary CPU comparison after measured dual-batch (2026-09-18)
+
+See [ordinary shared controls/full audit design](validation/ordinary-cpu.md).
+P0 preserves measured compact PingPong, P1 changes only the optional full block
+ownership check implementation, S1 applies the same controls/checks to A128 Serial
+with its idle gate. All live KV and protocol boundaries remain. The shared scoped
+reader expires on each engine call/exception; no live-prefix or KV memoization.

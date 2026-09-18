@@ -1,5 +1,34 @@
 # SpecRhythm project status
 
+### PR #5 — ordinary shared controls and full Target block audit (2026-09-18)
+
+- Historical execution `4878f8beb8a36713e35ef3e0a1a6cfe1470967b5` now has real
+  ordinary reference/new GPU evidence: 318.47 vs419.50 tok/s mean across two windows,
+  effective execution/measurement/cleanup PASS; NOT_RUN Target-only equivalence.
+  Original result bytes/statuses retained. New work starts at `ba9bafa4b682eb0a1649388088dd44aaacc6128e`.
+- Shared call-scoped immutable controls explicitly support ordinary Serial via
+  `shared-command`, while the measured dual-batch guard and rollback remain.
+  Serial keeps A128, idle gate and authoritative claim; PingPong remains A64/B64.
+- One optional CPU change: `target_cpu=block-sets` batches ownership validation per
+  KV group. Both full live snapshots/audits, every block type/duplicate/conflict,
+  initial-prefix ownership, state/frontier and audit counters remain. Draft and
+  inference/K3/READY behavior unchanged. No eager integration.
+- Derived raw association: 93/261 and94/264 recovery-containing physical calls
+  wholly finished while another home's Target was in claim→GPU CPU preparation.
+  Remaining causes are not inferred. No new timing instrumentation or profiling grid.
+- Same frozen SHA comparison P0,P1,S1,S1,P1,P0; three capacities then bounded
+  same-mode semantics. Six30s windows, no Target-only prerequisite. Summed-window
+  throughput plus TPOT/natural completions, exact geometry, native overlap and
+  conservative recovery classification share one verified-copy/fallback archive.
+- Configured A100 SSH connection reset before login: no GPU job run. New GPU
+  capacity/semantics/cleanup/overlap/performance PENDING; no predicted speedup.
+- [Evidence/design](validation/ordinary-cpu.md), [runbook](ordinary-cpu-runbook.md).
+  Local full Python3.12:3168 passed/7 skipped/1 unchanged natural-teardown test
+  failure (expected a still-live child; observed cleanup PASS with no child/signals).
+  Isolated teardown16 passed/1 skipped does not establish a repair. Related final
+  Python3.12:129 passed; Python3.9:199 passed. No assertions or budgets widened.
+  CI and immutable execution pin are recorded at final delivery.
+
 ### PR #5 — ordinary double-batch control path (2026-09-18)
 
 - Continues from `2e43b8b39f889470a3d3ebd35f34ceb7b429c6c8`; existing commits,

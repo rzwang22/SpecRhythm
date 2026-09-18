@@ -57,6 +57,7 @@ def metadata(options):
     selected = options.get("target_diagnostics", "full")
     return dict(
         **coverage(selected),
+        **({"target_cpu": options["target_cpu"]} if "target_cpu" in options else {}),
         **({"target_dispatch": options["target_dispatch"]}
            if "target_dispatch" in options else {}),
         capture_function="specrhythm.phase4.vllm_diagnostics.capture_target_forward",

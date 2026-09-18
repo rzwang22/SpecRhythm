@@ -13,7 +13,7 @@ class PingPrePostController:
         self.admitted = 0
 
     def select(self, clock, client):
-        from specrhythm.serving.dual_batch import enabled, unpack
+        from specrhythm.serving.shared_control import enabled, unpack
 
         available = time.monotonic_ns()
         value = client.call(

@@ -5,10 +5,10 @@ import time
 
 from specrhythm.phase4.serial import Proposal, token_prefix_hash
 from specrhythm.serving.common import require
-from specrhythm.serving.dual_batch import control_transaction, enabled
 from specrhythm.serving.ping_prepost import PROTOCOL
 from specrhythm.serving.prepost_proposer import PrePostProposer
 from specrhythm.serving.s2_pool import control
+from specrhythm.serving.shared_control import control_transaction, enabled
 
 
 class FeedbackClient:

@@ -3,7 +3,7 @@
 import os
 
 ENV = "SR_K3_TARGET_DISPATCH"
-POLICIES = ("reference", "encode-once", "dual-batch")
+POLICIES = ("reference", "encode-once", "dual-batch", "shared-command")
 
 
 def policy():
@@ -20,6 +20,12 @@ def qualification_errors(value, runtime, options):
     expected = options["target_dispatch"]
     if runtime.get("diagnostic_configuration", {}).get("target_dispatch") != expected:
         errors.append("declared Target dispatch policy differs from runtime")
+    if "target_cpu" in options:
+        if runtime.get("diagnostic_configuration", {}).get("target_cpu") != options["target_cpu"]:
+            errors.append("declared Target CPU policy differs from runtime")
+        audit = runtime.get("target_pool_final", {})
+        if audit.get("ownership_check") != options["target_cpu"]:
+            errors.append("Target full audit implementation evidence missing/different")
     cycle = value.get("cycle_accounting") or {}
     errors.extend(cycle.get("association_errors", []))
     if not cycle.get("matched_step_summary", {}).get("complete") \
