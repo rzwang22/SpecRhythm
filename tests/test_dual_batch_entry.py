@@ -164,3 +164,16 @@ def test_secondary_report_failure_cannot_replace_execution_code(tmp_path, monkey
     outcome = read_json(directory / "runner-outcome.json")
     assert outcome["first_exit_code"] == 23
     assert "injected report disk error" in outcome["secondary_report_errors"][0]["error"]
+
+
+def test_missing_runner_comparison_cannot_be_replaced_by_empty_mode_success(tmp_path):
+    directory = tmp_path / "delivery"
+    directory.mkdir()
+    (directory / "dual-batch-plan.json").write_text('{"order": ["reference", "dual-batch"]}')
+    archive = tmp_path / "delivery.tar.gz"
+    export(directory, archive, first_code=41, modes=())
+    with tarfile.open(archive) as t:
+        inv = json.load(t.extractfile("inventory.json"))
+        value = json.load(t.extractfile(inv["logical_paths"]["comparison.json"]))
+        assert inv["first_exit_code"] == 41
+        assert value["valid"] is False and "missing" in value["comparison_error"]

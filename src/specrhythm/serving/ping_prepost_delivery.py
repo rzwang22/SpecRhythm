@@ -351,7 +351,11 @@ def export(directory, output, *, first_code=0, stage="complete", modes=MODES):
     compare_path = directory / "comparison.json"
     if not compare_path.exists():
         try:
-            value = comparison(directory, modes=modes)
+            if (directory / "dual-batch-plan.json").exists():
+                value = dict(valid=False, status="MISSING_OR_INVALID",
+                             comparison_error="double-batch runner comparison missing")
+            else:
+                value = comparison(directory, modes=modes)
         except (OSError, ValueError, KeyError) as error:
             value = dict(valid=False, comparison_error=str(error), status="MISSING_OR_INVALID")
         write(value, compare_path)
