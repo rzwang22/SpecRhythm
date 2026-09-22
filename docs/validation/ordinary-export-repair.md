@@ -75,3 +75,10 @@ required-file absence, old-budget compatibility, copy write/digest failures, ori
 exit23 preservation, interrupted archive writing, one upload, and read-only sources.
 The real CLI parser/checks/export/copy also run with only checkout identity substituted.
 These are CPU filesystem tests, not proof of the remote DPC reexport result.
+
+Related Python3.9 report/local-delivery regressions:88 passed; final export and
+fixed-entry set:28 passed. Python3.12 export-specific set:23 passed, plus five
+fixed-entry cases. Ruff, compileall, Python3.9 grammar and Bash/diff checks pass.
+The local auxiliary Python3.11 environment has no pytest; its contract CI installs
+the declared test dependencies separately. Full-suite and final CI results are
+reported at delivery without changing historical failure records.

@@ -11,7 +11,9 @@
 - Export-only entry preserves original source/results and rc41, creates a new local
   archive, verifies DPC copy or local fallback, prints one upload path. No GPU rerun.
 - [Repair evidence](validation/ordinary-export-repair.md), [runbook](ordinary-cpu-runbook.md).
-  Actual remote reexport remains PENDING until its new package returns.
+  Repair SHA `f83edb43d22dcbb605468b8518bcca7c1bc36f45`; fixed entry
+  `0bb3f8df1f08b7858c5b3f9851cbd2fb591198a2`. Actual remote reexport remains
+  PENDING until its new package returns. The original GPU source stays9443282.
 
 Execution pin for the ordinary CPU comparison: `944328263b02a915f397bcb03c8c743c71e9a56c`
 (`scripts/run_ordinary_cpu_pinned.sh`). GPU results remain PENDING.

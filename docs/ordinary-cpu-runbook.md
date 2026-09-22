@@ -96,3 +96,37 @@ previous exit41, all errors/counts and fresh archive verification. DPC copy fail
 falls back to a new local package. Upload only the one printed UPLOAD ONLY path.
 See [failure and regression evidence](validation/ordinary-export-repair.md).
 The delivery commit records the immutable reexport entry and foreground command.
+
+
+Repair/exporter SHA: `f83edb43d22dcbb605468b8518bcca7c1bc36f45`.
+Fixed entry SHA: `0bb3f8df1f08b7858c5b3f9851cbd2fb591198a2`.
+The original GPU source remains `944328263b02a915f397bcb03c8c743c71e9a56c`.
+Run this foreground command on the existing A100 host; it performs only reexport:
+
+```bash
+if bash -s <<'SR_REEXPORT_FOREGROUND'
+set -Eeuo pipefail
+REPO="${SR_K3_REPO:-/root/autodl-tmp/src/SpecRhythm}"
+git -C "$REPO" fetch origin codex/rolling-eager-v0.1
+ENTRY=$(mktemp /tmp/specrhythm-ordinary-reexport.XXXXXX.sh)
+git -C "$REPO" show 0bb3f8df1f08b7858c5b3f9851cbd2fb591198a2:scripts/reexport_ordinary_cpu_pinned.sh > "$ENTRY"
+bash "$ENTRY"
+SR_REEXPORT_FOREGROUND
+then
+  printf 'Reexport complete. Upload the single indicated archive.\n'
+else
+  rc=$?
+  printf 'Reexport stopped (rc=%s); source retained; terminal remains open.\n' "$rc" >&2
+fi
+```
+
+The pinned script accepts one optional source-directory argument, or
+`SR_ORDINARY_CPU_SOURCE`, solely for an explicitly moved retained source. The source
+execution must still match. `SR_FIXED_PYTHON`, `SR_K3_REPO`, `SR_K3_LOCAL_BASE` and
+`SR_PING_RESULTS` retain the established overrides. A new worktree is created at
+the exporter SHA; mutable output remains local, and old source files are only read.
+No source directory / wrong SHA means a preflight failure, not an automatic GPU rerun.
+
+For a later *new* GPU experiment, `scripts/run_ordinary_cpu_pinned.sh` at the same
+fixed entry commit now pins the repaired execution SHA above. That command still
+runs the original P0/P1/S1 protocol; it is not needed to repair this completed run.
