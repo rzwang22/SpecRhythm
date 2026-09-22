@@ -57,7 +57,7 @@ S1/P1 for same active resources but different batching geometry. Do not attribut
 all of S1/P1 to overlap. No performance threshold is predeclared. GPU execution,
 cleanup, calibrated overlap and performance are PENDING until this entry is run.
 
-## Foreground command
+## Historical GPU entry (superseded for export)
 
 Execution SHA: `944328263b02a915f397bcb03c8c743c71e9a56c`.
 The fixed entry is `scripts/run_ordinary_cpu_pinned.sh`; its `FINAL_SHA` is this exact commit. Always read the
@@ -71,25 +71,28 @@ It pins execution `944328263b02a915f397bcb03c8c743c71e9a56c` (including the runn
 shared controls, audit option, qualification and exporter). This is the single
 foreground command for the existing A100 environment:
 
-```bash
-if bash -s <<'SR_CPU_FOREGROUND'
-set -Eeuo pipefail
-REPO="${SR_K3_REPO:-/root/autodl-tmp/src/SpecRhythm}"
-git -C "$REPO" fetch origin codex/rolling-eager-v0.1
-ENTRY=$(mktemp /tmp/specrhythm-ordinary-cpu-entry.XXXXXX.sh)
-git -C "$REPO" show ea4c825372ad01b5cf68847d8db3182c107f0f92:scripts/run_ordinary_cpu_pinned.sh > "$ENTRY"
-bash "$ENTRY"
-SR_CPU_FOREGROUND
-then
-  printf 'Completed. Upload the single UPLOAD ONLY archive.\n'
-else
-  rc=$?
-  printf 'Stopped (rc=%s); local evidence retained; terminal remains open.\n' "$rc" >&2
-fi
-```
+The command at this historical pin uses the old512-file export cap. Do not
+rerun its GPU experiment to repair the delivered package. Use the reexport entry
+below; the source execution remains this historical SHA.
+
 
 The launcher was executed under CPU checkout/GPU substitutes for exit0 and exit23;
 it clears stale controls, checks this exact commit, creates one worktree and emits
 one upload path through the existing local wrapper. This validates the entry
 contract, not A100 execution or DPC consistency. The full test suite's earlier
 natural-teardown observation failure is retained in the validation record.
+
+## Reexport the completed six-window run
+
+The export-only entry added by this repair reads:
+`/tmp/specrhythm-runs/a100-ordinary-cpu-20260919T124903Z-391/pingpong-k3-delivery-a100-ordinary-cpu-20260919T124903Z-391`.
+Override the source explicitly if the retained directory was moved; do not pass the
+old tar archive. Missing raw files remain a failure. No capacity, smoke or GPU
+performance stage is restarted. The local run and old package are not overwritten.
+
+The13-run declaration now selects896 logical/unique files (64 +13×64); byte budgets
+remain unchanged. The new archive records both source execution and exporter SHA,
+previous exit41, all errors/counts and fresh archive verification. DPC copy failure
+falls back to a new local package. Upload only the one printed UPLOAD ONLY path.
+See [failure and regression evidence](validation/ordinary-export-repair.md).
+The delivery commit records the immutable reexport entry and foreground command.

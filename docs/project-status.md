@@ -1,5 +1,18 @@
 # SpecRhythm project status
 
+
+### PR #5 — ordinary CPU archive count budget repair (2026-09-22)
+
+- Source execution9443282: all six windows and per-point diagnostics passed; bounded
+  smoke passed. Export returned41 because545 logical files exceeded the512 limit;
+  33 omitted, six required entries absent from the tar. Old status remains INCOMPLETE.
+- Exact13-run ordinary CPU plan now selects a bounded896-file budget; old profiles
+  and byte limits unchanged. Invalid declarations/required evidence still fail.
+- Export-only entry preserves original source/results and rc41, creates a new local
+  archive, verifies DPC copy or local fallback, prints one upload path. No GPU rerun.
+- [Repair evidence](validation/ordinary-export-repair.md), [runbook](ordinary-cpu-runbook.md).
+  Actual remote reexport remains PENDING until its new package returns.
+
 Execution pin for the ordinary CPU comparison: `944328263b02a915f397bcb03c8c743c71e9a56c`
 (`scripts/run_ordinary_cpu_pinned.sh`). GPU results remain PENDING.
 

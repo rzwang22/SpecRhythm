@@ -232,6 +232,10 @@ def run(repo, commit, *, local_base, persistent, tag, minimum_free_bytes=8 * 102
             modes=modes,
         )
         export_code = result["export_validation_exit_code"]
+        from specrhythm.serving.delivery_budget import export_summary
+
+        state["export_summary"] = export_summary(result)
+        print(json.dumps(state["export_summary"]), flush=True)
         verified = validate_archive(archive)
         state["local_archive"] = dict(path=str(archive), **verified)
         upload = archive

@@ -328,8 +328,11 @@ def comparison(directory, *, modes=MODES):
     )
 
 
-def export(directory, output, *, first_code=0, stage="complete", modes=MODES):
+def export(directory, output, *, first_code=0, stage="complete", modes=MODES,
+           source_read_only=False, provenance=None):
     if (directory / "experiment-plan.json").exists():
+        require(not source_read_only and provenance is None,
+                "read-only reexport only supports ordinary CPU delivery")
         from specrhythm.serving.k3_repeat_export import export_repeats
 
         return export_repeats(directory, output, first_code=first_code, stage=stage, modes=modes)
@@ -349,8 +352,17 @@ def export(directory, output, *, first_code=0, stage="complete", modes=MODES):
     except (OSError, ValueError, KeyError, TypeError) as error:
         file_limit, total_limit = FILE_LIMIT, TOTAL_LIMIT
         limit_error = "invalid export capacity declaration: " + str(error)
+    from specrhythm.serving.delivery_budget import count_budget
+
+    count_error = None
+    try:
+        counts = count_budget(directory, logical=LOGICAL_LIMIT, unique=FILE_COUNT)
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        counts = dict(profile="invalid-plan-fallback", logical_files=LOGICAL_LIMIT,
+                      unique_files=FILE_COUNT)
+        count_error = "invalid export file-count declaration: " + str(error)
     compare_path = directory / "comparison.json"
-    if not compare_path.exists():
+    if not compare_path.exists() and not source_read_only:
         try:
             if (directory / "dual-batch-plan.json").exists():
                 value = dict(valid=False, status="MISSING_OR_INVALID",
@@ -372,11 +384,11 @@ def export(directory, output, *, first_code=0, stage="complete", modes=MODES):
     )
     inventory, objects, emitted, total, failures = [], {}, set(), 0, []
     checked_logging = set()
-    evidence_errors = [e for e in (limit_error, policy_error) if e]
+    evidence_errors = [e for e in (limit_error, count_error, policy_error) if e]
     expected = ["comparison.json"] if exploration else ["joint/result.json", "comparison.json"]
     if exploration:
         expected.extend(["validation-plan.json", "k3-capacity-contract.json"])
-    if (directory / "dual-batch-plan.json").exists():
+    if (directory / "dual-batch-plan.json").exists() and count_error is None:
         from specrhythm.serving.dual_batch_run import MODE, ORDER
 
         expected.extend(["dual-batch-plan.json", "smoke-comparison.json", "runner-outcome.json"])
@@ -456,8 +468,12 @@ def export(directory, output, *, first_code=0, stage="complete", modes=MODES):
                 failures.append(name)
                 continue
             row["source_bytes"] = before.st_size
-            if index >= LOGICAL_LIMIT or before.st_size > file_limit:
+            if index >= counts["logical_files"] or before.st_size > file_limit:
                 row["status"] = "OMITTED_LIMIT"
+                row["limit"] = (
+                    dict(kind="logical_files", maximum=counts["logical_files"], observed=index + 1)
+                    if index >= counts["logical_files"] else
+                    dict(kind="file_bytes", maximum=file_limit, observed=before.st_size))
                 failures.append(name)
                 continue
             try:
@@ -547,7 +563,8 @@ def export(directory, output, *, first_code=0, stage="complete", modes=MODES):
                 digest = hashlib.sha256(data).hexdigest()
                 object_path = "objects/" + digest + ".json"
                 if digest not in emitted:
-                    require(len(emitted) < FILE_COUNT, "unique payload file budget exceeded")
+                    require(len(emitted) < counts["unique_files"],
+                            "unique payload file budget exceeded")
                     if total + len(data) > total_limit:
                         raise ValueError("unique payload total limit exceeded")
                     add(object_path, data)
@@ -591,8 +608,11 @@ def export(directory, output, *, first_code=0, stage="complete", modes=MODES):
             first_exit_code=first_code,
             failed_stage=stage,
             limits=dict(file_bytes=file_limit, unique_payload_bytes=total_limit,
-                        files=FILE_COUNT, file_count_scope="unique payloads",
-                        unique_files=FILE_COUNT, logical_files=LOGICAL_LIMIT),
+                        files=counts["unique_files"], file_count_scope="unique payloads",
+                        **counts),
+            observed_counts=dict(candidate_logical_files=len(candidates),
+                                 included_logical_files=len(objects), unique_files=len(emitted)),
+            **({"reexport_provenance": provenance} if provenance is not None else {}),
             unique_payload_bytes=total,
             source_results_unchanged=True,
             missing=sum(r["status"] == "MISSING" for r in inventory),
