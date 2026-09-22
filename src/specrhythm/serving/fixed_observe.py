@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import functools
 import os
+import threading
 import time
 from collections import defaultdict
 from contextlib import contextmanager
 
+from specrhythm.continuation.trace import TRACE, references
 from specrhythm.serving.common import require
 
 
@@ -22,7 +24,9 @@ class Timers:
             yield
         finally:
             self.rows.append(
-                dict(category=category, start_ns=start, end_ns=time.monotonic_ns(), **fields)
+                dict(category=category, start_ns=start, end_ns=time.monotonic_ns(),
+                     **({"pid": os.getpid(), "thread_id": threading.get_ident()}
+                        if TRACE.enabled else {}), **fields)
             )
 
     def report(self):
@@ -31,6 +35,7 @@ class Timers:
             counts[r["category"]]["count"] += 1
             counts[r["category"]]["inclusive_host_ms"] += (r["end_ns"] - r["start_ns"]) / 1e6
         return {
+            "causal_timeline": TRACE.report(),
             "aggregate": dict(counts),
             "intervals": list(self.rows),
             "aggregation": "inclusive/nested categories; do not add or infer critical path",
@@ -50,8 +55,40 @@ def wrap(owner, name, category):
 
     @functools.wraps(original)
     def measured(*args, **kwargs):
+        if category == "log_fsync":
+            from specrhythm.io_context import sync_attribution
+
+            attribution, started = sync_attribution(), time.monotonic_ns()
+            try:
+                with TIMERS.span(category, **attribution):
+                    return original(*args, **kwargs)
+            finally:
+                from specrhythm.serving.fixed_logging import _CURRENT
+
+                if (_CURRENT is not None and _CURRENT.pid == os.getpid()
+                        and _CURRENT.mode == "deferred-window"):
+                    _CURRENT.record_fsync(attribution, started, time.monotonic_ns())
+        if TRACE.enabled and category == "ipc":
+            operation = args[1] if len(args) > 1 else kwargs["operation"]
+            payload = args[2] if len(args) > 2 else kwargs["payload"]
+            with TRACE.span("transport_rpc", operation=operation, requests=references(
+                    payload.get("requests", payload.get("synchronizations", ())))):
+                with TIMERS.span(category):
+                    result = original(*args, **kwargs)
+                if isinstance(result, dict) and all(type(result.get(k)) is int for k in (
+                        "transport_start_ns", "transport_end_ns")):
+                    TRACE.event("transport_exchange", start_ns=result["transport_start_ns"],
+                                end_ns=result["transport_end_ns"],
+                                service_receive_ns=result.get("service_receive_ns"),
+                                service_send_ns=result.get("service_send_ns"))
+                return result
         with TIMERS.span(category):
-            return original(*args, **kwargs)
+            result = original(*args, **kwargs)
+        if category == "control_json_read":
+            TRACE.follow_control(result)
+        elif category == "control_json_write":
+            TRACE.follow_control(args[1] if len(args) > 1 else kwargs.get("value"))
+        return result
 
     measured._fixed_observer = True
     setattr(owner, name, measured)
@@ -68,7 +105,7 @@ def install_host_observation(role=None):
     import json
     import subprocess
 
-    from specrhythm.phase4 import dual_service, transport
+    from specrhythm.phase4 import dual_service, transport, vllm_diagnostics
     from specrhythm.phase4.dual_uuid import DualVerificationUuidQuery
     from specrhythm.phase4.vllm_draft_worker import VllmDraftWorker
     from specrhythm.serving import s2_pool
@@ -80,6 +117,9 @@ def install_host_observation(role=None):
     wrap(os, "fsync", "log_fsync")
     wrap(transport.UnixDraftClient, "call", "ipc")
     wrap(dual_service.DualDraftClient, "call", "ipc")
+    wrap(vllm_diagnostics, "capture_target_forward", "target_forward_diagnostics")
+    wrap(vllm_diagnostics, "capture_target_numerics", "target_optional_logits_cpu_logsoftmax")
+    wrap(vllm_diagnostics, "capture_target_numerical_rows", "target_optional_topk_argmax")
     wrap(s2_pool.ResidentPoolAudit, "check", "resident_block_audit")
     wrap(VllmDraftWorker, "fence", "draft_required_fence")
     # Wrap aliases in their defining modules before consumers import them.
@@ -147,6 +187,8 @@ class DeviceTimeline:
     def before(self, _module, _args):
         start = self.torch.cuda.Event(enable_timing=True)
         meta = self.metadata()
+        if TRACE.enabled:
+            meta["causal_context"] = dict(getattr(TRACE.local, "fields", {}))
         host = time.monotonic_ns()
         start.record()
         self.current = (start, host, meta)
@@ -163,13 +205,18 @@ class DeviceTimeline:
         from specrhythm.serving.fixed_timing import project_anchor
 
         rows = []
-        for start, end, host, launch_end, meta in self.pending:
+        for index, (start, end, host, launch_end, meta) in enumerate(self.pending):
             require(end.query(), "final fence did not complete diagnostic CUDA events")
             a, b = self.anchor.elapsed_time(start) * 1e6, self.anchor.elapsed_time(end) * 1e6
             require(b > a, "nonpositive diagnostic GPU event duration")
             rows.append(
                 {
                     **meta,
+                    # Run + producer identity + native index identifies every physical
+                    # call, including setup/refill, without extra GPU or host work.
+                    "native_forward_id": "native-index:" + str(index),
+                    "physical_forward_id": meta.get("causal_context", {}).get(
+                        "physical_forward_id", "native-index:" + str(index)),
                     "host_start_ns": host,
                     "host_launch_end_ns": launch_end,
                     "gpu_event_ms": (b - a) / 1e6,
@@ -200,9 +247,29 @@ def target_startup(worker):
 
     current("target-rank-" + str(snapshot["global_rank"]))
     runner = worker.model_runner
+    # Host-only bounded spans; no tensor copies, synchronization or replacement
+    # of the pinned worker's state/input preparation. Absent hooks stay absent.
+    for method in ("_update_states", "_prepare_inputs"):
+        if hasattr(runner, method):
+            original = getattr(runner, method)
+            if not getattr(original, "_dispatch_observer", False):
+                def observed(*args, _original=original, _method=method, **kwargs):
+                    with TRACE.span("target_worker" + _method):
+                        return _original(*args, **kwargs)
+                observed._dispatch_observer = True
+                setattr(runner, method, observed)
     from specrhythm.serving.fixed_identity import install
 
     install(runner.drafter, "identity")
+    from specrhythm.phase4.target_profile import initialize
+
+    initialize(runner)
+    if os.environ["SR_S2_MODE"] in ("serial-prepost3", "serial-eager-prepost3",
+                          "pingpong-prepost3", "pingpong-eager-prepost3",
+                          "serial-k3", "serial-eager-k3", "pingpong-k3", "pingpong-eager-k3"):
+        from specrhythm.serving.prepost_target import install as install_prepost
+
+        install_prepost(runner)
     import torch
 
     def metadata():
@@ -220,6 +287,9 @@ def target_startup(worker):
             },
             "role": "target",
             "dtype": str(worker.vllm_config.model_config.dtype),
+            "enforce_eager": getattr(worker.vllm_config.model_config, "enforce_eager", None),
+            "cudagraph_mode": str(getattr(getattr(worker.vllm_config, "compilation_config", None),
+                                          "cudagraph_mode", "NOT_RECORDED")),
             "attention_backends": snapshot["attention_backends"],
         },
     )
@@ -231,14 +301,29 @@ def target_report(worker):
     from specrhythm.serving.fixed_logging import current
 
     logs = current()
+    from specrhythm.phase4.target_profile import coverage, profile
+
+    selected_profile = profile()
     # The coordinator has already performed its normal final target_fence RPC.
     return {
+        "diagnostic_configuration": {
+            **coverage(selected_profile),
+            "target_diagnostics_enabled": bool(os.environ.get("SR_PHASE4_TARGET_DIAGNOSTICS")),
+            "target_diagnostics_path": os.environ.get("SR_PHASE4_TARGET_DIAGNOSTICS"),
+            "numerical_diagnostic_plan": os.environ.get("SR_PHASE4_NUMERICAL_DIAGNOSTIC_PLAN"),
+            "capture_function": "capture_target_forward",
+            "logits_algorithm": ("unchanged float CPU / log_softmax / top10 / argmax"
+                                 if selected_profile == "full" else
+                                 "NOT_COLLECTED_BY_PROFILE"),
+        },
         "identity_matching": report(worker.model_runner.drafter.identity),
         "device": worker.fixed_timeline.report(),
         "diagnostic_logging": logs.snapshot() if logs else None,
         "host": TIMERS.report(),
         "rounds": ROUNDS,
         "target_rows": TARGET_ROWS,
+        **({"prepost_samples": worker.model_runner.prepost_samples.report()}
+           if hasattr(worker.model_runner, "prepost_samples") else {}),
     }
 
 
@@ -275,10 +360,10 @@ def capture(row):
                 }
             )
     if schema == "specrhythm.phase4-target-forward-diagnostic.v1":
-        from specrhythm.phase4.vllm_diagnostics import validate_target_diagnostic
+        from specrhythm.phase4.vllm_diagnostics import validate_runtime_target_diagnostic
 
         with TIMERS.span("target_diagnostic_contract_scan"):
-            errors = validate_target_diagnostic(row)
+            errors = validate_runtime_target_diagnostic(row)
         TARGET_ROWS.append(
             {
                 k: row.get(k)
@@ -296,6 +381,8 @@ def capture(row):
                 )
             }
             | {
+                **({k: row[k] for k in ("target_diagnostic_profile", "numerical_forensics")}
+                   if "target_diagnostic_profile" in row else {}),
                 "context_length": len(row["committed_prefix_token_ids"]),
                 "structural_errors": errors,
             }

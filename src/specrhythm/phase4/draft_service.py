@@ -526,6 +526,7 @@ class DraftUnixServer:
 
     def _handle(self, connection: socket.socket) -> None:
         received_ns = time.monotonic_ns()
+        response_attempted = False
         try:
             request, request_bytes = receive_message(connection)
             if request.get("protocol_version") != PROTOCOL_VERSION:
@@ -543,6 +544,7 @@ class DraftUnixServer:
                 "ok": True,
                 "result": result,
             }
+            response_attempted = True
             response_bytes = send_message(connection, response)
             self.event_log.append(
                 {
@@ -556,15 +558,18 @@ class DraftUnixServer:
                 }
             )
         except Exception as error:
-            send_message(
-                connection,
-                {
-                    "protocol_version": PROTOCOL_VERSION,
-                    "ok": False,
-                    "error": f"{type(error).__name__}: {error}",
-                    "result": {},
-                },
-            )
+            if response_attempted or isinstance(error, (ConnectionError, EOFError)):
+                raise  # The connection may be broken; never send a second response.
+            try:
+                send_message(connection, {
+                    "protocol_version": PROTOCOL_VERSION, "ok": False,
+                    "error": f"{type(error).__name__}: {error}", "result": {},
+                    **{key: getattr(error, key) for key in
+                       ("deadline_context", "report_publication_context") if hasattr(error, key)},
+                })
+            except Exception as secondary:
+                error.response_error = f"{type(secondary).__name__}: {secondary}"
+                raise error from secondary
 
     def _dispatch(self, operation: str, payload: Mapping[str, Any]) -> dict[str, Any]:
         if operation == "initialize":

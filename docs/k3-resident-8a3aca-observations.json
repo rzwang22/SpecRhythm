@@ -1,0 +1,344 @@
+{
+  "source_archive": "pingpong-k3-delivery-20260914T082831Z-1891.tar.gz",
+  "archive_sha256": "cc600c81dde2fecad8c5358e30253911fa763931e06ef07cc8213063b70beeaa",
+  "execution_sha": "8a3aca007fb60f9f67d1dcb7bedb5f8b78b8602e",
+  "derivation": "Read-only association previously verified against 145 logical objects; new independent summary, original reports unchanged.",
+  "scope": "measurement window; exact native joins recomputed; no inferred missing subphase times",
+  "points": {
+    "serial-k3": {
+      "window_average_cadence_ms": 346.309747137931,
+      "B": {
+        "8": 87
+      },
+      "P": {
+        "3": 695,
+        "1": 1
+      },
+      "hashes": 0,
+      "snapshots": 174,
+      "scheduler_phases_mean_ms": {
+        "target_pool_pre_schedule": 10.629747068965518,
+        "target_resident_stock_schedule": 36.63014372413793,
+        "target_pool_post_schedule": 10.22807448275862
+      },
+      "outside_scheduler_mean_ms": 21.93177914942529,
+      "other_request_overlap_steps": 0,
+      "parent_eager_overlap_steps": 0
+    },
+    "pingpong-k3": {
+      "window_average_cadence_ms": 242.29389449193548,
+      "B": {
+        "8": 124
+      },
+      "P": {
+        "3": 990,
+        "1": 1,
+        "2": 1
+      },
+      "hashes": 0,
+      "snapshots": 248,
+      "scheduler_phases_mean_ms": {
+        "target_pool_pre_schedule": 10.34824820967742,
+        "target_resident_stock_schedule": 34.59876706451613,
+        "target_pool_post_schedule": 9.51963693548387
+      },
+      "outside_scheduler_mean_ms": 21.640585483870968,
+      "other_request_overlap_steps": 7,
+      "parent_eager_overlap_steps": 0
+    },
+    "pingpong-eager-k3": {
+      "window_average_cadence_ms": 229.48846355725192,
+      "B": {
+        "8": 131
+      },
+      "P": {
+        "3": 1046,
+        "1": 1,
+        "2": 1
+      },
+      "hashes": 0,
+      "snapshots": 262,
+      "scheduler_phases_mean_ms": {
+        "target_pool_pre_schedule": 10.002381916030535,
+        "target_resident_stock_schedule": 34.500933114503816,
+        "target_pool_post_schedule": 9.559647740458015
+      },
+      "outside_scheduler_mean_ms": 19.891439847328243,
+      "other_request_overlap_steps": 1,
+      "parent_eager_overlap_steps": 131
+    }
+  },
+  "cycles": {
+    "serial-k3": [
+      {
+        "parent_step": 4,
+        "parent_in_window": true,
+        "base_ns": 7765869625621875,
+        "home": "A",
+        "parent_Target_ms": [
+          0.0,
+          77.072132
+        ],
+        "feedback_ms": 114.971353,
+        "child_claim_ms": 261.546547,
+        "child_Target_ms": [
+          335.414341,
+          414.060414
+        ],
+        "child_scheduler_ms": [
+          273.32555,
+          327.288206
+        ],
+        "parent_request_id": "sr-55fde55fc6ba133880f6e871a56b81bb626a54bb2769179708354f2da677e8f9",
+        "parent_version": 2,
+        "Draft": [
+          {
+            "index": 14,
+            "kinds": [
+              "post"
+            ],
+            "B": 8,
+            "ms": [
+              129.512454,
+              177.417876
+            ]
+          },
+          {
+            "index": 15,
+            "kinds": [
+              "normal_extension"
+            ],
+            "B": 8,
+            "ms": [
+              189.457766,
+              222.65225
+            ]
+          },
+          {
+            "index": 16,
+            "kinds": [
+              "normal_extension"
+            ],
+            "B": 8,
+            "ms": [
+              230.418704,
+              257.847563
+            ]
+          }
+        ]
+      }
+    ],
+    "pingpong-k3": [
+      {
+        "parent_step": 4,
+        "parent_in_window": true,
+        "base_ns": 7766032963801077,
+        "home": "A",
+        "parent_Target_ms": [
+          0.0,
+          78.46209
+        ],
+        "feedback_ms": 117.022199,
+        "child_claim_ms": 156.107474,
+        "child_Target_ms": [
+          228.052125,
+          308.313653
+        ],
+        "child_scheduler_ms": [
+          167.99208,
+          219.713896
+        ],
+        "parent_request_id": "sr-55fde55fc6ba133880f6e871a56b81bb626a54bb2769179708354f2da677e8f9",
+        "parent_version": 2,
+        "Draft": [
+          {
+            "index": 14,
+            "kinds": [
+              "post"
+            ],
+            "B": 8,
+            "ms": [
+              125.513612,
+              154.888896
+            ]
+          },
+          {
+            "index": 15,
+            "kinds": [
+              "normal_extension"
+            ],
+            "B": 8,
+            "ms": [
+              166.810488,
+              193.982646
+            ]
+          },
+          {
+            "index": 16,
+            "kinds": [
+              "normal_extension"
+            ],
+            "B": 8,
+            "ms": [
+              200.34955,
+              222.779521
+            ]
+          }
+        ]
+      },
+      {
+        "parent_step": 10,
+        "parent_in_window": true,
+        "base_ns": 7766034363332327,
+        "home": "A",
+        "parent_Target_ms": [
+          0.0,
+          77.544122
+        ],
+        "feedback_ms": 116.661163,
+        "child_claim_ms": 174.118952,
+        "child_Target_ms": [
+          247.587281,
+          326.704278
+        ],
+        "child_scheduler_ms": [
+          186.26705,
+          240.030646
+        ],
+        "parent_request_id": "sr-f937fd4c6b47c96ff33283ec1ab4c820a3519f838cf670ddca3bc75554fd8e48",
+        "parent_version": 5,
+        "Draft": [
+          {
+            "index": 32,
+            "kinds": [
+              "post"
+            ],
+            "B": 8,
+            "ms": [
+              125.521425,
+              171.810771
+            ]
+          },
+          {
+            "index": 33,
+            "kinds": [
+              "normal_extension"
+            ],
+            "B": 8,
+            "ms": [
+              185.997988,
+              218.232646
+            ]
+          },
+          {
+            "index": 34,
+            "kinds": [
+              "normal_extension"
+            ],
+            "B": 8,
+            "ms": [
+              225.2558,
+              249.951396
+            ]
+          }
+        ]
+      }
+    ],
+    "pingpong-eager-k3": [
+      {
+        "parent_step": 4,
+        "parent_in_window": true,
+        "base_ns": 7766205000561689,
+        "home": "A",
+        "parent_Target_ms": [
+          0.0,
+          77.460176
+        ],
+        "feedback_ms": 117.271248,
+        "child_claim_ms": 150.556388,
+        "child_Target_ms": [
+          220.345187,
+          299.596895
+        ],
+        "child_scheduler_ms": [
+          162.45352,
+          213.419556
+        ],
+        "parent_request_id": "sr-55fde55fc6ba133880f6e871a56b81bb626a54bb2769179708354f2da677e8f9",
+        "parent_version": 2,
+        "Draft": [
+          {
+            "index": 26,
+            "kinds": [
+              "lookahead"
+            ],
+            "B": 8,
+            "ms": [
+              5.549212,
+              25.034132
+            ]
+          },
+          {
+            "index": 27,
+            "kinds": [
+              "lookahead"
+            ],
+            "B": 8,
+            "ms": [
+              30.408586,
+              50.081008
+            ]
+          },
+          {
+            "index": 28,
+            "kinds": [
+              "lookahead"
+            ],
+            "B": 8,
+            "ms": [
+              55.330462,
+              74.862258
+            ]
+          },
+          {
+            "index": 29,
+            "kinds": [
+              "post"
+            ],
+            "B": 4,
+            "ms": [
+              124.744524,
+              147.71382
+            ]
+          },
+          {
+            "index": 30,
+            "kinds": [
+              "normal_extension"
+            ],
+            "B": 4,
+            "ms": [
+              159.080462,
+              180.174758
+            ]
+          },
+          {
+            "index": 31,
+            "kinds": [
+              "normal_extension"
+            ],
+            "B": 4,
+            "ms": [
+              185.158586,
+              204.791945
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "limitations": [
+    "No baseline resident child phase times",
+    "Single windows, no stable speedup claim"
+  ]
+}

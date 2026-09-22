@@ -1,0 +1,86 @@
+# Exact production summarize at bc908be95d3ad611dc161a467709431bfe0c082a, original line 358
+def summarize(manifest_path, directory, point, *, probe=False):
+    m, definitions = load_s2(str(manifest_path))
+    opts = m["fixed_diagnostic"]["options"]
+    base = {
+        "schema_version": SCHEMA,
+        "mode": point["mode"],
+        "point": point,
+        "probe": probe,
+        "git_commit": m["execution"]["git_commit"],
+        "execution_sha256": m["sha256"],
+        "workload_sha256": m["workload_sha256"],
+        "pool_size": POOL_SIZE,
+        "batch": point["batch"],
+        "sub_batch": (point["batch"] // 2 if point["mode"] in ("pingpong", *PING_MODES)
+                      else None),
+        "boundary": ("resident360, active16, Target ceiling8; two actual admissions per "
+                     "warmup rotation; repeated IDs and mixed homes are legal"
+                     if point["mode"] in PING_MODES else BOUNDARY),
+        "artifact": str(directory),
+        "effective_exit_code": 0,
+        "formal_comparison_eligible": False,
+        **POLICY,
+    }
+    try:
+        r = read_json(directory / "runtime.json")
+        b = read_json(directory / "draft-backend-report.json")
+        if point["mode"] == "serial-eager":
+            from specrhythm.serving.eager_results import eager_columns, summarize_eager
+
+            base["rolling_eager"] = summarize_eager(b, r)
+            base.update(eager_columns(base))
+        life = read_json(directory / "process-lifecycle.json")
+        require(
+            r["point"] == point and bool(r.get("probe")) == probe, "scan runtime point differs"
+        )
+        base["draft_backend_checks"] = execution_checks(
+            {**r, "probe": False}, definitions, b, life, m["execution"]["eos_token_ids"]
+        )
+        base["prepared_pool"] = prepared_checks(m, r, directory, point)
+        base["diagnostic_logging"] = logging_checks(directory, opts["observation"])
+        base["identity_matching"] = identity_checks(r, opts["identity_matching"])
+        if point["mode"] == "pingpong" or point["mode"] in PING_MODES:
+            verifications = sum(
+                any(row["candidate_positions"] for row in s["rows"]) for s in r["target_steps"]
+            )
+            ranks = [x["dual_uuid_query"] for x in r["target_final_memory"]]
+            require(
+                len(ranks) == 2
+                and all(
+                    x["uuid_query_mode"] == "live"
+                    and x["uuid_initial_validation_count"] == 1
+                    and x["uuid_cache_hit_count"] == 0
+                    and x["uuid_verification_subprocess_query_count"]
+                    == x["uuid_verification_access_count"]
+                    and x["uuid_verification_access_count"] == verifications
+                    for x in ranks
+                ),
+                "scan live UUID evidence invalid",
+            )
+            base["uuid_query_by_rank"] = ranks
+        if probe:
+            require(
+                r["diagnostic_drain"]["status"] == "COMPLETE"
+                and r["diagnostic_drain"]["settled_requests"] == POOL_SIZE
+                and r["target_requests_final"] == 0
+                and not r["target_steps"],
+                "scan prefilled probe did not settle all360 without verification",
+            )
+            result = {"measurement_status": "NOT_APPLICABLE", "stop_reason": "capacity_probe"}
+        else:
+            result = timing(r, b, point, opts)
+        return {**base, **result, "valid": True, "errors": [], "execution_status": "PASS"}
+    except (DataError, KeyError, TypeError, ValueError, OSError) as error:
+        return {
+            **base,
+            "valid": False,
+            "errors": [str(error)],
+            "execution_status": "FAILED",
+            "measurement_status": "INVALID",
+            "primary_error": {
+                "error": str(error),
+                "artifact": str(directory),
+                **getattr(error, "details", {}),
+            },
+        }

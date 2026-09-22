@@ -29,6 +29,19 @@ CLASSES = {
     )
     for m, c in (("target", "Target"), ("serial", "Serial"), ("pingpong", "Ping"))
 }
+CLASSES["serial-eager"] = (
+    "specrhythm.serving.s2_scheduler.S2SerialScheduler",
+    "specrhythm.serving.eager_proposer.EagerSerialProposer",
+)
+for _mode in ("serial-prepost3", "serial-eager-prepost3"):
+    CLASSES[_mode] = ("specrhythm.serving.s2_scheduler.S2SerialScheduler",
+                      "specrhythm.serving.prepost_proposer.PrePostProposer")
+
+
+for _mode in ("pingpong-prepost3", "pingpong-eager-prepost3",
+                          "serial-k3", "serial-eager-k3", "pingpong-k3", "pingpong-eager-k3"):
+    CLASSES[_mode] = ("specrhythm.serving.ping_prepost_scheduler.PingPrePostScheduler",
+                      "specrhythm.serving.ping_prepost_proposer.PingPrePostProposer")
 
 
 def configure(root, manifest_path, directory, mode):
@@ -90,13 +103,21 @@ def configure(root, manifest_path, directory, mode):
         SR_PHASE4_DUAL_DRAFT_SOCKET=os.environ["SR_S2_DRAFT_SOCKET"],
         SR_PHASE4_RESIDENT_SETUP="1",
         SR_PHASE4_DECODE_READY_MODE="1",
-        SR_PHASE4_RESIDENT_CONSUMER="serial" if mode == "serial" else "target-only",
+        SR_PHASE4_RESIDENT_CONSUMER="serial"
+        if mode in ("serial", "serial-eager", "serial-prepost3", "serial-eager-prepost3",
+                          "pingpong-prepost3", "pingpong-eager-prepost3",
+                          "serial-k3", "serial-eager-k3", "pingpong-k3", "pingpong-eager-k3")
+        else "target-only",
         SR_PHASE4_DUAL_BATCH="1" if mode == "pingpong" else "0",
         SR_PHASE4_DUAL_RESIDENT="1" if mode == "pingpong" else "0",
         SR_PHASE4_DUAL_MICROBATCH_SIZE=str(ACTIVE_LIMIT),
         SR_PHASE4_DUAL_TEST_COORDINATION="none",
     )
-    consumer = {"target": "target-only", "serial": "serial", "pingpong": "dual-batch"}[mode]
+    consumer = {"target": "target-only", "serial": "serial", "serial-eager": "serial",
+                "serial-prepost3": "serial", "serial-eager-prepost3": "serial",
+                "pingpong-prepost3": "serial", "pingpong-eager-prepost3": "serial",
+                "serial-k3": "serial", "serial-eager-k3": "serial", "pingpong-k3": "serial",
+                "pingpong-eager-k3": "serial", "pingpong": "dual-batch"}[mode]
     write_once(
         directory / "setup-control.json",
         build_setup_control(
@@ -147,6 +168,11 @@ def _target_capacity_snapshot(worker, value):
         # Capacity probes legitimately have zero verification accesses. These are
         # raw lifetime counters, not the historical nonempty UUID A/B experiment gate.
         value["dual_uuid_query"] = worker_dual_uuid_evidence(worker)
+    from specrhythm.serving.device_contract import PREPOST_MODES, snapshot_contract
+
+    if os.environ["SR_S2_MODE"] in PREPOST_MODES:
+        value["device_evidence_contract"] = snapshot_contract(
+            worker.model_runner.drafter, os.environ["SR_S2_MODE"])
     return value
 
 
@@ -188,7 +214,7 @@ def make_engine(config, mode, *, classes=None, sequence_limit=POOL_SLOTS, query_
         speculative_config={
             "model": proposer,
             "method": "custom_class",
-            "num_speculative_tokens": 4,
+            "num_speculative_tokens": 3 if mode.endswith("-k3") else 4,
         },
         disable_log_stats=False,
     )
@@ -206,7 +232,19 @@ def initial_work(mode, admitted, clock, warm, client, packet):
     definitions = clock.definitions
     if mode == "target":
         return
-    if mode == "serial":
+    if mode in ("pingpong-prepost3", "pingpong-eager-prepost3",
+                          "serial-k3", "serial-eager-k3", "pingpong-k3", "pingpong-eager-k3"):
+        from specrhythm.phase4.serial import token_prefix_hash
+
+        rows = [dict(request_id=rid, home_cohort=clock.rows[rid]["cohort"], round_id=0,
+                     committed_prefix_len=len(warm[rid].logical_committed_prefix_token_ids),
+                     committed_prefix_hash=token_prefix_hash(warm[rid].logical_committed_prefix_token_ids),
+                     remaining_output_budget=definitions[rid].maximum_new_tokens-1,
+                     eos_token_ids=packet["eos_token_ids"]) for rid in admitted]
+        if rows:
+            client.call("pp_register", {"requests":rows})
+        return
+    if mode in ("serial", "serial-eager", "serial-prepost3", "serial-eager-prepost3"):
         rows = [
             {
                 "request_id": rid,
@@ -217,7 +255,8 @@ def initial_work(mode, admitted, clock, warm, client, packet):
                 "eos_token_ids": packet["eos_token_ids"],
             }
             for rid in admitted
-            if definitions[rid].maximum_new_tokens > 2
+            if definitions[rid].maximum_new_tokens > (
+                1 if mode in ("serial-prepost3", "serial-eager-prepost3") else 2)
         ]
         if rows:
             reply = client.call(
@@ -463,7 +502,17 @@ def prepare_resident(llm, definitions, directory, mode, eos, timeout=14400, logp
     if mode != "pingpong":
         for rid, b in bootstrap.items():
             if b["terminal"]:
-                client.call("finish_request", {"request_id": rid})
+                payload = {"request_id": rid}
+                if mode in ("serial-eager", "serial-prepost3", "serial-eager-prepost3",
+                          "pingpong-prepost3", "pingpong-eager-prepost3",
+                          "serial-k3", "serial-eager-k3", "pingpong-k3", "pingpong-eager-k3"):
+                    payload.update(
+                        committed_prefix=list(warm[rid].logical_committed_prefix_token_ids),
+                        committed_prefix_hash=warm[rid].logical_committed_prefix_sha256,
+                        terminal=True,
+                        eos_token_ids=eos,
+                    )
+                client.call("finish_request", payload)
     pool = scheduler.freeze_pool()
     draft_pool = read_json(directory / "draft-pool.json")
     active_ids = {r for r, b in bootstrap.items() if not b["terminal"]}

@@ -1,0 +1,414 @@
+# Original production drive at 429956febe6d731291c1a3c0ee0857337a3c54c2
+def drive(llm, manifest, definitions, directory, point, options, *, logprobs=5, probe=False):
+    mode, runtime_mode = point["mode"], point["runtime_mode"]
+    scan = point.get("scan", False)
+    setup_timeout = options["setup_timeout"]
+    if scan and os.environ.get("SR_FIXED_SCAN_SETUP_DEADLINE_NS"):
+        setup_timeout = remaining(int(os.environ["SR_FIXED_SCAN_SETUP_DEADLINE_NS"]))
+    prepared = prepare_resident(
+        llm,
+        definitions,
+        directory,
+        runtime_mode,
+        manifest["execution"]["eos_token_ids"],
+        setup_timeout,
+        logprobs,
+    )
+    prefill_complete_ns = time.monotonic_ns() if scan else None
+    engine, scheduler, client, warm, bootstrap, _ = prepared
+    diag = manifest["fixed_diagnostic"]
+    initial = point["kind"] == "initial-state"
+    if scan:
+        require(not getattr(scheduler, "defer_block_free", False),
+                "scan pre-forward stop requires synchronous allocator without deferred frees")
+    active = manifest["active_limit"] if scan or point.get("prepost_correctness") else (
+        point["batch"] if initial and runtime_mode != "pingpong" else 64)
+    ping_prepost = runtime_mode in ("pingpong-prepost3", "pingpong-eager-prepost3")
+    grouped = runtime_mode == "pingpong" or ping_prepost
+    if ping_prepost:
+        from specrhythm.serving.ping_prepost_controller import PingPrePostController
+
+        ping_controller = PingPrePostController()
+    cohort_capacity = active // 2 if scan or ping_prepost else 32
+    maximum_batch = cohort_capacity if grouped else active
+    trace = copy.deepcopy(manifest["trace"])
+    if initial and point["half"] == "B":
+        # Explicit isolated B-half point, retaining the source's frozen order inside each half.
+        trace.pop("sha256")
+        rows = trace["rows"]
+        trace["rows"] = rows[32:64] + rows[:32] + rows[64:]
+        from specrhythm.serving.s2_plan import sealed
+
+        trace = sealed(trace)
+    assignment = {rid: c for c, ids in diag["cohorts"].items() for rid in ids} if grouped else {}
+    clock = ServingClock(
+        definitions,
+        trace,
+        bootstrap,
+        active_limit=active,
+        mode=runtime_mode,
+        per_cohort_capacity=cohort_capacity if grouped else None,
+        fixed_assignment=assignment,
+    )
+    packet = {
+        "initial_proposals": {},
+        "initial_enqueues": {},
+        "eos_token_ids": manifest["execution"]["eos_token_ids"],
+    }
+    clock.start(time.monotonic_ns(), threaded=False)
+    if scan:
+        clock.observe(clock.barrier_ns)
+    window_options = dict(options)
+    if grouped and not initial and not scan and not ping_prepost:
+        # A requested sample unit is one 64-request rotation (two Target steps).
+        # Actual partial/cohort-incomplete rotations remain separately labelled.
+        window_options["samples"] *= 2
+        window_options["warmup_steps"] *= 2
+    if scan:
+        from specrhythm.serving.decode_scan_readiness import ReadinessEvidence, ScanBatchWait
+        from specrhythm.serving.decode_scan_window import ScanShapeStop, ScanWindow
+
+        if ping_prepost:
+            from specrhythm.serving.ping_prepost_window import PingPrePostWindow
+
+            window = PingPrePostWindow(window_options, active, True)
+        else:
+            window = ScanWindow(window_options, active, grouped)
+        window.readiness = ReadinessEvidence()
+    else:
+        window = Window(window_options, initial_state=initial)
+    last = None
+    polls, steps, phases = [], [], []
+    first_admission = True
+    failure = None
+    complete = False
+    observation_deadline = time.monotonic() + options["setup_timeout"] + options["window_seconds"]
+
+    def publish_control(inflight=()):
+        nonlocal last
+        current = {
+            **clock.control(),
+            **packet,
+            "max_requests_per_target_forward": maximum_batch,
+            **({"decode_scan_full_batch": None if ping_prepost else maximum_batch,
+                "decode_scan_deadline_ns": (window.start_ns + int(
+                    options["window_seconds"] * 1e9)) if window.start_ns is not None else None
+                } if scan else {}),
+            "diagnostic_phase": (
+                "drain" if window.end_ns else "measurement" if window.start_ns else "warmup"
+            ),
+            "population": population(clock, inflight),
+        }
+        if current != last:
+            publish(directory / "s2-control.json", current)
+            last = copy.deepcopy(current)
+
+    try:
+        while not clock.complete and not probe:
+            now = time.monotonic_ns()
+            if scan and window.start_ns is None:
+                remaining(int(os.environ.get("SR_FIXED_SCAN_SETUP_DEADLINE_NS",
+                                             int(observation_deadline * 1e9))))
+            else:
+                require(
+                    time.monotonic() < observation_deadline, "diagnostic warmup/window timeout")
+            if (directory / "stop-request.json").exists():
+                window.reason = "operator_stop"
+                break
+            if not scan:
+                window.ready(now)
+            if window.time_expired(now):
+                break
+            clock.observe(now)
+            status = (client.call("status", {})
+                      if grouped or mode in ("serial-eager", "serial-prepost3",
+                                             "serial-eager-prepost3") else {})
+            require(
+                not status.get("failures"),
+                "diagnostic asynchronous Draft failed",
+                actual=status.get("failures"),
+            )
+            inflight = set(status.get("inflight_request_ids", ()))
+            poll = {"timestamp_ns": now, "inflight_request_ids": sorted(inflight)}
+            if scan:
+                from specrhythm.serving.decode_scan_readiness import coalesce
+
+                coalesce(polls, poll)
+            else:
+                polls.append(poll)
+            release_finished(clock, inflight)
+            if scan and population(clock)["active_requests"] + len(clock.queue) < active:
+                window.reason = "pool_exhausted_before_window"
+                break
+            with TIMERS.span("refill"):
+                admitted = clock.admit(
+                    time.monotonic_ns(), busy_cohorts=() if ping_prepost else
+                    {clock.rows[r]["cohort"] for r in inflight}
+                )
+            publish_control(inflight)
+            if scan:
+                window.readiness.lifecycle(clock)
+            if admitted:
+                if initial and mode == "pingpong" and first_admission:
+                    # Prepare A's real proposal, then submit B's real Draft immediately
+                    # before A's Target step. Actual device overlap can still be zero.
+                    a = [r for r in admitted if clock.rows[r]["cohort"] == "A"]
+                    b = [r for r in admitted if clock.rows[r]["cohort"] == "B"]
+                    initial_work(runtime_mode, a, clock, warm, client, packet)
+                    wait_draft(client, options["drain_timeout"])
+                    publish_control()
+                    initial_work(runtime_mode, b, clock, warm, client, packet)
+                else:
+                    with TIMERS.span("initial_draft"):
+                        initial_work(runtime_mode, admitted, clock, warm, client, packet)
+                first_admission = False
+                publish_control()
+            # This is the only serial-split execution difference. No Target step
+            # can begin with any owner work pending, including terminal materialization.
+            if mode == "serial-split":
+                status = wait_draft(client, options["drain_timeout"])
+            elif grouped:
+                status = client.call("status", {})
+            inflight = set(status.get("inflight_request_ids", ()))
+            require(
+                not status.get("failures"),
+                "diagnostic asynchronous Draft failed",
+                actual=status.get("failures"),
+            )
+            publish_control(inflight)
+            if window.time_expired(time.monotonic_ns()):
+                break
+            pop = population(clock, inflight)
+            if scan and window.start_ns is None:
+                boundary_population = dict(pop)
+                if window.warmup_rotations >= options["warmup_steps"]:
+                    boundary_population.update(
+                        request_ids=[
+                            rid for rid, r in clock.rows.items() if r["state"] == "ACTIVE"],
+                        cohorts={c: [rid for rid, r in clock.rows.items()
+                                     if r["state"] == "ACTIVE" and r["cohort"] == c]
+                                 for c in ("A", "B")},
+                        inflight_request_ids=sorted(inflight),
+                        next_cohort=getattr(scheduler, "selected_cohort", None),
+                    )
+                if window.ready(time.monotonic_ns(), population=boundary_population):
+                    # Keep the normal asynchronous pipeline; no new fence or proposal.
+                    deadline = window.start_ns + int(
+                        (options["window_seconds"] + options["drain_timeout"]) * 1e9)
+                    publish(directory / "drain-state.json", {
+                        "phase": "scan_window_and_atomic_step", "status": "RUNNING",
+                        "start_ns": window.start_ns, "deadline_ns": deadline,
+                    })
+                    publish_control(inflight)
+                    checkpoint(directory, manifest, point, window, clock, steps, phases)
+                elif window.warmup_rotations >= options["warmup_steps"] and window.pending is None:
+                    # Restore the full starting population without extra warmup forwards.
+                    time.sleep(0.0005)
+                    continue
+            phase = (
+                "full-load" if pop["active_requests"] == active
+                else ("fill" if not steps else "tail")
+            )
+            phase_row = {"timestamp_ns": time.monotonic_ns(), "phase": phase, **pop}
+            # Wait polls must not generate unbounded copies of unchanged population.
+            if not scan or not phases or any(phases[-1].get(k) != v
+                                            for k, v in phase_row.items()
+                                            if k != "timestamp_ns"):
+                phases.append(phase_row)
+            if ping_prepost:
+                packet["pp_admission"] = ping_controller.select(clock, client)
+                publish_control(inflight)
+                if not packet["pp_admission"]["claims"]:
+                    if window.time_expired(time.monotonic_ns()):
+                        break
+                    with TIMERS.span("wait_ready", reason="no legal ready PingPong proposal"):
+                        time.sleep(0.0005)
+                    continue
+            before = len(scheduler.s2_steps)
+            start = time.monotonic_ns()
+            TRACE.event("coordinator_step_start", step_index=len(steps))
+            if scan and window.time_expired(start):
+                break
+            try:
+                with TIMERS.span("target_step"):
+                    outputs = engine.step()
+            except Exception as error:
+                if scan and isinstance(error, ScanBatchWait):
+                    require(len(scheduler.s2_steps) == before,
+                            "scan readiness wait occurred after stock scheduling")
+                    entering = window.readiness.waiting(error.evidence)
+                    if entering:
+                        checkpoint(directory, manifest, point, window, clock, steps, phases)
+                    if window.time_expired(time.monotonic_ns()):
+                        break
+                    # Backoff only; each retry returns through owner failure/status,
+                    # physical release and FIFO admission. The window never pauses.
+                    time.sleep(0.0005)
+                    continue
+                if not scan or not isinstance(error, ScanShapeStop):
+                    raise
+                window.rejected_step = error.evidence
+                window.reason = "partial_batch_prevented"
+                break
+            if scan:
+                evidence = getattr(scheduler, "scan_readiness", None)
+                window.readiness.close(evidence["timestamp_ns"] if evidence else start,
+                                       "wait-resume")
+                if evidence is not None:
+                    coalesce(window.readiness.rows, {**evidence, "event": "full-batch-ready"})
+            scheduled = scheduler.s2_steps[before:]
+            require(len(scheduled) == 1, "diagnostic requires one scheduler step per engine step")
+            row = scheduled[0]
+            committed = False
+            if scan:
+                previous_lengths = {rid: len(clock.rows[rid]["generated_token_ids"])
+                                    for rid in row["request_ids"]}
+            try:
+                with TIMERS.span("output_commit"):
+                    commit_outputs(clock, outputs, packet, client, runtime_mode)
+                committed = True
+            finally:
+                end = time.monotonic_ns()
+                TRACE.event("coordinator_output_committed", step_index=len(steps),
+                            committed=committed, start_ns=end, end_ns=end)
+                # Preserve a completed engine step even if output/drain RPC fails.
+                steps.append(
+                    {
+                        **row,
+                        "start_ns": start,
+                        "end_ns": end,
+                        "window": window.start_ns is not None,
+                        "population": pop,
+                        "supply_phase": phase,
+                        "output_commit_complete": committed,
+                        **({"committed_tokens": sum(
+                            len(clock.rows[rid]["generated_token_ids"]) - n
+                            for rid, n in previous_lengths.items())} if scan else {}),
+                    }
+                )
+            stopping = window.step_completed(
+                steps[-1] if scan else len(row["request_ids"]), end)
+            checkpoint(directory, manifest, point, window, clock, steps, phases)
+            if stopping:
+                break
+            if not outputs:
+                with TIMERS.span("wait_ready", reason="no admissible proposal/Target work"):
+                    time.sleep(0.0005)
+        window.end_ns = time.monotonic_ns()
+        window.reason = window.reason or ("capacity_probe" if probe else
+                                         "pool_exhausted_before_window" if scan else
+                                         "all_naturally_completed")
+        if scan:
+            window.readiness.lifecycle(clock)
+            window.readiness.close(window.end_ns, "wait-stop:" + window.reason)
+        # Stop submissions at this safe Target boundary. Work enqueued by the last
+        # issued step is real work and remains charged through the drain below.
+        clock._event("diagnostic-stop-submission", window.end_ns, reason=window.reason)
+        complete = (window.reason == "time_budget" if scan else window.reason != "operator_stop"
+                    ) and window.samples > 0
+        checkpoint(
+            directory, manifest, point, window, clock, steps, phases, measurement_complete=complete
+        )
+        with TIMERS.span("drain"):
+            devices, draft_shutdown, final_ranks, drain = settle(
+                llm,
+                engine,
+                scheduler,
+                client,
+                clock,
+                warm,
+                steps,
+                directory,
+                runtime_mode,
+                options["drain_timeout"],
+                publish_control,
+                wait_draft,
+            )
+        checkpoint(
+            directory,
+            manifest,
+            point,
+            window,
+            clock,
+            steps,
+            phases,
+            measurement_complete=complete,
+            drain_complete=True,
+        )
+        end = time.monotonic_ns()
+        clock._event("diagnostic-drain-complete", end)
+        publish_control()
+        return {
+            "schema_version": "specrhythm.fixed-runtime.v2",
+            "point": point,
+            "capacity": {
+                **(diag["capacity"][mode] if scan else capacity_metadata(mode)),
+                "resident_request_count": sum(not b["terminal"] for b in bootstrap.values()),
+                "active_request_limit": active,
+                "max_requests_per_target_forward": maximum_batch,
+            },
+            **({"decode_scan": {**window.evidence(), "prefill_complete_ns": prefill_complete_ns},
+                "probe": probe} if scan else {}),
+            "measurement_start_ns": window.start_ns,
+            "measurement_end_ns": window.end_ns,
+            "warmup_start_ns": window.warmup_start_ns,
+            "warmup_end_ns": window.warmup_end_ns,
+            "warmup_steps": window.warmup_steps,
+            "sample_count": window.samples,
+            "stop_reason": window.reason,
+            "start_ns": clock.barrier_ns,
+            "end_ns": end,
+            "requests": list(clock.rows.values()),
+            "events": clock.events,
+            "prompt_lengths": {r.request_id: r.prompt_length for r in definitions},
+            "target_steps": steps,
+            "population": phases,
+            "draft_status": polls,
+            "target_devices": devices,
+            "host": TIMERS.report(),
+            "identity_matching": scheduler_report(scheduler),
+            "target_pool_final": scheduler.s2_pool.report(),
+            "target_requests_final": len(scheduler.requests),
+            "draft_shutdown": draft_shutdown,
+            "diagnostic_drain": drain,
+            "target_final_memory": final_ranks,
+            "full_request_slo_attainment": None,
+            "full_request_slo_reason": "diagnostic window, not a complete serving run",
+        }
+    except BaseException as error:
+        failure = error
+        record_error(directory, error, "measurement_or_drain")
+        window.end_ns = window.end_ns or time.monotonic_ns()
+        window.reason = window.reason or "execution_failure"
+        if scan:
+            window.readiness.lifecycle(clock)
+            window.readiness.close(window.end_ns, "wait-stop:execution_failure")
+        try:
+            checkpoint(
+                directory,
+                manifest,
+                point,
+                window,
+                clock,
+                steps,
+                phases,
+                measurement_complete=complete,
+            )
+        except Exception as secondary:
+            record_error(directory, secondary, "measurement_snapshot")
+        raise
+    finally:
+        try:
+            clock.close(failure=failure)
+            write_once(
+                directory / "arrival-output-events.json",
+                {
+                    "requests": list(clock.rows.values()),
+                    "events": clock.events,
+                    "failure": str(failure) if failure else None,
+                },
+            )
+        except Exception as error:
+            record_error(directory, error, "arrival_report")
+            if failure is None:
+                raise

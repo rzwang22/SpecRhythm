@@ -321,11 +321,56 @@ class DiagnosticSerialMachine(Settlement, BatchedDraftStateMachine):
     pass  # Normal shutdown still executes DraftStateMachine's unresolved-proposal guard.
 
 
+class PublishedDiagnosticSerialMachine(DiagnosticSerialMachine):
+    """Opt-in Target-only control used by the local K3 entry; legacy stays unchanged."""
+
+    def __init__(self, *args, **kwargs):
+        from specrhythm.phase4.drain_deadline import DrainDeadline
+
+        super().__init__(*args, **kwargs)
+        self.drain_deadline = DrainDeadline("target", self.report_path.parent.resolve())
+
+    def diagnostic_settle(self, row):
+        self.drain_deadline.bind(row, "diagnostic_settle")
+        return super().diagnostic_settle(row)
+
+    def shutdown(self):
+        from specrhythm.phase4.report_publication import publish_final_report
+
+        deadline = self.drain_deadline.bind(
+            {"deadline_ns": self.drain_deadline.value}, "shutdown:before_backend_close")
+        path = self.report_path
+        self.report_path = None
+        try:
+            result = super().shutdown()  # Original unresolved-proposal/release checks.
+        finally:
+            self.report_path = path
+        receipt = publish_final_report(path, self.backend.report,
+            deadline_ns=deadline, owner_stopped=self.backend.closed, mode="target")
+        result.update(draft_backend_report_file=path.name,
+                      draft_backend_report_sha256=receipt["sha256"])
+        return result
+
+
 class DiagnosticSerialServer(DraftUnixServer):
+    drain_failure = None
+
     def _dispatch(self, operation, payload):
-        if operation == "diagnostic_settle":
-            return self.machine.diagnostic_settle(payload)
-        return super()._dispatch(operation, payload)
+        guarded = isinstance(self.machine, PublishedDiagnosticSerialMachine)
+        try:
+            if guarded and operation in ("diagnostic_settle", "shutdown"):
+                if self.drain_failure is not None:
+                    raise self.drain_failure
+                self.machine.drain_deadline.bind(payload, operation)
+            if operation == "diagnostic_settle":
+                return self.machine.diagnostic_settle(payload)
+            return super()._dispatch(operation, payload)
+        except BaseException as error:
+            if guarded and operation in ("diagnostic_settle", "shutdown"):
+                # Reply with the first error, then leave the service for fault cleanup.
+                self.drain_failure = self.drain_failure or error
+                self.running = False
+            raise
 
 
 class DiagnosticDualMachine(Settlement, S2DualMachine):

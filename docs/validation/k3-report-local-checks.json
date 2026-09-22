@@ -1,0 +1,62 @@
+{
+  "schema_version": "specrhythm.local-validation-record.v1",
+  "full_python312": {
+    "passed": 3105,
+    "failed": 17,
+    "skipped": 3,
+    "elapsed_seconds": 1223.44,
+    "log_sha256": "38e6b468bb58be186580754c971231f6893bbd85f18de047318a480f7c563c92",
+    "failures": [
+      "tests/test_execution_pair_runbook.py::test_runtime_pair_preserve_first_error_stop_and_parent_shell[capacity-serial:runtime]",
+      "tests/test_k3_state_recovery.py::test_live_supervisor_read_recovery_or_bounded_failure[enoent]",
+      "tests/test_k3_validation_profile.py::test_exploration_real_runtime_entry_qualification_archive[serial-k3]",
+      "tests/test_k3_validation_profile.py::test_exploration_real_runtime_entry_qualification_archive[pingpong-eager-k3]",
+      "tests/test_ping_joint_failure.py::test_joint_real_failure_mode_run_and_exit_codes[False-pingpong-prepost3]",
+      "tests/test_ping_joint_failure.py::test_joint_real_failure_mode_run_and_exit_codes[False-pingpong-eager-prepost3]",
+      "tests/test_ping_joint_failure.py::test_joint_real_failure_mode_run_and_exit_codes[True-target]",
+      "tests/test_scan_console.py::test_k3_actual_result_publication_is_quiet_and_lossless[capacity_probe-serial-k3]",
+      "tests/test_scan_console.py::test_k3_actual_result_publication_is_quiet_and_lossless[capacity_probe-serial-eager-k3]",
+      "tests/test_scan_console.py::test_k3_actual_result_publication_is_quiet_and_lossless[capacity_probe-pingpong-k3]",
+      "tests/test_scan_console.py::test_k3_actual_result_publication_is_quiet_and_lossless[capacity_probe-pingpong-eager-k3]",
+      "tests/test_scan_console.py::test_k3_actual_result_publication_is_quiet_and_lossless[performance-serial-k3]",
+      "tests/test_scan_console.py::test_k3_actual_result_publication_is_quiet_and_lossless[performance-serial-eager-k3]",
+      "tests/test_scan_console.py::test_k3_actual_result_publication_is_quiet_and_lossless[performance-pingpong-k3]",
+      "tests/test_scan_console.py::test_k3_actual_result_publication_is_quiet_and_lossless[performance-pingpong-eager-k3]",
+      "tests/test_scan_console.py::test_failed_result_write_does_not_print_success",
+      "tests/test_serving_fixed_logging.py::test_actual_fork_cannot_share_parent_buffer_or_forge_child_complete"
+    ]
+  },
+  "new_failure_resolution": "Nine console fixture cases inherited a full numerical plan from earlier tests; isolate fixture-owned inputs, retain production rejection. Validate with deliberately contaminated environment.",
+  "remaining_failures": "Eight existing tests observed timeout/deadline-related failures; root causes unresolved; not claimed fixed by reruns.",
+  "gpu": "NOT_RUN",
+  "focused_after_fixture_fix": {
+    "python312": {
+      "passed": 55,
+      "skipped": 2,
+      "elapsed_seconds": 182.33
+    },
+    "python39": {
+      "passed": 24,
+      "skipped": 0,
+      "elapsed_seconds": 12.29
+    },
+    "environment": "SR_PHASE4_NUMERICAL_DIAGNOSTIC_PLAN=/tmp/explicit-stale-plan; fixture removes unrelated inherited inputs; production conflict rejection unchanged"
+  },
+  "full_suite_rerun_after_fixture_fix": false,
+  "executable_source_changed_by_fixture_fix": false,
+  "fixed_entry_ci": {
+    "sha": "a7d34cdbe5e65606a14eab3cec9b3704a8f53d74",
+    "run_id": 35312914255,
+    "status": "FAILED",
+    "python312": {
+      "passed": 3082,
+      "failed": 9,
+      "skipped": 36,
+      "cause": "All nine failures are console fixture inherited full numerical plan conflict, same as locally reproduced; addressed in b09827f1af91a7a0bd1716c0609b16ad7ad2936e"
+    },
+    "python39": "CANCELLED",
+    "python311_contract": "PASS",
+    "pinned_source_contract": "PASS",
+    "subsequent_ci": "PENDING, not claimed passed"
+  }
+}

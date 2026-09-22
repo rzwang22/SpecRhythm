@@ -646,6 +646,10 @@ class RemoteDraftProposer:
         sampled_token_ids: Sequence[Sequence[int]],
         scheduled_spec_token_ids: Mapping[str, Sequence[int]],
     ) -> None:
+        from specrhythm.continuation.trace import TRACE
+
+        if self.tp_rank == 0:
+            TRACE.event("target_sampled_results_received")
         del sampled_token_ids
         self.torch.cuda.synchronize()
         self.tp_group.barrier()
@@ -669,6 +673,9 @@ class RemoteDraftProposer:
     @property
     def supports_mm_inputs(self) -> bool:
         return False
+
+    def _requests_next_proposal(self):
+        return True
 
     def _rank_zero_propose(
         self, request_ids: Sequence[str], num_tokens_no_spec: Any, token_ids_cpu: Any
@@ -744,7 +751,7 @@ class RemoteDraftProposer:
                     )
             if terminal:
                 terminal_ids.add(stable_id)
-            else:
+            elif self._requests_next_proposal():
                 remaining = definition.maximum_new_tokens - len(generated)
                 proposal_rows.append(
                     {
@@ -767,6 +774,10 @@ class RemoteDraftProposer:
             "proposals": proposal_rows,
         }
         _assert_target_information_isolated(outgoing)
+        from specrhythm.continuation.trace import TRACE, references
+
+        if TRACE.enabled:
+            TRACE.event("target_feedback_payload_ready", requests=references(synchronizations))
         response = self.client.call("synchronize_and_batch_propose", outgoing)
         for stable_id in finish_without_pending:
             self.client.call("finish_request", {"request_id": stable_id})
@@ -899,51 +910,57 @@ class RemoteDraftProposer:
             generated and generated[-1] in self.eos_token_ids
         )
 
+    def _gpu_qualification_report(self) -> dict[str, Any]:
+        """Preserve baseline qualification; extensions must state their own evidence."""
+        return {"gpu_correctness_result": True, "gpu_performance_result": False}
+
     def _write_report(self) -> None:
         if self.tp_rank != 0:
             return
-        atomic_write_json(
-            self.report_path,
-            {
-                "schema_version": "specrhythm.phase4-remote-proposer-report.v1",
-                "proposer_model_parameter_count": 0,
-                "target_logits_observed": False,
-                "target_future_tokens_observed": False,
-                "oracle_labels_observed": False,
-                "transport": "unix-domain-socket",
-                "target_tp_world_size": self.tp_world_size,
-                "target_rank0_only_transport": True,
-                "hook_counts": dict(self.hooks_seen),
-                "request_count": len(self.requests),
-                "round_count": len(self.round_records),
-                "requests": {
-                    request_id: {
-                        "generated_token_ids": list(state.generated_token_ids),
-                        "bootstrap_target_tokens": state.bootstrap_target_tokens,
-                        "tail_target_tokens": state.tail_target_tokens,
-                        "next_round_id": state.next_round_id,
-                        "finished": state.finished,
-                    }
-                    for request_id, state in self.requests.items()
-                },
-                "gpu_correctness_result": True,
-                "gpu_performance_result": False,
-                "decode_ready_provider": (
-                    "resident-warm-start" if self.resident_mode else None
-                ),
-                "decode_ready_setup_complete": self.resident_setup_complete,
-                "decode_ready_observed_request_count": (
-                    len(self.resident_setup_tracker.observations)
-                    if self.resident_setup_tracker is not None
-                    else 0
-                ),
-                "measurement_start_ns": self.measurement_start_ns,
-                "performance_measurement_start_ns": (
-                    self.performance_measurement_start_ns
-                ),
-                "phase4b2_performance_requested": performance_requested(),
-            },
-        )
+        from specrhythm.diagnostic_report import defer
+
+        if not defer(self.report_path, self._build_report):
+            atomic_write_json(self.report_path, self._build_report())
+
+    def _build_report(self):
+        return {
+        "schema_version": "specrhythm.phase4-remote-proposer-report.v1",
+        "proposer_model_parameter_count": 0,
+        "target_logits_observed": False,
+        "target_future_tokens_observed": False,
+        "oracle_labels_observed": False,
+        "transport": "unix-domain-socket",
+        "target_tp_world_size": self.tp_world_size,
+        "target_rank0_only_transport": True,
+        "hook_counts": dict(self.hooks_seen),
+        "request_count": len(self.requests),
+        "round_count": len(self.round_records),
+        "requests": {
+            request_id: {
+                "generated_token_ids": list(state.generated_token_ids),
+                "bootstrap_target_tokens": state.bootstrap_target_tokens,
+                "tail_target_tokens": state.tail_target_tokens,
+                "next_round_id": state.next_round_id,
+                "finished": state.finished,
+            }
+            for request_id, state in self.requests.items()
+        },
+        **self._gpu_qualification_report(),
+        "decode_ready_provider": (
+            "resident-warm-start" if self.resident_mode else None
+        ),
+        "decode_ready_setup_complete": self.resident_setup_complete,
+        "decode_ready_observed_request_count": (
+            len(self.resident_setup_tracker.observations)
+            if self.resident_setup_tracker is not None
+            else 0
+        ),
+        "measurement_start_ns": self.measurement_start_ns,
+        "performance_measurement_start_ns": (
+            self.performance_measurement_start_ns
+        ),
+        "phase4b2_performance_requested": performance_requested(),
+    }
 
 
 def _required_path(name: str) -> Path:

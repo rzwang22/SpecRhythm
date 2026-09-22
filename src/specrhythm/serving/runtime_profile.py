@@ -96,6 +96,10 @@ def initial_proposal_excluded_ids(manifest):
 def initial_target_tail(request_id, output_count):
     if not s2_enabled():
         return legacy.initial_target_tail(request_id, output_count)
+    if os.environ.get("SR_S2_MODE") in ("serial-prepost3", "serial-eager-prepost3",
+                          "pingpong-prepost3", "pingpong-eager-prepost3",
+                          "serial-k3", "serial-eager-k3", "pingpong-k3", "pingpong-eager-k3"):
+        return False
     return output_count == 1 and any(
         r.request_id == request_id and r.maximum_new_tokens == 2 for r in active_profile()[1]
     )

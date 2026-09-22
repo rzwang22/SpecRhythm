@@ -11,7 +11,14 @@ import traceback
 from pathlib import Path
 
 from specrhythm.serving.common import DataError, read_json, require
-from specrhythm.serving.fixed_plan import MODES, point, prepare, settings, stage_points
+from specrhythm.serving.fixed_plan import (
+    EXPLICIT_MODES,
+    MODES,
+    point,
+    prepare,
+    settings,
+    stage_points,
+)
 from specrhythm.serving.s1_console import print_failure
 from specrhythm.serving.s1_workload import write_once
 
@@ -92,6 +99,12 @@ def status(root):
                         "primary_error",
                         "measurement_availability",
                         "cleanup_status",
+                        "eager_started",
+                        "eager_promotions",
+                        "eager_verified_candidates",
+                        "eager_accepted_candidates",
+                        "eager_gpu_overlap_status",
+                        "eager_cleanup_status",
                     )
                 },
                 "full_offline_audit": read_json(Path(r["artifact"]) / "offline-audit.json")[
@@ -193,7 +206,7 @@ def parser():
     )
     p.add_argument("--root", required=True, type=Path)
     p.add_argument("--s1", type=Path)
-    p.add_argument("--mode", choices=MODES)
+    p.add_argument("--mode", choices=EXPLICIT_MODES)
     from specrhythm.serving.fixed_logging import MODES as OBSERVATIONS
 
     p.add_argument("--observation", choices=OBSERVATIONS, default="original-live")
@@ -331,7 +344,7 @@ def main(argv=None):
 
             with root_lock(root):
                 if args.command == "capacity":
-                    directory, value = run_point(root, point("pingpong"), probe=True)
+                    directory, value = run_point(root, point(args.mode or "pingpong"), probe=True)
                     value = {"capacity": "PASS", "artifact": str(directory)}
                 else:
                     capacity_passed(root)

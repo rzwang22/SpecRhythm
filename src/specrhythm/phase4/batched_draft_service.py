@@ -9,6 +9,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from specrhythm.io_context import file_context
 from specrhythm.phase4.draft_batch import DraftCommitPlan, DraftProposalPlan, unique_ids
 from specrhythm.phase4.draft_service import DraftStateMachine
 from specrhythm.phase4.serial import (
@@ -27,7 +28,8 @@ def write_immutable_report(path: Path, value: Mapping[str, Any]) -> None:
         json.dump(value, handle, indent=2, sort_keys=True)
         handle.write("\n")
         handle.flush()
-        os.fsync(handle.fileno())
+        with file_context(path, write_kind="immutable_json"):
+            os.fsync(handle.fileno())
 
 
 def serve_batched_draft(config, *, socket_path, event_log_path, ready_path) -> None:

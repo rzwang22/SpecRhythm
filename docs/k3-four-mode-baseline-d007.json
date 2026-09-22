@@ -1,0 +1,508 @@
+{
+  "source_archive": "pingpong-k3-delivery-20260915T023730Z-1970.tar.gz",
+  "execution_sha": "d007dce448bd2a7d510172222ae166d7bb6f299e",
+  "read_only": true,
+  "verified_logical_files": 145,
+  "verified_objects": 106,
+  "joint_output_rechecked": {
+    "requests_per_mode": 16,
+    "tokens_per_mode": 512,
+    "exact_matches": true
+  },
+  "points": [
+    {
+      "mode": "serial-k3",
+      "throughput_tok_s": 53.96625387250138,
+      "steps": 89,
+      "window_ms": 30055.819769,
+      "committed_tokens": 1622,
+      "tokens_per_step": 18.224719101123597,
+      "complete_step_wall_ms": {
+        "count": 89,
+        "max": 217.201838,
+        "mean": 191.644445494382,
+        "p50": 189.101056,
+        "p90": 205.198084,
+        "reason": null
+      },
+      "dispatch": {
+        "READY_idle_scope": "owner publication -> claimed Target; clipped to measurement; GPU-idle does not prove CPU sampling/dispatch is free. Across steps not additive. ready_ns: physical completion; owner_ready_published_ns: actual READY event; neither is substituted for authoritative claim",
+        "claim_to_Target_ms": {
+          "count": 89,
+          "max": 94.026808,
+          "mean": 69.08580206741573,
+          "p50": 65.93937,
+          "p90": 80.247357,
+          "reason": null
+        },
+        "missing_READY_publications": 0,
+        "missing_scheduler_phase_steps": 0,
+        "native_clock": "lower endpoint; bounded CUDA anchor uncertainty retained in raw records",
+        "published_READY_to_claim_ms": {
+          "count": 712,
+          "max": 410.790369,
+          "mean": 341.07995196488764,
+          "p50": 337.483883,
+          "p90": 360.51713,
+          "reason": null
+        },
+        "resident_schedule": {
+          "admission_records": 32040,
+          "errors": [],
+          "limitations": "recorder self cost and stock internals not independently isolated; missing evidence stays missing; no throughput extrapolation",
+          "measured_steps": 89,
+          "phases_ms": {
+            "admission_records": {
+              "count": 89,
+              "max": 25.439514,
+              "mean": 17.37814415730337,
+              "p50": 17.299097,
+              "p90": 19.174069,
+              "reason": null
+            },
+            "binding": {
+              "count": 89,
+              "max": 13.670939,
+              "mean": 9.39870286516854,
+              "p50": 8.816093,
+              "p90": 10.715836,
+              "reason": null
+            },
+            "decisions": {
+              "count": 89,
+              "max": 2.302441,
+              "mean": 1.5559338539325842,
+              "p50": 1.520307,
+              "p90": 1.846708,
+              "reason": null
+            },
+            "initial_finish": {
+              "count": 89,
+              "max": 0.001518,
+              "mean": 0.0007756067415730337,
+              "p50": 0.000749,
+              "p90": 0.000919,
+              "reason": null
+            },
+            "readiness": {
+              "count": 89,
+              "max": 0.005668,
+              "mean": 0.0021403483146067415,
+              "p50": 0.002047,
+              "p90": 0.002496,
+              "reason": null
+            },
+            "stock": {
+              "count": 89,
+              "max": 0.552589,
+              "mean": 0.3970227865168539,
+              "p50": 0.378836,
+              "p90": 0.446366,
+              "reason": null
+            }
+          },
+          "policy": "k3-normalize-once-v1",
+          "scale_scope": "successful current-row int conversion visits; includes generated suffix; not all token accesses elsewhere in scheduler; rows counted, no per-token events",
+          "semantics": "six disjoint children nested in target_resident_stock_schedule; stock is the actual pinned Scheduler.schedule call including its predicate callbacks; binding includes normalization/matching, decisions include initial proposal checks, records include construction/append; nested hash/audit/JSON spans are NOT additive",
+          "status": "COMPLETE",
+          "work_totals": {
+            "binding_token_visits": 10780111,
+            "live_requests": 32040,
+            "normalized_rows": 32040
+          },
+          "wrapper_unaccounted_ms": {
+            "count": 89,
+            "max": 0.11217900000000469,
+            "mean": 0.08137693258426956,
+            "p50": 0.07751700000000028,
+            "p90": 0.09015500000000287,
+            "reason": null
+          }
+        },
+        "scheduler_ms": {
+          "count": 89,
+          "max": 70.969924,
+          "mean": 49.89793359550562,
+          "p50": 47.486515,
+          "p90": 58.26081,
+          "reason": null
+        },
+        "semantics": "one coordinator lane; hash/audit are nested in scheduler phases; do not sum these columns or add owner/Target GPU time"
+      },
+      "pipeline": {
+        "cross_request_overlap_steps": {
+          "definite": 0,
+          "meaning": "OBSERVED means any definite nonzero other-request ordinary/recovery overlap; it does not mean recovery is sufficiently hidden",
+          "possible_only": 0,
+          "total_measured_Target_steps": 89
+        },
+        "recovery_coverage_by_other_requests": {
+          "covered_ms": {
+            "lower_ms": 0.0,
+            "upper_ms": 0.0
+          },
+          "denominator": "union of native physical Draft intervals participating in rejection recovery; unique native forward indices; selected host launches in measurement, device bounds clipped to measurement window; mixed batches counted once",
+          "denominator_ms": {
+            "lower_ms": 9139.756079,
+            "upper_ms": 9171.603305
+          },
+          "fraction": {
+            "lower": 0.0,
+            "upper": 0.0
+          },
+          "measurement_window_ns": [
+            7831219780709227,
+            7831249836528996
+          ],
+          "numerator": "union of intersections with both TP ranks where the recovery request is absent from Target claims; duplicate bindings/ranks/roles do not multiply time",
+          "status": "COMPLETE",
+          "uncertainty": "lower fraction = covered lower / denominator upper; upper fraction = covered upper / denominator lower, capped at 1; absent bounds never become zero"
+        },
+        "parent_eager_native_overlap": {
+          "lower_ms": 0.0,
+          "upper_ms": 0.0
+        }
+      }
+    },
+    {
+      "mode": "pingpong-k3",
+      "throughput_tok_s": 75.43919458485603,
+      "steps": 124,
+      "window_ms": 30156.737655,
+      "committed_tokens": 2275,
+      "tokens_per_step": 18.346774193548388,
+      "complete_step_wall_ms": {
+        "count": 124,
+        "max": 247.891554,
+        "mean": 192.1038930403226,
+        "p50": 190.357104,
+        "p90": 202.973139,
+        "reason": null
+      },
+      "dispatch": {
+        "READY_idle_scope": "owner publication -> claimed Target; clipped to measurement; GPU-idle does not prove CPU sampling/dispatch is free. Across steps not additive. ready_ns: physical completion; owner_ready_published_ns: actual READY event; neither is substituted for authoritative claim",
+        "claim_to_Target_ms": {
+          "count": 124,
+          "max": 81.326356,
+          "mean": 67.87541004032258,
+          "p50": 66.838761,
+          "p90": 72.959609,
+          "reason": null
+        },
+        "missing_READY_publications": 0,
+        "missing_scheduler_phase_steps": 0,
+        "native_clock": "lower endpoint; bounded CUDA anchor uncertainty retained in raw records",
+        "published_READY_to_claim_ms": {
+          "count": 992,
+          "max": 271.036139,
+          "mean": 173.02587092943548,
+          "p50": 169.2021995,
+          "p90": 191.806409,
+          "reason": null
+        },
+        "resident_schedule": {
+          "admission_records": 44626,
+          "errors": [],
+          "limitations": "recorder self cost and stock internals not independently isolated; missing evidence stays missing; no throughput extrapolation",
+          "measured_steps": 124,
+          "phases_ms": {
+            "admission_records": {
+              "count": 124,
+              "max": 25.670529,
+              "mean": 16.808506975806452,
+              "p50": 16.7054335,
+              "p90": 18.633598,
+              "reason": null
+            },
+            "binding": {
+              "count": 124,
+              "max": 10.648468,
+              "mean": 8.93428141935484,
+              "p50": 8.785810999999999,
+              "p90": 9.876778,
+              "reason": null
+            },
+            "decisions": {
+              "count": 124,
+              "max": 2.792023,
+              "mean": 1.5096930322580646,
+              "p50": 1.4911265,
+              "p90": 1.628218,
+              "reason": null
+            },
+            "initial_finish": {
+              "count": 124,
+              "max": 0.001326,
+              "mean": 0.0007306774193548387,
+              "p50": 0.000705,
+              "p90": 0.000803,
+              "reason": null
+            },
+            "readiness": {
+              "count": 124,
+              "max": 0.006534,
+              "mean": 0.002069233870967742,
+              "p50": 0.0019715,
+              "p90": 0.002427,
+              "reason": null
+            },
+            "stock": {
+              "count": 124,
+              "max": 0.66853,
+              "mean": 0.37465154032258063,
+              "p50": 0.3625155,
+              "p90": 0.383508,
+              "reason": null
+            }
+          },
+          "policy": "k3-normalize-once-v1",
+          "scale_scope": "successful current-row int conversion visits; includes generated suffix; not all token accesses elsewhere in scheduler; rows counted, no per-token events",
+          "semantics": "six disjoint children nested in target_resident_stock_schedule; stock is the actual pinned Scheduler.schedule call including its predicate callbacks; binding includes normalization/matching, decisions include initial proposal checks, records include construction/append; nested hash/audit/JSON spans are NOT additive",
+          "status": "COMPLETE",
+          "work_totals": {
+            "binding_token_visits": 15053829,
+            "live_requests": 44626,
+            "normalized_rows": 44626
+          },
+          "wrapper_unaccounted_ms": {
+            "count": 124,
+            "max": 0.09878900000000002,
+            "mean": 0.07762038709677417,
+            "p50": 0.07578449999999926,
+            "p90": 0.08238000000000056,
+            "reason": null
+          }
+        },
+        "scheduler_ms": {
+          "count": 124,
+          "max": 61.93881,
+          "mean": 48.17250966935484,
+          "p50": 47.120031,
+          "p90": 50.430965,
+          "reason": null
+        },
+        "semantics": "one coordinator lane; hash/audit are nested in scheduler phases; do not sum these columns or add owner/Target GPU time"
+      },
+      "pipeline": {
+        "cross_request_overlap_steps": {
+          "definite": 77,
+          "meaning": "OBSERVED means any definite nonzero other-request ordinary/recovery overlap; it does not mean recovery is sufficiently hidden",
+          "possible_only": 0,
+          "total_measured_Target_steps": 124
+        },
+        "recovery_coverage_by_other_requests": {
+          "covered_ms": {
+            "lower_ms": 399.633367,
+            "upper_ms": 411.577807
+          },
+          "denominator": "union of native physical Draft intervals participating in rejection recovery; unique native forward indices; selected host launches in measurement, device bounds clipped to measurement window; mixed batches counted once",
+          "denominator_ms": {
+            "lower_ms": 10598.018572,
+            "upper_ms": 10641.403312
+          },
+          "fraction": {
+            "lower": 0.03755457389246258,
+            "upper": 0.03883535438288341
+          },
+          "measurement_window_ns": [
+            7831391568814012,
+            7831421725551667
+          ],
+          "numerator": "union of intersections with both TP ranks where the recovery request is absent from Target claims; duplicate bindings/ranks/roles do not multiply time",
+          "status": "COMPLETE",
+          "uncertainty": "lower fraction = covered lower / denominator upper; upper fraction = covered upper / denominator lower, capped at 1; absent bounds never become zero"
+        },
+        "parent_eager_native_overlap": {
+          "lower_ms": 0.0,
+          "upper_ms": 0.0
+        }
+      }
+    },
+    {
+      "mode": "pingpong-eager-k3",
+      "throughput_tok_s": 81.43532133221932,
+      "steps": 134,
+      "window_ms": 30085.225427,
+      "committed_tokens": 2450,
+      "tokens_per_step": 18.28358208955224,
+      "complete_step_wall_ms": {
+        "count": 134,
+        "max": 212.624618,
+        "mean": 189.3218741641791,
+        "p50": 187.1445765,
+        "p90": 200.562532,
+        "reason": null
+      },
+      "dispatch": {
+        "READY_idle_scope": "owner publication -> claimed Target; clipped to measurement; GPU-idle does not prove CPU sampling/dispatch is free. Across steps not additive. ready_ns: physical completion; owner_ready_published_ns: actual READY event; neither is substituted for authoritative claim",
+        "claim_to_Target_ms": {
+          "count": 134,
+          "max": 85.893459,
+          "mean": 66.35873152238806,
+          "p50": 65.0413005,
+          "p90": 71.574845,
+          "reason": null
+        },
+        "missing_READY_publications": 0,
+        "missing_scheduler_phase_steps": 0,
+        "native_clock": "lower endpoint; bounded CUDA anchor uncertainty retained in raw records",
+        "published_READY_to_claim_ms": {
+          "count": 1072,
+          "max": 297.363293,
+          "mean": 194.34180647294775,
+          "p50": 180.138933,
+          "p90": 231.016443,
+          "reason": null
+        },
+        "resident_schedule": {
+          "admission_records": 48216,
+          "errors": [],
+          "limitations": "recorder self cost and stock internals not independently isolated; missing evidence stays missing; no throughput extrapolation",
+          "measured_steps": 134,
+          "phases_ms": {
+            "admission_records": {
+              "count": 134,
+              "max": 25.024069,
+              "mean": 16.554080537313432,
+              "p50": 15.838723,
+              "p90": 18.001749,
+              "reason": null
+            },
+            "binding": {
+              "count": 134,
+              "max": 9.794166,
+              "mean": 8.763751850746269,
+              "p50": 8.734821,
+              "p90": 8.899038,
+              "reason": null
+            },
+            "decisions": {
+              "count": 134,
+              "max": 1.665401,
+              "mean": 1.5010701119402985,
+              "p50": 1.504969,
+              "p90": 1.636875,
+              "reason": null
+            },
+            "initial_finish": {
+              "count": 134,
+              "max": 0.00106,
+              "mean": 0.000697955223880597,
+              "p50": 0.000687,
+              "p90": 0.000783,
+              "reason": null
+            },
+            "readiness": {
+              "count": 134,
+              "max": 0.003957,
+              "mean": 0.002314365671641791,
+              "p50": 0.0022395,
+              "p90": 0.002624,
+              "reason": null
+            },
+            "stock": {
+              "count": 134,
+              "max": 0.444436,
+              "mean": 0.366869447761194,
+              "p50": 0.36638899999999996,
+              "p90": 0.379183,
+              "reason": null
+            }
+          },
+          "policy": "k3-normalize-once-v1",
+          "scale_scope": "successful current-row int conversion visits; includes generated suffix; not all token accesses elsewhere in scheduler; rows counted, no per-token events",
+          "semantics": "six disjoint children nested in target_resident_stock_schedule; stock is the actual pinned Scheduler.schedule call including its predicate callbacks; binding includes normalization/matching, decisions include initial proposal checks, records include construction/append; nested hash/audit/JSON spans are NOT additive",
+          "status": "COMPLETE",
+          "work_totals": {
+            "binding_token_visits": 16276402,
+            "live_requests": 48216,
+            "normalized_rows": 48216
+          },
+          "wrapper_unaccounted_ms": {
+            "count": 134,
+            "max": 0.09070200000000028,
+            "mean": 0.07778284328358213,
+            "p50": 0.07755449999999975,
+            "p90": 0.0805449999999972,
+            "reason": null
+          }
+        },
+        "scheduler_ms": {
+          "count": 134,
+          "max": 64.256795,
+          "mean": 47.64820064179104,
+          "p50": 46.233754000000005,
+          "p90": 53.242904,
+          "reason": null
+        },
+        "semantics": "one coordinator lane; hash/audit are nested in scheduler phases; do not sum these columns or add owner/Target GPU time"
+      },
+      "pipeline": {
+        "cross_request_overlap_steps": {
+          "definite": 1,
+          "meaning": "OBSERVED means any definite nonzero other-request ordinary/recovery overlap; it does not mean recovery is sufficiently hidden",
+          "possible_only": 0,
+          "total_measured_Target_steps": 134
+        },
+        "recovery_coverage_by_other_requests": {
+          "covered_ms": {
+            "lower_ms": 11.905239,
+            "upper_ms": 12.077055
+          },
+          "denominator": "union of native physical Draft intervals participating in rejection recovery; unique native forward indices; selected host launches in measurement, device bounds clipped to measurement window; mixed batches counted once",
+          "denominator_ms": {
+            "lower_ms": 8215.27518,
+            "upper_ms": 8259.86577
+          },
+          "fraction": {
+            "lower": 0.0014413356501797002,
+            "upper": 0.0014700730937658012
+          },
+          "measurement_window_ns": [
+            7831572129324860,
+            7831602214550287
+          ],
+          "numerator": "union of intersections with both TP ranks where the recovery request is absent from Target claims; duplicate bindings/ranks/roles do not multiply time",
+          "status": "COMPLETE",
+          "uncertainty": "lower fraction = covered lower / denominator upper; upper fraction = covered upper / denominator lower, capped at 1; absent bounds never become zero"
+        },
+        "parent_eager_native_overlap": {
+          "lower_ms": 7748.638179,
+          "upper_ms": 7793.638951
+        }
+      }
+    }
+  ],
+  "admission_nested_timer_counts": {
+    "producer": "coordinator",
+    "mode": "pingpong-k3",
+    "phase_rows": 124,
+    "first_two_cycles": [
+      {
+        "json_serialization": 720,
+        "checkpoint_log_write": 360,
+        "log_fsync": 2
+      },
+      {
+        "json_serialization": 720,
+        "checkpoint_log_write": 360,
+        "log_fsync": 1
+      }
+    ],
+    "scope": "timer intervals inside causal admission parent on coordinator; nested counts, not additive wall time"
+  },
+  "admission_nested_timer_costs": {
+    "source": "coordinator host.intervals inside causal admission spans, same pid/thread; window only",
+    "cycles": 124,
+    "mean_per_cycle": {
+      "parent_ms": 16.808506975806452,
+      "json_serialization_ms": 5.4446221693548384,
+      "json_serialization_count": 719.7741935483871,
+      "log_fsync_ms": 2.048281693548387,
+      "log_fsync_count": 1.4112903225806452,
+      "unaccounted_within_admission_ms": 9.315603112903226
+    },
+    "not_additive": "JSON/fsync are children of admission/append. Unaccounted includes construction/logger/observation/other work, not attributed to GIL."
+  },
+  "source_archive_sha256": "26202e729032473bc2ba5e30f7f4a5739e51e759957ad6fe0e85946ba697da08"
+}

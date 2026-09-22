@@ -1,0 +1,83 @@
+{
+  "source_archive": "pingpong-prepost3-delivery-20260913T160424Z-1632.tar.gz",
+  "source_archive_sha256": "a5bed3590dc288a943d7527154155ba568bfc035e197a877fbe1ade362e28f19",
+  "source_commit": "c0ecc2a405c8b6c9cb3016c7254739bda5bec2b6",
+  "scope": "Read-only derivative: ordinary PingPong measured adjacent nonempty steps, excluding setup/warmup/drain. All 102 logical included objects size/SHA256 verified.",
+  "measurement_start_ns": 7706641900631039,
+  "measurement_end_ns": 7706671943291409,
+  "steps": 78,
+  "adjacent_gaps": 77,
+  "other_home_READY_before_feedback": 77,
+  "status_wait_events": 154,
+  "status_wait_mean_ms": 41.44046053246753,
+  "all_four_fenced_before_next_Target": 77,
+  "normal_forward_counts": [
+    4
+  ],
+  "sample": {
+    "previous_target_batch": "ping-prepost-target-4-A",
+    "next_target_batch": "ping-prepost-target-5-B",
+    "feedback_ns": 7706642174013579,
+    "request_id": "sr-c6fd4c5bc623ca136c924dbe915c49c1837c97e1e42c6e9a1236021c9819828e",
+    "parent_proposal_id": "sr-c6fd4c5bc623ca136c924dbe915c49c1837c97e1e42c6e9a1236021c9819828e:prepost:2",
+    "prefix_version": 2,
+    "other_home_ready_before_feedback": true,
+    "status_waits_ms": [
+      42.370218,
+      38.231935
+    ],
+    "status_submit_ms": [
+      9.808499,
+      54.816516
+    ],
+    "status_dequeue_ms": [
+      52.178717,
+      93.048451
+    ],
+    "claim_ms": 127.138219,
+    "Target_GPU_start_lower_ms": 233.838366,
+    "normal_forwards_before_Target": [
+      {
+        "physical_index": 16,
+        "native_index": 376,
+        "purpose": "prepost_post",
+        "host_start_ms": 3.103907,
+        "host_end_ms": 47.967441,
+        "GPU_end_upper_ms": 49.725222
+      },
+      {
+        "physical_index": 17,
+        "native_index": 377,
+        "purpose": "prepost_extension",
+        "host_start_ms": 54.584557,
+        "host_end_ms": 91.73615,
+        "GPU_end_upper_ms": 93.553347
+      },
+      {
+        "physical_index": 18,
+        "native_index": 378,
+        "purpose": "prepost_extension",
+        "host_start_ms": 94.884897,
+        "host_end_ms": 125.809761,
+        "GPU_end_upper_ms": 127.693972
+      },
+      {
+        "physical_index": 19,
+        "native_index": 379,
+        "purpose": "prepost_extension",
+        "host_start_ms": 131.070843,
+        "host_end_ms": 158.529127,
+        "GPU_end_upper_ms": 160.412722
+      }
+    ],
+    "all_four_fenced_before_Target": true,
+    "parent_outcomes": {
+      "rejection": 6,
+      "full_accept": 2
+    },
+    "next_ready_ns_min": 7706641967092620,
+    "all_native_end_upper_before_Target": true
+  },
+  "method": "Join feedback request IDs to previous admission, physical binding version (parent for post; parent+1 for extension), purpose/B/host containment to original native array indices. Join Target TP native intervals by full-step host boundary. Status wait = owner dequeue - queue_submit_ns. Intervals are not added to GPU time or subtracted from throughput.",
+  "limitations": "Two status waits and admission boundary consume overlap opportunity. Fourth extension may run during Target host preparation; no assertion that status waits alone explain every dispatch gap or predict K3 throughput."
+}

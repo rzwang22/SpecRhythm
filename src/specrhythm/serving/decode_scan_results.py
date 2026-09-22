@@ -21,6 +21,8 @@ from specrhythm.serving.fixed_results import (
     rounds_by_prefix,
     stats,
 )
+from specrhythm.serving.k3 import configuration_of
+from specrhythm.serving.ping_prepost import SCHEDULED_MODES as PING_MODES
 from specrhythm.serving.runtime_profile import load_s2
 from specrhythm.serving.s1_workload import write_once
 
@@ -94,8 +96,12 @@ def full_load_fraction(rows, start, end, batch):
     return full / (end - start)
 
 
-def rotations(steps, expected, mode):
+def rotations(steps, expected, mode, geometry=None):
     """Pair opposite cohorts using actual disjoint request sets; retain partial rotations."""
+    if geometry is not None and geometry["serial_idle_gate"]:
+        return len(steps), 0
+    if mode in PING_MODES:
+        return len(steps)//2, len(steps)%2
     complete, partial, pending = 0, 0, None
     for s in steps:
         if s["B"] != expected:
@@ -113,7 +119,16 @@ def warmup_boundary(runtime, point, opts):
     retained = scan.get("warmup_boundary")
     require(isinstance(retained, dict), "scan mandatory warmup boundary evidence missing",
             field="decode_scan.warmup_boundary", artifact="runtime.json")
-    replay = ScanWindow(opts, point["batch"], point["mode"] == "pingpong")
+    if retained.get("schema_version") == "specrhythm.k3-request-opportunities.v1":
+        from specrhythm.serving.k3_window import K3Window
+
+        replay = K3Window(opts, point["batch"], point["mode"], configuration_of(point))
+    elif point["mode"] in PING_MODES:
+        from specrhythm.serving.ping_prepost_window import PingPrePostWindow
+
+        replay = PingPrePostWindow(opts, point["batch"], True)
+    else:
+        replay = ScanWindow(opts, point["batch"], point["mode"] == "pingpong")
     previous_end = runtime["start_ns"]
     for row in runtime["target_steps"]:
         if row["window"] or not row["B"]:
@@ -136,7 +151,7 @@ def warmup_boundary(runtime, point, opts):
                   and (r.get("completion_ns") is None or start < r["completion_ns"])}
         require(set(population["request_ids"]) == set(active),
                 "scan initial active identities differ from request lifecycle")
-        if point["mode"] == "pingpong":
+        if point["mode"] == "pingpong" or point["mode"] in PING_MODES:
             require(all(set(population["cohorts"][c]) ==
                         {rid for rid, r in active.items() if r["cohort"] == c}
                         for c in ("A", "B")), "scan initial cohort identities differ")
@@ -152,7 +167,15 @@ def timing(runtime, backend, point, opts):
     all_steps = runtime["target_steps"]
     measured = [s for s in all_steps if s["window"]]
     nonempty = [s for s in measured if s["B"]]
-    expected = point["batch"] // 2 if point["mode"] == "pingpong" else point["batch"]
+    expected = (point["batch"] // 2 if point["mode"] in ("pingpong", *PING_MODES)
+                else point["batch"])
+    execution_geometry = runtime.get("capacity", {}).get("execution_geometry")
+    if execution_geometry is not None:
+        from specrhythm.serving.k3 import matches_geometry
+
+        require(matches_geometry(execution_geometry, point["mode"], configuration_of(point)),
+                "K3 runtime geometry mismatch")
+        expected = execution_geometry["target_request_ceiling"]
     devices = runtime["target_devices"]
     require(
         len(devices) == 2 and {d["device"]["identity"]["global_rank"] for d in devices} == {0, 1},
@@ -199,7 +222,7 @@ def timing(runtime, backend, point, opts):
         )
         require(s["output_commit_complete"], "scan Target output commit incomplete")
         require(s["population"]["held_slots"] <= point["batch"], "scan held capacity exceeded")
-        if point["mode"] == "pingpong":
+        if point["mode"] == "pingpong" or point["mode"] in PING_MODES:
             require(
                 all(n <= expected for n in s["population"]["cohort_held"].values()),
                 "scan cohort capacity exceeded",
@@ -276,7 +299,7 @@ def timing(runtime, backend, point, opts):
         actual=tokens,
     )
     scan = runtime["decode_scan"]
-    complete, partial = rotations(nonempty, expected, point["mode"])
+    complete, partial = rotations(nonempty, expected, point["mode"], execution_geometry)
     require(
         complete == len(scan["complete_rotations"]) and partial == len(scan["partial_rotations"]),
         "scan rotation evidence differs",
@@ -289,12 +312,14 @@ def timing(runtime, backend, point, opts):
         reason == "time_budget"
         and wall is not None
         and wall >= opts["window_seconds"] * 1000
-        and full
-        and scan["warmup_rotations"] == opts["warmup_steps"]
+        and (full or (point["mode"] in PING_MODES and bool(nonempty)))
+        and (scan["warmup_rotations"] >= opts["warmup_steps"]
+             if configuration_of(point) == "k3-b128-v1"
+             else scan["warmup_rotations"] == opts["warmup_steps"])
     )
     if qualified:
         require(tokens > 0 and math.isfinite(wall) and wall > 0, "scan throughput nonpositive")
-    if not full and nonempty:
+    if not full and nonempty and point["mode"] not in PING_MODES:
         reason = "unexpected_partial_batch"
     admissions = [e for e in runtime["events"] if e["event"] == "admitted"]
     return {
@@ -315,6 +340,11 @@ def timing(runtime, backend, point, opts):
         if start is not None and end > start
         else None,
         "target_steps": len(nonempty),
+        "request_verification_opportunities": sum(s["B"] for s in nonempty),
+        "tokens_per_request_opportunity": tokens / sum(s["B"] for s in nonempty)
+        if nonempty else None,
+        "window_ms_per_active_opportunities": wall * point["batch"] / sum(
+            s["B"] for s in nonempty) if nonempty and wall is not None else None,
         "empty_scheduler_steps": len(measured) - len(nonempty),
         "complete_rotations": complete,
         "partial_rotations": partial,
@@ -359,8 +389,11 @@ def summarize(manifest_path, directory, point, *, probe=False):
         "workload_sha256": m["workload_sha256"],
         "pool_size": POOL_SIZE,
         "batch": point["batch"],
-        "sub_batch": point["batch"] // 2 if point["mode"] == "pingpong" else None,
-        "boundary": BOUNDARY,
+        "sub_batch": (point["batch"] // 2 if point["mode"] in ("pingpong", *PING_MODES)
+                      else None),
+        "boundary": ("resident360, active16, Target ceiling8; two actual admissions per "
+                     "warmup rotation; repeated IDs and mixed homes are legal"
+                     if point["mode"] in PING_MODES else BOUNDARY),
         "artifact": str(directory),
         "effective_exit_code": 0,
         "formal_comparison_eligible": False,
@@ -368,7 +401,28 @@ def summarize(manifest_path, directory, point, *, probe=False):
     }
     try:
         r = read_json(directory / "runtime.json")
+        from specrhythm.serving.k3_validation import matching, not_run
+
+        matching(m, point, r)
+        base.update(not_run(point))
+        meta = r["capacity"]
+        if "execution_geometry" in meta:
+            base.update(execution_geometry=meta["execution_geometry"],
+                        sub_batch=meta["max_requests_per_target_forward"],
+                        boundary=f"resident360, active{meta['active_request_limit']}; "
+                        "mode-specific Target ceiling; warmup in units of"
+                        f"{meta['active_request_limit']} actual request opportunities")
         b = read_json(directory / "draft-backend-report.json")
+        if point["mode"].endswith("-k3"):
+            from specrhythm.serving.k3_capacity import qualify as qualify_capacity
+
+            base["capacity_reservation_qualification"] = qualify_capacity(
+                read_json(directory / "actual-capacity.json"), point["mode"], definitions)
+        if point["mode"] == "serial-eager":
+            from specrhythm.serving.eager_results import eager_columns, summarize_eager
+
+            base["rolling_eager"] = summarize_eager(b, r)
+            base.update(eager_columns(base))
         life = read_json(directory / "process-lifecycle.json")
         require(
             r["point"] == point and bool(r.get("probe")) == probe, "scan runtime point differs"
@@ -379,25 +433,18 @@ def summarize(manifest_path, directory, point, *, probe=False):
         base["prepared_pool"] = prepared_checks(m, r, directory, point)
         base["diagnostic_logging"] = logging_checks(directory, opts["observation"])
         base["identity_matching"] = identity_checks(r, opts["identity_matching"])
+        from specrhythm.phase4.target_profile import qualify as qualify_target_profile
+
+        qualify_target_profile(r, opts)
+        from specrhythm.serving.device_contract import PREPOST_MODES, legacy_dual, qualify_prepost
+
+        stage = "capacity_probe" if probe else "performance"
         if point["mode"] == "pingpong":
-            verifications = sum(
-                any(row["candidate_positions"] for row in s["rows"]) for s in r["target_steps"]
-            )
-            ranks = [x["dual_uuid_query"] for x in r["target_final_memory"]]
-            require(
-                len(ranks) == 2
-                and all(
-                    x["uuid_query_mode"] == "live"
-                    and x["uuid_initial_validation_count"] == 1
-                    and x["uuid_cache_hit_count"] == 0
-                    and x["uuid_verification_subprocess_query_count"]
-                    == x["uuid_verification_access_count"]
-                    and x["uuid_verification_access_count"] == verifications
-                    for x in ranks
-                ),
-                "scan live UUID evidence invalid",
-            )
-            base["uuid_query_by_rank"] = ranks
+            base["uuid_query_by_rank"] = legacy_dual(r, point["mode"], stage)
+        elif point["mode"] in PREPOST_MODES:
+            base["device_identity_qualification"] = qualify_prepost(
+                r, b, read_json(directory / "actual-capacity.json"), point["mode"],
+                probe=probe, stage=stage)
         if probe:
             require(
                 r["diagnostic_drain"]["status"] == "COMPLETE"
@@ -409,11 +456,25 @@ def summarize(manifest_path, directory, point, *, probe=False):
             result = {"measurement_status": "NOT_APPLICABLE", "stop_reason": "capacity_probe"}
         else:
             result = timing(r, b, point, opts)
+        if "validation_profile" in point:
+            from specrhythm.serving.k3_acceptance import native_geometry
+            from specrhythm.serving.k3_validation import EXPLORATION, profile_of
+
+            proof = None if probe else native_geometry(
+                r, point["mode"], full_fixture=profile_of(point) == EXPLORATION)
+            result.update(native_geometry_status="NOT_APPLICABLE" if probe else "PASS",
+                          native_target_geometry=proof,
+                          measurement_valid=result["measurement_status"] == "PASS",
+                          formal_comparison_eligible_scope="run-level execution/measurement/"
+                          "cleanup only; does not certify full output equivalence")
         return {**base, **result, "valid": True, "errors": [], "execution_status": "PASS"}
     except (DataError, KeyError, TypeError, ValueError, OSError) as error:
         return {
             **base,
             "valid": False,
+            "qualification_status": "FAILED",
+            "failure_layer": getattr(error, "details", {}).get(
+                "failure_layer", "report_qualification"),
             "errors": [str(error)],
             "execution_status": "FAILED",
             "measurement_status": "INVALID",
@@ -478,8 +539,9 @@ def emit_result(directory, result, point):
         and value.get("measurement_status") == "PASS"
         and value.get("cleanup_status") == "PASS"
     )
+    if "validation_profile" in point:
+        value["measurement_valid"] = value["formal_comparison_eligible"]
     value = compact(value)
-    print("[decode scan] " + json.dumps(value, ensure_ascii=False), flush=True)
     write_once(directory / "result.json", value)
     write_once(directory / "light-summary.json", value)
     flat = {k: v for k, v in value.items() if not isinstance(v, (dict, list))}
@@ -487,4 +549,10 @@ def emit_result(directory, result, point):
         writer = csv.DictWriter(handle, fieldnames=list(flat))
         writer.writeheader()
         writer.writerow(flat)
+    displayed = value
+    if point["mode"].endswith("-k3"):
+        from specrhythm.serving.scan_console import summary
+
+        displayed = summary(value, directory / "light-summary.json")
+    print("[decode scan] " + json.dumps(displayed, ensure_ascii=False), flush=True)
     return value

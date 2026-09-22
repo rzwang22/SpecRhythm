@@ -11,6 +11,7 @@ import time
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
+from specrhythm.io_context import file_context
 from specrhythm.phase4.serial import PROTOCOL_VERSION
 
 MAX_MESSAGE_BYTES = 64 * 1024 * 1024
@@ -63,15 +64,21 @@ class CheckpointJsonl:
         path.parent.mkdir(parents=True, exist_ok=True)
 
     def append(self, value: Mapping[str, Any]) -> None:
-        payload = dict(value)
-        if "record_sha256" in payload:
-            raise ValueError("record_sha256 is reserved for checkpoint framing")
-        payload["record_sha256"] = payload_sha256(payload)
-        line = canonical_json_bytes(payload) + b"\n"
+        from specrhythm.phase4.admission_record import PreparedAdmission
+
+        if type(value) is PreparedAdmission:
+            line = value.line
+        else:
+            payload = dict(value)
+            if "record_sha256" in payload:
+                raise ValueError("record_sha256 is reserved for checkpoint framing")
+            payload["record_sha256"] = payload_sha256(payload)
+            line = canonical_json_bytes(payload) + b"\n"
         with self.path.open("ab") as handle:
             handle.write(line)
             handle.flush()
-            os.fsync(handle.fileno())
+            with file_context(self.path, write_kind="checkpoint_jsonl"):
+                os.fsync(handle.fileno())
 
     def read(self) -> list[dict[str, Any]]:
         if not self.path.exists():
@@ -134,7 +141,11 @@ class UnixDraftClient:
         if response.get("protocol_version") != PROTOCOL_VERSION:
             raise RuntimeError("Draft service returned an incompatible protocol")
         if response.get("ok") is not True:
-            raise RuntimeError(str(response.get("error", "Draft service request failed")))
+            error = RuntimeError(str(response.get("error", "Draft service request failed")))
+            for key in ("deadline_context", "report_publication_context"):
+                if key in response:
+                    setattr(error, key, response[key])
+            raise error
         event = {
             "schema_version": "specrhythm.phase4-transport-event.v1",
             "transport": "unix-domain-socket",

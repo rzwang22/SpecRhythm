@@ -47,7 +47,12 @@ def test_pool360_uses_unique_original_rows_and_same_frozen_order_across_points()
         order.add(m["fixed_diagnostic"]["request_order_sha256"])
         assert m["actual_N"] == 360 and m["active_limit"] == b
         for mode, cap in m["fixed_diagnostic"]["capacity"].items():
-            assert cap["max_requests_per_target_forward"] == (b // 2 if mode == "pingpong" else b)
+            grouped = mode in ("pingpong", "pingpong-prepost3", "pingpong-eager-prepost3",
+                               "serial-k3", "pingpong-k3", "pingpong-eager-k3")
+            assert cap["proposal_budget"] == (3 if mode.endswith("-k3") else 4)
+            assert cap["max_requests_per_target_forward"] == (
+                b // 2 if grouped and mode not in ("serial-k3", "serial-eager-k3") else b
+            )
             assert cap["target_query_token_limit"] >= 5 * b
             assert cap["target_sequence_limit"] >= 360
             assert cap["draft_sequence_limit"] >= b

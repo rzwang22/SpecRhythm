@@ -1,0 +1,108 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="1230" viewBox="0 0 1120 1230">
+<rect width="100%" height="100%" fill="white"/>
+<g font-family="sans-serif" fill="#172b4d">
+<text x="24" y="28" font-size="18">Serial-eager: measured native GPU intervals</text>
+<text x="24" y="51" font-size="12">Solid = inner bound; pale = outer bound. Time is relative to complete host step start. Missing Target data stays missing.</text>
+<text x="24" y="88" font-size="14">serial, step 0, host wall 769.809 ms</text>
+<text x="24" y="131" font-size="12">Target rank 0</text>
+<path d="M155 137 H1085" stroke="#dce3ec"/>
+<text x="168" y="131" font-size="12" fill="#687787">MISSING raw native bounds; not reconstructed from ZERO summary</text>
+<text x="24" y="161" font-size="12">Target rank 1</text>
+<path d="M155 167 H1085" stroke="#dce3ec"/>
+<text x="168" y="161" font-size="12" fill="#687787">MISSING raw native bounds; not reconstructed from ZERO summary</text>
+<text x="24" y="191" font-size="12">Draft eager</text>
+<path d="M155 197 H1085" stroke="#dce3ec"/>
+<text x="155" y="216" font-size="11">0 ms</text>
+<text x="1000" y="216" font-size="11">769.8 ms</text>
+<text x="24" y="278" font-size="14">serial, step 19, host wall 779.449 ms</text>
+<text x="24" y="321" font-size="12">Target rank 0</text>
+<path d="M155 327 H1085" stroke="#dce3ec"/>
+<text x="168" y="321" font-size="12" fill="#687787">MISSING raw native bounds; not reconstructed from ZERO summary</text>
+<text x="24" y="351" font-size="12">Target rank 1</text>
+<path d="M155 357 H1085" stroke="#dce3ec"/>
+<text x="168" y="351" font-size="12" fill="#687787">MISSING raw native bounds; not reconstructed from ZERO summary</text>
+<text x="24" y="381" font-size="12">Draft eager</text>
+<path d="M155 387 H1085" stroke="#dce3ec"/>
+<text x="155" y="406" font-size="11">0 ms</text>
+<text x="1000" y="406" font-size="11">779.4 ms</text>
+<text x="24" y="468" font-size="14">serial, step 38, host wall 779.495 ms</text>
+<text x="24" y="511" font-size="12">Target rank 0</text>
+<path d="M155 517 H1085" stroke="#dce3ec"/>
+<text x="168" y="511" font-size="12" fill="#687787">MISSING raw native bounds; not reconstructed from ZERO summary</text>
+<text x="24" y="541" font-size="12">Target rank 1</text>
+<path d="M155 547 H1085" stroke="#dce3ec"/>
+<text x="168" y="541" font-size="12" fill="#687787">MISSING raw native bounds; not reconstructed from ZERO summary</text>
+<text x="24" y="571" font-size="12">Draft eager</text>
+<path d="M155 577 H1085" stroke="#dce3ec"/>
+<text x="155" y="596" font-size="11">0 ms</text>
+<text x="1000" y="596" font-size="11">779.5 ms</text>
+<text x="24" y="658" font-size="14">serial-eager, step 0, host wall 1057.690 ms</text>
+<text x="24" y="701" font-size="12">Target rank 0</text>
+<path d="M155 707 H1085" stroke="#dce3ec"/>
+<text x="168" y="701" font-size="12" fill="#687787">MISSING raw native bounds; not reconstructed from ZERO summary</text>
+<text x="24" y="731" font-size="12">Target rank 1</text>
+<path d="M155 737 H1085" stroke="#dce3ec"/>
+<text x="168" y="731" font-size="12" fill="#687787">MISSING raw native bounds; not reconstructed from ZERO summary</text>
+<text x="24" y="761" font-size="12">Draft eager</text>
+<path d="M155 767 H1085" stroke="#dce3ec"/>
+<rect x="546.412" y="749" width="17.902" height="16" fill="#cf6a20" opacity="0.25"/>
+<rect x="546.467" y="749" width="17.791" height="16" fill="#cf6a20" opacity="1"/>
+<rect x="611.437" y="749" width="18.101" height="16" fill="#cf6a20" opacity="0.25"/>
+<rect x="611.492" y="749" width="17.990" height="16" fill="#cf6a20" opacity="1"/>
+<rect x="677.210" y="749" width="17.606" height="16" fill="#cf6a20" opacity="0.25"/>
+<rect x="677.266" y="749" width="17.496" height="16" fill="#cf6a20" opacity="1"/>
+<rect x="771.073" y="749" width="17.758" height="16" fill="#cf6a20" opacity="0.25"/>
+<rect x="771.128" y="749" width="17.647" height="16" fill="#cf6a20" opacity="1"/>
+<rect x="832.821" y="749" width="17.393" height="16" fill="#cf6a20" opacity="0.25"/>
+<rect x="832.877" y="749" width="17.283" height="16" fill="#cf6a20" opacity="1"/>
+<rect x="432.643" y="682" width="6.592" height="92" fill="#7154b8" opacity=".20"/>
+<text x="155" y="801" font-size="12">Enqueue RPC → first GPU: 121.892–129.452 ms; purple = enqueue RPC bracket</text>
+<text x="155" y="786" font-size="11">0 ms</text>
+<text x="1000" y="786" font-size="11">1057.7 ms</text>
+<text x="24" y="848" font-size="14">serial-eager, step 12, host wall 1235.172 ms</text>
+<text x="24" y="891" font-size="12">Target rank 0</text>
+<path d="M155 897 H1085" stroke="#dce3ec"/>
+<text x="168" y="891" font-size="12" fill="#687787">MISSING raw native bounds; not reconstructed from ZERO summary</text>
+<text x="24" y="921" font-size="12">Target rank 1</text>
+<path d="M155 927 H1085" stroke="#dce3ec"/>
+<text x="168" y="921" font-size="12" fill="#687787">MISSING raw native bounds; not reconstructed from ZERO summary</text>
+<text x="24" y="951" font-size="12">Draft eager</text>
+<path d="M155 957 H1085" stroke="#dce3ec"/>
+<rect x="578.565" y="939" width="15.318" height="16" fill="#cf6a20" opacity="0.25"/>
+<rect x="578.612" y="939" width="15.223" height="16" fill="#cf6a20" opacity="1"/>
+<rect x="685.046" y="939" width="15.524" height="16" fill="#cf6a20" opacity="0.25"/>
+<rect x="685.093" y="939" width="15.429" height="16" fill="#cf6a20" opacity="1"/>
+<rect x="747.498" y="939" width="15.482" height="16" fill="#cf6a20" opacity="0.25"/>
+<rect x="747.546" y="939" width="15.388" height="16" fill="#cf6a20" opacity="1"/>
+<rect x="802.062" y="939" width="15.018" height="16" fill="#cf6a20" opacity="0.25"/>
+<rect x="802.110" y="939" width="14.923" height="16" fill="#cf6a20" opacity="1"/>
+<rect x="854.944" y="939" width="15.818" height="16" fill="#cf6a20" opacity="0.25"/>
+<rect x="854.991" y="939" width="15.723" height="16" fill="#cf6a20" opacity="1"/>
+<rect x="397.065" y="872" width="2.008" height="92" fill="#7154b8" opacity=".20"/>
+<text x="155" y="991" font-size="12">Enqueue RPC → first GPU: 238.391–241.120 ms; purple = enqueue RPC bracket</text>
+<text x="155" y="976" font-size="11">0 ms</text>
+<text x="1000" y="976" font-size="11">1235.2 ms</text>
+<text x="24" y="1038" font-size="14">serial-eager, step 24, host wall 1380.840 ms</text>
+<text x="24" y="1081" font-size="12">Target rank 0</text>
+<path d="M155 1087 H1085" stroke="#dce3ec"/>
+<text x="168" y="1081" font-size="12" fill="#687787">MISSING raw native bounds; not reconstructed from ZERO summary</text>
+<text x="24" y="1111" font-size="12">Target rank 1</text>
+<path d="M155 1117 H1085" stroke="#dce3ec"/>
+<text x="168" y="1111" font-size="12" fill="#687787">MISSING raw native bounds; not reconstructed from ZERO summary</text>
+<text x="24" y="1141" font-size="12">Draft eager</text>
+<path d="M155 1147 H1085" stroke="#dce3ec"/>
+<rect x="673.257" y="1129" width="13.839" height="16" fill="#cf6a20" opacity="0.25"/>
+<rect x="673.299" y="1129" width="13.754" height="16" fill="#cf6a20" opacity="1"/>
+<rect x="730.689" y="1129" width="13.470" height="16" fill="#cf6a20" opacity="0.25"/>
+<rect x="730.731" y="1129" width="13.386" height="16" fill="#cf6a20" opacity="1"/>
+<rect x="778.218" y="1129" width="13.302" height="16" fill="#cf6a20" opacity="0.25"/>
+<rect x="778.260" y="1129" width="13.217" height="16" fill="#cf6a20" opacity="1"/>
+<rect x="825.490" y="1129" width="13.291" height="16" fill="#cf6a20" opacity="0.25"/>
+<rect x="825.532" y="1129" width="13.207" height="16" fill="#cf6a20" opacity="1"/>
+<rect x="872.682" y="1129" width="13.333" height="16" fill="#cf6a20" opacity="0.25"/>
+<rect x="872.725" y="1129" width="13.249" height="16" fill="#cf6a20" opacity="1"/>
+<rect x="369.808" y="1062" width="1.644" height="92" fill="#7154b8" opacity=".20"/>
+<text x="155" y="1181" font-size="12">Enqueue RPC → first GPU: 448.113–450.617 ms; purple = enqueue RPC bracket</text>
+<text x="155" y="1166" font-size="11">0 ms</text>
+<text x="1000" y="1166" font-size="11">1380.8 ms</text>
+</g></svg>

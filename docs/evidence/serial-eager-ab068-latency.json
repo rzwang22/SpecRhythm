@@ -1,0 +1,264 @@
+{
+  "points": {
+    "serial": {
+      "cleanup_status": "PASS",
+      "committed_tokens": 1869,
+      "draft_host": {
+        "aggregate_scope": "all source intervals within bounds",
+        "by_category": {
+          "checkpoint_log_write": {
+            "clipped_inclusive_sum_ms": 2.234491,
+            "clipped_union_ms": 2.234491,
+            "count": 39
+          },
+          "control_json_read": {
+            "clipped_inclusive_sum_ms": 83.855834,
+            "clipped_union_ms": 83.855834,
+            "count": 195
+          },
+          "draft_required_fence": {
+            "clipped_inclusive_sum_ms": 29.072637,
+            "clipped_union_ms": 29.072637,
+            "count": 78
+          },
+          "json_serialization": {
+            "clipped_inclusive_sum_ms": 1861.422092,
+            "clipped_union_ms": 1796.757774,
+            "count": 67314
+          },
+          "prefix_hash_and_block_record": {
+            "clipped_inclusive_sum_ms": 3044.001244,
+            "clipped_union_ms": 3044.001244,
+            "count": 56160
+          },
+          "required_cuda_synchronize": {
+            "clipped_inclusive_sum_ms": 27.522179,
+            "clipped_union_ms": 27.522179,
+            "count": 78
+          },
+          "resident_block_audit": {
+            "clipped_inclusive_sum_ms": 610.913378,
+            "clipped_union_ms": 610.913378,
+            "count": 156
+          }
+        },
+        "semantics": "nested categories; unions overlap across categories/owners",
+        "status": "COMPLETE"
+      },
+      "draft_purposes": {
+        "commit": {
+          "clipped_union_lower_ms": 754.422554,
+          "clipped_union_upper_ms": 759.218072,
+          "host_launch_selected_forwards": 39,
+          "launch_selected_B_histogram": {
+            "16": 39
+          },
+          "launch_selected_event_sum_ms": 756.8203125,
+          "window_intersecting_forwards": 39
+        },
+        "proposal": {
+          "clipped_union_lower_ms": 2330.01766,
+          "clipped_union_upper_ms": 2344.404214,
+          "host_launch_selected_forwards": 117,
+          "launch_selected_B_histogram": {
+            "15": 3,
+            "16": 114
+          },
+          "launch_selected_event_sum_ms": 2337.2109375,
+          "window_intersecting_forwards": 117
+        }
+      },
+      "execution_status": "PASS",
+      "gpu_overlap": null,
+      "measurement_status": "PASS",
+      "outside_steps_ms": 70.20640999999887,
+      "step_sum_ms": 30537.006825,
+      "step_wall_ms": {
+        "count": 39,
+        "max": 812.826589,
+        "mean": 783.000175,
+        "p50": 781.011223,
+        "p90": 795.727229,
+        "reason": null
+      },
+      "steps": 39,
+      "target_native_intervals": "MISSING in returned package; old exporter used but did not retain them",
+      "throughput_tok_s": 61.064036952660516,
+      "tokens_per_step": 47.92307692307692,
+      "window_ms": 30607.213235
+    },
+    "serial-eager": {
+      "cleanup_status": "PASS",
+      "committed_tokens": 1162,
+      "draft_host": {
+        "aggregate_scope": "all source intervals within bounds",
+        "by_category": {
+          "checkpoint_log_write": {
+            "clipped_inclusive_sum_ms": 12.594018,
+            "clipped_union_ms": 12.594018,
+            "count": 74
+          },
+          "control_json_read": {
+            "clipped_inclusive_sum_ms": 184.095042,
+            "clipped_union_ms": 184.095042,
+            "count": 375
+          },
+          "draft_required_fence": {
+            "clipped_inclusive_sum_ms": 31.838427,
+            "clipped_union_ms": 31.838427,
+            "count": 501
+          },
+          "json_serialization": {
+            "clipped_inclusive_sum_ms": 4049.119583,
+            "clipped_union_ms": 3912.408418,
+            "count": 146553
+          },
+          "prefix_hash_and_block_record": {
+            "clipped_inclusive_sum_ms": 7210.511833,
+            "clipped_union_ms": 7210.511833,
+            "count": 135000
+          },
+          "required_cuda_synchronize": {
+            "clipped_inclusive_sum_ms": 27.329313,
+            "clipped_union_ms": 27.329313,
+            "count": 501
+          },
+          "resident_block_audit": {
+            "clipped_inclusive_sum_ms": 1587.527699,
+            "clipped_union_ms": 1587.527699,
+            "count": 375
+          }
+        },
+        "semantics": "nested categories; unions overlap across categories/owners",
+        "status": "COMPLETE"
+      },
+      "draft_purposes": {
+        "commit": {
+          "clipped_union_lower_ms": 496.389514,
+          "clipped_union_upper_ms": 499.532364,
+          "host_launch_selected_forwards": 25,
+          "launch_selected_B_histogram": {
+            "10": 1,
+            "11": 5,
+            "12": 3,
+            "13": 8,
+            "14": 3,
+            "15": 2,
+            "7": 1,
+            "8": 1,
+            "9": 1
+          },
+          "launch_selected_event_sum_ms": 497.9609375,
+          "window_intersecting_forwards": 25
+        },
+        "eager": {
+          "clipped_union_lower_ms": 2526.017875,
+          "clipped_union_upper_ms": 2541.732125,
+          "host_launch_selected_forwards": 125,
+          "launch_selected_B_histogram": {
+            "1": 3,
+            "10": 3,
+            "11": 3,
+            "16": 34,
+            "2": 3,
+            "3": 25,
+            "4": 25,
+            "5": 4,
+            "6": 17,
+            "7": 4,
+            "9": 4
+          },
+          "launch_selected_event_sum_ms": 2533.875,
+          "window_intersecting_forwards": 125
+        },
+        "proposal": {
+          "clipped_union_lower_ms": 1480.184161,
+          "clipped_union_upper_ms": 1489.612711,
+          "host_launch_selected_forwards": 75,
+          "launch_selected_B_histogram": {
+            "10": 3,
+            "11": 15,
+            "12": 9,
+            "13": 24,
+            "14": 9,
+            "15": 6,
+            "7": 3,
+            "8": 3,
+            "9": 3
+          },
+          "launch_selected_event_sum_ms": 1484.8984375,
+          "window_intersecting_forwards": 75
+        }
+      },
+      "enqueue_to_first_gpu_bounds_stats": {
+        "lower_ms": {
+          "count": 25,
+          "max": 448.113268,
+          "mean": 240.81140168,
+          "p50": 225.418307,
+          "p90": 390.669135,
+          "reason": null
+        },
+        "upper_ms": {
+          "count": 25,
+          "max": 450.616598,
+          "mean": 243.91370636,
+          "p50": 228.173254,
+          "p90": 393.207687,
+          "reason": null
+        }
+      },
+      "execution_status": "PASS",
+      "gpu_overlap": {
+        "lower_ms": 0.0,
+        "upper_ms": 0.0
+      },
+      "measurement_status": "PASS",
+      "outside_steps_ms": 54.646082999996,
+      "step_sum_ms": 30393.899814000004,
+      "step_wall_ms": {
+        "count": 25,
+        "max": 1380.839928,
+        "mean": 1215.75599256,
+        "p50": 1215.278544,
+        "p90": 1374.221927,
+        "reason": null
+      },
+      "steps": 25,
+      "target_native_intervals": "MISSING in returned package; old exporter used but did not retain them",
+      "throughput_tok_s": 38.16274195591351,
+      "tokens_per_step": 46.48,
+      "window_counters": {
+        "accepted_promoted_candidates": 233,
+        "admissions": 400,
+        "bonus_tokens": 120,
+        "bridge_generated_tokens": 353,
+        "bridge_matches": 99,
+        "bridge_mismatches": 21,
+        "committed_tokens": 1162,
+        "completed": 120,
+        "correction_tokens": 280,
+        "discarded_early_tokens": 482,
+        "draft_materialized_tokens": 2181,
+        "early_generated_tokens": 977,
+        "normal_generated_tokens": 1204,
+        "parent_accepted_tokens": 762,
+        "parent_full_accepts": 120,
+        "parent_rejections": 280,
+        "promotions": 99,
+        "recovery_generated_tokens": 1204,
+        "recovery_jobs": 301,
+        "reused_bridge_tokens": 99,
+        "reused_candidate_tokens": 396,
+        "started": 353,
+        "unhidden_wait_ns": 9580229982,
+        "verified_promoted_candidates": 392
+      },
+      "window_ms": 30448.545897,
+      "window_unhidden_wait_ms": 9580.229982
+    }
+  },
+  "source_attribution_sha256": "aa8524731c692bfcae81c285a3f68650f1ffbfb6a633ebf3db8354a7d8a5e965",
+  "source_commit": "068c40a8ead1138568b7f846af348d3f732c28d4",
+  "workload_sha256": "cdaf71adace15d229f5087b98f9fd162a958456226a660184fe03f5d6ebd8ff4"
+}
