@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 ENTRY = Path(__file__).resolve().parents[1] / "scripts/run_ordinary_cpu_pinned.sh"
-SHA = "944328263b02a915f397bcb03c8c743c71e9a56c"
+SHA = "f83edb43d22dcbb605468b8518bcca7c1bc36f45"
 
 
 @pytest.mark.parametrize("code", [0, 23])

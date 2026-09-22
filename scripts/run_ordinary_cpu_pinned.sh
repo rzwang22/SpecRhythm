@@ -2,7 +2,7 @@
 # All strict/exit logic belongs to this independent child, never the caller's shell.
 if bash -s <<'SR_ORDINARY_CPU_CHILD'
 set -Eeuo pipefail
-FINAL_SHA=944328263b02a915f397bcb03c8c743c71e9a56c
+FINAL_SHA=f83edb43d22dcbb605468b8518bcca7c1bc36f45
 REPO="${SR_K3_REPO:-/root/autodl-tmp/src/SpecRhythm}"
 git -C "$REPO" fetch origin codex/rolling-eager-v0.1
 git -C "$REPO" cat-file -e "${FINAL_SHA}^{commit}"
